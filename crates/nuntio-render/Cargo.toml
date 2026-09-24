@@ -1,0 +1,18 @@
+[package]
+name = "nuntio-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nuntio-term.workspace = true
+cosmic-text.workspace = true
+etagere.workspace = true
+bytemuck.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "nuntio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nuntio-config.workspace = true
+nuntio-render.workspace = true
+nuntio-term.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+winit.workspace = true
+lexopt.workspace = true
+
+[lints]
+workspace = true
