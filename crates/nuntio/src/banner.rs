@@ -14,24 +14,35 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Banner {
     pub severity: Severity,
+    /// What the messages are about, shown before the first one.
+    pub title: &'static str,
     pub messages: Vec<String>,
 }
 
 impl Banner {
-    pub fn new(severity: Severity, messages: Vec<String>) -> Option<Self> {
-        (!messages.is_empty()).then_some(Self { severity, messages })
+    pub fn new(severity: Severity, title: &'static str, messages: Vec<String>) -> Option<Self> {
+        (!messages.is_empty()).then_some(Self {
+            severity,
+            title,
+            messages,
+        })
     }
 
-    fn text(&self) -> String {
-        let prefix = match self.severity {
+    /// Problems with the config; an error means it was not applied.
+    pub fn config(severity: Severity, messages: Vec<String>) -> Option<Self> {
+        let title = match severity {
             Severity::Error => "Config error, not applied",
             Severity::Warning => "Config warning",
         };
+        Self::new(severity, title, messages)
+    }
+
+    fn text(&self) -> String {
         let more = match self.messages.len() {
             1 => String::new(),
             n => format!(" (+{} more, see log)", n - 1),
         };
-        format!("{prefix}: {}{more}", self.messages[0])
+        format!("{}: {}{more}", self.title, self.messages[0])
     }
 
     /// Top edge and height of the banner in a window of `height` pixels.
@@ -116,19 +127,21 @@ mod tests {
 
     #[test]
     fn empty_messages_give_no_banner() {
-        assert_eq!(Banner::new(Severity::Error, vec![]), None);
+        assert_eq!(Banner::config(Severity::Error, vec![]), None);
     }
 
     #[test]
     fn text_summarizes_messages() {
         let banner =
-            Banner::new(Severity::Warning, vec!["a".into(), "b".into(), "c".into()]).unwrap();
+            Banner::config(Severity::Warning, vec!["a".into(), "b".into(), "c".into()]).unwrap();
         assert_eq!(banner.text(), "Config warning: a (+2 more, see log)");
+        let banner = Banner::new(Severity::Warning, "Link", vec!["x".into()]).unwrap();
+        assert_eq!(banner.text(), "Link: x");
     }
 
     #[test]
     fn sits_at_the_bottom_and_fits_the_width() {
-        let banner = Banner::new(Severity::Error, vec!["x".repeat(500)]).unwrap();
+        let banner = Banner::config(Severity::Error, vec!["x".repeat(500)]).unwrap();
         let (rect, text) = banner.draw(400.0, 600.0, CELL, 1.0);
         assert_eq!((rect.y, rect.height), (572.0, 28.0));
         assert!(banner.contains(580.0, 600.0, CELL, 1.0));

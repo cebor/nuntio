@@ -225,30 +225,30 @@ impl App {
             error: None,
         };
         let theme_warning = app.update_palette();
-        app.notify(
+        app.notify(Banner::config(
             Severity::Warning,
             theme_warnings
                 .into_iter()
                 .chain(binding_warnings)
                 .chain(theme_warning)
                 .collect(),
-        );
+        ));
         app
     }
 
-    /// Show messages in the banner (and log them). Errors take precedence.
-    fn notify(&mut self, severity: Severity, messages: Vec<String>) {
-        for message in &messages {
-            match severity {
+    /// Show a banner (and log its messages). Errors take precedence.
+    fn notify(&mut self, banner: Option<Banner>) {
+        let Some(new) = banner else {
+            return;
+        };
+        for message in &new.messages {
+            match new.severity {
                 Severity::Error => tracing::error!("{message}"),
                 Severity::Warning => tracing::warn!("{message}"),
             }
         }
-        let Some(new) = Banner::new(severity, messages) else {
-            return;
-        };
         self.banner = match self.banner.take() {
-            Some(mut old) if old.severity == new.severity => {
+            Some(mut old) if old.severity == new.severity && old.title == new.title => {
                 old.messages.extend(new.messages);
                 Some(old)
             }
@@ -305,7 +305,7 @@ impl App {
             Ok(loaded) => loaded,
             Err(err) => {
                 self.banner = None;
-                self.notify(Severity::Error, vec![err.to_string()]);
+                self.notify(Banner::config(Severity::Error, vec![err.to_string()]));
                 return;
             }
         };
@@ -339,7 +339,7 @@ impl App {
             state.window.request_redraw();
         }
         self.banner = None;
-        self.notify(Severity::Warning, warnings);
+        self.notify(Banner::config(Severity::Warning, warnings));
     }
 
     pub fn into_result(self) -> Result<()> {
@@ -409,7 +409,7 @@ impl App {
         window.set_ime_allowed(true);
         let mut renderer = self.create_renderer(&window)?;
         if let Some(warning) = renderer.take_font_warning() {
-            self.notify(Severity::Warning, vec![warning]);
+            self.notify(Banner::config(Severity::Warning, vec![warning]));
         }
         // Follow the OS appearance for `theme = { light, dark }`.
         let os_dark = window.theme() != Some(WindowTheme::Light);
@@ -417,7 +417,10 @@ impl App {
             self.os_dark = os_dark;
             if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
                 let warning = self.update_palette();
-                self.notify(Severity::Warning, warning.into_iter().collect());
+                self.notify(Banner::config(
+                    Severity::Warning,
+                    warning.into_iter().collect(),
+                ));
             }
         }
         let pane = self.spawn_pane(None)?;
@@ -854,10 +857,11 @@ impl App {
         {
             let url = link.url.clone();
             if let Err(err) = open::that_detached(&url) {
-                self.notify(
+                self.notify(Banner::new(
                     Severity::Warning,
+                    "Link",
                     vec![format!("failed to open {url}: {err}")],
-                );
+                ));
             }
             return;
         }
@@ -1227,7 +1231,10 @@ impl ApplicationHandler<UserEvent> for App {
                 self.os_dark = theme == WindowTheme::Dark;
                 if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
                     let warning = self.update_palette();
-                    self.notify(Severity::Warning, warning.into_iter().collect());
+                    self.notify(Banner::config(
+                        Severity::Warning,
+                        warning.into_iter().collect(),
+                    ));
                 }
             }
             WindowEvent::RedrawRequested => {

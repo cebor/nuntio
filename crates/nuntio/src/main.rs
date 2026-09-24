@@ -70,11 +70,11 @@ fn load_config(path: Option<&Path>, mut warnings: Vec<String>) -> (Config, Optio
             for warning in &warnings {
                 tracing::warn!("{warning}");
             }
-            (loaded.config, Banner::new(Severity::Warning, warnings))
+            (loaded.config, Banner::config(Severity::Warning, warnings))
         }
         Err(err) => {
             tracing::error!("{err}");
-            let banner = Banner::new(Severity::Error, vec![err.to_string()]);
+            let banner = Banner::config(Severity::Error, vec![err.to_string()]);
             (Config::default(), banner)
         }
     }
