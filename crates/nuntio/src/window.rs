@@ -588,7 +588,7 @@ impl WindowState {
     }
 
     /// Forget per-pane pointer and IME state after focus moves.
-    fn reset_focus_state(&mut self) {
+    pub fn reset_focus_state(&mut self) {
         self.search = None;
         self.mouse.hover_link = None;
         self.mouse.selecting = false;

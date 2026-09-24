@@ -481,6 +481,7 @@ impl App {
         };
         state.send_focus(false);
         state.tabs.open(TabContent::new(pane));
+        state.reset_focus_state();
         // The first extra tab may show the tab bar and shrink the grid.
         state.resize_terms(&self.config);
         state.window.request_redraw();
@@ -535,6 +536,7 @@ impl App {
             content.focused = next;
             if active {
                 state.send_focus(true);
+                state.reset_focus_state();
             }
         }
         state.mouse.divider_drag = None;
@@ -573,6 +575,7 @@ impl App {
         state.tabs.close(index);
         if was_active {
             state.send_focus(true);
+            state.reset_focus_state();
         }
         state.mouse.hovered_bar = None;
         state.mouse.tab_drag = None;

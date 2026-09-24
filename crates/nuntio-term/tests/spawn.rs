@@ -225,3 +225,29 @@ fn links_across_wrapped_lines() {
     assert_eq!(link.url, url);
     assert_eq!((link.start, link.end), ((0, 0), (19, 1)));
 }
+
+#[test]
+fn search_survives_a_cleared_scrollback() {
+    let script = "echo marker; for i in $(seq 1 60); do echo x; done; printf end";
+    let (handle, rx) = spawn(script);
+    wait_for_exit(&rx);
+    let mut search = nuntio_term::Search::new("marker", false).unwrap();
+    assert!(handle.search(&mut search, true));
+
+    // The match was in the scrollback, which is gone now (`clear`, CSI 3 J).
+    handle.clear_history();
+    handle.search_snapshot(&mut search);
+    assert!(!handle.search(&mut search, true));
+    assert!(!handle.search(&mut search, false));
+
+    // Refining the query continues from the old match position.
+    let (handle, rx) = spawn(script);
+    wait_for_exit(&rx);
+    let mut search = nuntio_term::Search::new("marker", false).unwrap();
+    assert!(handle.search(&mut search, true));
+    handle.clear_history();
+    let mut refined = nuntio_term::Search::new("markerx", false)
+        .unwrap()
+        .continue_from(&search);
+    assert!(!handle.search(&mut refined, true));
+}

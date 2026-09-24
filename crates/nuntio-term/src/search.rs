@@ -75,10 +75,13 @@ pub(crate) fn find<T: EventListener>(term: &mut Term<T>, search: &mut Search, up
     } else {
         (Direction::Right, Side::Right)
     };
+    // Points go stale when the scrollback shrinks (`clear`, resize); an
+    // anchor outside the grid would index out of bounds.
+    let in_grid = |p: &Point| p.line >= term.topmost_line() && p.line <= term.bottommost_line();
     let origin = match &search.current {
         Some(m) if up => m.start().sub(term, Boundary::None, 1),
         Some(m) => m.end().add(term, Boundary::None, 1),
-        None => search.anchor.unwrap_or_else(|| {
+        None => search.anchor.filter(in_grid).unwrap_or_else(|| {
             if up {
                 Point::new(
                     Line(term.screen_lines() as i32 - 1 - offset),
