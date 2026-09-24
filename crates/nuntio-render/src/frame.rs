@@ -17,6 +17,10 @@ pub struct PaneView<'a> {
     pub snapshot: &'a Snapshot,
     pub x: f32,
     pub y: f32,
+    /// Area covered by the pane (including padding), for dimming.
+    pub area: [f32; 4],
+    /// 0 = normal, 1 = fully covered by the background color.
+    pub dim: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

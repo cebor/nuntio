@@ -1,12 +1,12 @@
-//! Per-window state: tabs, layout (tab bar + terminal area), drawing, and
-//! the mouse/keyboard state that belongs to the window.
+//! Per-window state: tabs of split panes, layout (tab bar + terminal area),
+//! drawing, and the mouse/keyboard state that belongs to the window.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nuntio_config::Config;
-use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer};
-use nuntio_term::{CursorStyle, GridPoint, TermHandle, TermMode, TermSize};
+use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect};
+use nuntio_term::{CursorStyle, GridPoint, Snapshot, TermHandle, TermMode, TermSize};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
 use winit::window::{ResizeDirection, Window};
@@ -15,20 +15,84 @@ use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::ime;
 use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
-use crate::tab_bar::{BarHit, TabBar, TabLabel};
+use crate::pane_tree::{Divider, Layout, PaneTree, Rect};
+use crate::tab_bar::{BarHit, TabBar, TabLabel, mix};
 use crate::tabs::Tabs;
 
 pub const DEFAULT_TITLE: &str = "nuntio";
 pub const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 /// Width of the edge that resizes an undecorated window, in logical pixels.
 const RESIZE_BORDER: f64 = 5.0;
+/// Extra grab area around pane dividers, in logical pixels.
+const DIVIDER_SLOP: f64 = 3.0;
 
 pub struct Pane {
     pub id: PaneId,
     pub term: TermHandle,
+    /// Title set by the application (OSC 0/2).
+    pub title: Option<String>,
+    /// Current grid size, to skip redundant resizes.
+    size: Option<TermSize>,
 }
 
-/// Pointer state for selection, mouse reporting and the tab bar.
+impl Pane {
+    pub fn new(id: PaneId, term: TermHandle) -> Self {
+        Self {
+            id,
+            term,
+            title: None,
+            size: None,
+        }
+    }
+
+    fn title(&self) -> String {
+        self.title
+            .clone()
+            .unwrap_or_else(|| self.term.process_name())
+    }
+
+    fn resize(&mut self, size: TermSize) {
+        if self.size != Some(size) {
+            self.size = Some(size);
+            self.term.resize(size);
+        }
+    }
+}
+
+/// The panes of one tab and how they are split.
+pub struct TabContent {
+    pub tree: PaneTree,
+    pub panes: Vec<Pane>,
+    pub focused: PaneId,
+}
+
+impl TabContent {
+    pub fn new(pane: Pane) -> Self {
+        Self {
+            tree: PaneTree::new(pane.id),
+            focused: pane.id,
+            panes: vec![pane],
+        }
+    }
+
+    pub fn pane(&self, id: PaneId) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.id == id)
+    }
+
+    pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        self.panes.iter_mut().find(|p| p.id == id)
+    }
+
+    pub fn focused_pane(&self) -> &Pane {
+        self.pane(self.focused).expect("focused pane exists")
+    }
+
+    pub fn contains(&self, id: PaneId) -> bool {
+        self.pane(id).is_some()
+    }
+}
+
+/// Pointer state for selection, mouse reporting, the tab bar and dividers.
 #[derive(Default)]
 pub struct MouseState {
     pub position: Option<PhysicalPosition<f64>>,
@@ -47,6 +111,8 @@ pub struct MouseState {
     pub last_bar_click: Option<Instant>,
     /// A tab is being pressed or dragged to reorder it.
     pub tab_drag: Option<TabDrag>,
+    /// A pane divider is being dragged.
+    pub divider_drag: Option<Divider>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,9 +153,8 @@ pub enum Chrome {
 pub struct WindowState {
     pub window: Arc<Window>,
     pub renderer: Renderer,
-    pub tabs: Tabs<Pane>,
+    pub tabs: Tabs<TabContent>,
     pub chrome: Chrome,
-    pub grid: TermSize,
     pub modifiers: Modifiers,
     pub mouse: MouseState,
     pub focused: bool,
@@ -97,24 +162,17 @@ pub struct WindowState {
     pub preedit: Option<String>,
     pub blink: Blink,
     /// Cell the IME candidate window was last anchored to.
-    ime_cell: Option<(usize, usize)>,
+    ime_cell: Option<(u32, u32)>,
     title: String,
 }
 
 impl WindowState {
     pub fn new(window: Arc<Window>, renderer: Renderer, first: Pane, chrome: Chrome) -> Self {
-        let grid = TermSize {
-            columns: 1,
-            lines: 1,
-            cell_width: 1,
-            cell_height: 1,
-        };
         Self {
             window,
             renderer,
-            tabs: Tabs::new(first),
+            tabs: Tabs::new(TabContent::new(first)),
             chrome,
-            grid,
             modifiers: Modifiers::default(),
             mouse: MouseState::default(),
             focused: true,
@@ -129,9 +187,27 @@ impl WindowState {
         }
     }
 
-    /// The terminal of the active tab.
+    pub fn content(&self) -> &TabContent {
+        &self.tabs.active().content
+    }
+
+    pub fn content_mut(&mut self) -> &mut TabContent {
+        &mut self.tabs.active_mut().content
+    }
+
+    /// The terminal of the focused pane in the active tab.
     pub fn term(&self) -> &TermHandle {
-        &self.tabs.active().pane.term
+        &self.content().focused_pane().term
+    }
+
+    /// Current grid size of the focused pane.
+    pub fn grid(&self) -> TermSize {
+        self.content().focused_pane().size.unwrap_or(TermSize {
+            columns: 1,
+            lines: 1,
+            cell_width: 1,
+            cell_height: 1,
+        })
     }
 
     fn scale(&self) -> f64 {
@@ -161,68 +237,91 @@ impl WindowState {
         ))
     }
 
-    fn bar_height(&self, config: &Config) -> u32 {
-        self.tab_bar(config).map_or(0, |bar| bar.height as u32)
+    /// Area below the tab bar that the panes share.
+    fn terminal_area(&self, config: &Config) -> Rect {
+        let size = self.window.inner_size();
+        let bar = self.tab_bar(config).map_or(0.0, |bar| bar.height);
+        Rect {
+            x: 0.0,
+            y: bar,
+            width: size.width as f32,
+            height: (size.height as f32 - bar).max(0.0),
+        }
     }
 
-    /// Padding around the grid in physical pixels.
-    fn padding(&self, config: &Config) -> (u32, u32) {
+    /// Thickness of the lines between panes.
+    fn divider_width(&self) -> f32 {
+        self.scale().round().max(1.0) as f32
+    }
+
+    /// Pane layout of the active tab.
+    pub fn layout(&self, config: &Config) -> Layout {
+        self.content()
+            .tree
+            .layout(self.terminal_area(config), self.divider_width())
+    }
+
+    /// Padding around each pane's grid in physical pixels.
+    fn padding(&self, config: &Config) -> (f32, f32) {
         let p = config.window.padding;
         let scale = self.scale();
         (
-            (p.x as f64 * scale).round() as u32,
-            (p.y as f64 * scale).round() as u32,
+            (p.x as f64 * scale).round() as f32,
+            (p.y as f64 * scale).round() as f32,
         )
     }
 
-    /// Top-left corner of the terminal grid.
-    fn grid_origin(&self, config: &Config) -> (u32, u32) {
+    /// Top-left corner of a pane's grid.
+    fn grid_origin(&self, config: &Config, rect: Rect) -> (f32, f32) {
         let (pad_x, pad_y) = self.padding(config);
-        (pad_x, self.bar_height(config) + pad_y)
+        (rect.x + pad_x, rect.y + pad_y)
     }
 
-    /// Recompute the grid size and resize every tab's terminal.
+    /// Fit every pane's terminal to its area, in all tabs.
     pub fn resize_terms(&mut self, config: &Config) {
-        let size = self.window.inner_size();
-        let bar = self.bar_height(config);
-        let area = PhysicalSize::new(size.width, size.height.saturating_sub(bar));
-        let grid = grid_size(area, self.padding(config), self.renderer.cell_metrics());
-        if grid != self.grid {
-            self.grid = grid;
-            for tab in self.tabs.iter() {
-                tab.pane.term.resize(grid);
+        let area = self.terminal_area(config);
+        let gap = self.divider_width();
+        let padding = self.padding(config);
+        let cell = self.renderer.cell_metrics();
+        for tab in self.tabs.iter_mut() {
+            let content = &mut tab.content;
+            let layout = content.tree.layout(area, gap);
+            for (id, rect) in layout.panes {
+                if let Some(pane) = content.pane_mut(id) {
+                    pane.resize(grid_size(rect, padding, cell));
+                }
             }
         }
     }
 
     pub fn tab_title(&self, index: usize) -> String {
         let tab = self.tabs.iter().nth(index).expect("tab index in range");
-        tab.title
-            .clone()
-            .unwrap_or_else(|| tab.pane.term.process_name())
+        tab.content.focused_pane().title()
     }
 
     pub fn redraw(&mut self, config: &Config, banner: Option<&Banner>) -> FrameStatus {
-        let mut snapshot = self.term().snapshot();
-        if let Some(preedit) = &self.preedit {
-            ime::overlay_preedit(&mut snapshot, preedit);
-        }
+        let layout = self.layout(config);
+        let focused_id = self.content().focused;
+        let split = layout.panes.len() > 1;
 
-        let blinking =
-            self.focused && self.preedit.is_none() && snapshot.cursor.is_some_and(|c| c.blinking);
-        if blinking != self.blink.active {
-            self.blink.active = blinking;
-            self.blink.reset();
-        }
-        if let Some(cursor) = snapshot.cursor.as_mut() {
-            self.update_ime_area(config, cursor.column, cursor.line);
-            if !self.focused {
+        let mut snapshots: Vec<(Snapshot, Rect, bool)> = Vec::with_capacity(layout.panes.len());
+        for &(id, rect) in &layout.panes {
+            let Some(pane) = self.content().pane(id) else {
+                continue;
+            };
+            let mut snapshot = pane.term.snapshot();
+            let is_focused = id == focused_id;
+            if is_focused {
+                self.prepare_focused(config, &mut snapshot, rect);
+            } else if let Some(cursor) = snapshot.cursor.as_mut() {
                 cursor.style = CursorStyle::HollowBlock;
             }
+            snapshots.push((snapshot, rect, is_focused));
         }
-        if self.blink.active && !self.blink.visible {
-            snapshot.cursor = None;
-        }
+        let Some((first, ..)) = snapshots.first() else {
+            return FrameStatus::Skipped;
+        };
+        let (background, foreground) = (first.background, first.foreground);
 
         let title = self.tab_title(self.tabs.active_index());
         if title != self.title {
@@ -247,12 +346,24 @@ impl WindowState {
                     &labels,
                     self.mouse.hovered_bar,
                     self.window.is_maximized(),
-                    snapshot.background,
-                    snapshot.foreground,
+                    background,
+                    foreground,
                 )
             }
             None => Default::default(),
         };
+
+        let divider_color = mix(background, foreground, 0.25);
+        for divider in &layout.dividers {
+            let r = divider.rect;
+            rects.push(UiRect {
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+                color: divider_color,
+            });
+        }
 
         if let Some(banner) = banner {
             let size = self.window.inner_size();
@@ -266,51 +377,100 @@ impl WindowState {
             texts.push(text);
         }
 
-        let (x, y) = self.grid_origin(config);
-        let panes = [PaneView {
-            snapshot: &snapshot,
-            x: x as f32,
-            y: y as f32,
-        }];
+        let panes: Vec<PaneView> = snapshots
+            .iter()
+            .map(|(snapshot, rect, is_focused)| {
+                let (x, y) = self.grid_origin(config, *rect);
+                PaneView {
+                    snapshot,
+                    x,
+                    y,
+                    area: [rect.x, rect.y, rect.width, rect.height],
+                    dim: if split && !is_focused {
+                        config.panes.dim_inactive
+                    } else {
+                        0.0
+                    },
+                }
+            })
+            .collect();
         self.renderer.render(&Frame {
-            background: snapshot.background,
+            background,
             panes: &panes,
             rects: &rects,
             texts: &texts,
         })
     }
 
+    /// Preedit, blinking and IME placement for the focused pane.
+    fn prepare_focused(&mut self, config: &Config, snapshot: &mut Snapshot, rect: Rect) {
+        if let Some(preedit) = &self.preedit {
+            ime::overlay_preedit(snapshot, preedit);
+        }
+        let blinking =
+            self.focused && self.preedit.is_none() && snapshot.cursor.is_some_and(|c| c.blinking);
+        if blinking != self.blink.active {
+            self.blink.active = blinking;
+            self.blink.reset();
+        }
+        if let Some(cursor) = snapshot.cursor.as_mut() {
+            let (x, y) = self.grid_origin(config, rect);
+            let cell = self.renderer.cell_metrics();
+            self.update_ime_area(
+                x as u32 + cursor.column as u32 * cell.width,
+                y as u32 + cursor.line as u32 * cell.height,
+            );
+            if !self.focused {
+                cursor.style = CursorStyle::HollowBlock;
+            }
+        }
+        if self.blink.active && !self.blink.visible {
+            snapshot.cursor = None;
+        }
+    }
+
     /// Keep the IME candidate window next to the cursor.
-    fn update_ime_area(&mut self, config: &Config, column: usize, line: usize) {
-        if self.ime_cell == Some((column, line)) {
+    fn update_ime_area(&mut self, x: u32, y: u32) {
+        if self.ime_cell == Some((x, y)) {
             return;
         }
-        self.ime_cell = Some((column, line));
-        let (x, y) = self.grid_origin(config);
+        self.ime_cell = Some((x, y));
         let cell = self.renderer.cell_metrics();
         self.window.set_ime_cursor_area(
-            PhysicalPosition::new(
-                x + column as u32 * cell.width,
-                y + line as u32 * cell.height,
-            ),
+            PhysicalPosition::new(x, y),
             PhysicalSize::new(cell.width, cell.height),
         );
     }
 
-    /// Grid cell under a window position, clamped to the grid.
+    /// Grid cell of the focused pane under a window position, clamped to
+    /// its grid.
     pub fn cell_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> GridPoint {
-        let (x0, y0) = self.grid_origin(config);
+        let layout = self.layout(config);
+        let rect = layout.rect(self.content().focused).unwrap_or_default();
+        let (x0, y0) = self.grid_origin(config, rect);
         let cell = self.renderer.cell_metrics();
+        let grid = self.grid();
         let x = (pos.x - x0 as f64).max(0.0);
         let y = (pos.y - y0 as f64).max(0.0);
-        let column = ((x / cell.width as f64) as usize).min(self.grid.columns as usize - 1);
-        let line = ((y / cell.height as f64) as usize).min(self.grid.lines as usize - 1);
+        let column = ((x / cell.width as f64) as usize).min(grid.columns as usize - 1);
+        let line = ((y / cell.height as f64) as usize).min(grid.lines as usize - 1);
         let within = x - column as f64 * cell.width as f64;
         GridPoint {
             column,
             line,
             right_half: within >= cell.width as f64 / 2.0,
         }
+    }
+
+    pub fn pane_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> Option<PaneId> {
+        self.layout(config).pane_at(pos.x as f32, pos.y as f32)
+    }
+
+    pub fn divider_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> Option<Divider> {
+        let slop = (DIVIDER_SLOP * self.scale()) as f32;
+        self.layout(config)
+            .divider_at(pos.x as f32, pos.y as f32, slop)
+            .cloned()
     }
 
     /// The pointer is over the notification banner.
@@ -372,6 +532,15 @@ impl WindowState {
         }
     }
 
+    /// Forget per-pane pointer and IME state after focus moves.
+    fn reset_focus_state(&mut self) {
+        self.mouse.selecting = false;
+        self.mouse.reported_button = None;
+        self.mouse.last_reported_cell = None;
+        self.ime_cell = None;
+        self.window.request_redraw();
+    }
+
     /// Switch tabs, telling applications that asked about focus changes.
     pub fn select_tab(&mut self, index: usize) {
         if index == self.tabs.active_index() || index >= self.tabs.len() {
@@ -380,13 +549,21 @@ impl WindowState {
         self.send_focus(false);
         self.tabs.select(index);
         self.send_focus(true);
-        self.mouse.selecting = false;
-        self.mouse.reported_button = None;
-        self.ime_cell = None;
-        self.window.request_redraw();
+        self.reset_focus_state();
     }
 
-    /// Report focus in/out to the active terminal if it enabled that mode.
+    /// Move keyboard focus to another pane of the active tab.
+    pub fn focus_pane(&mut self, id: PaneId) {
+        if id == self.content().focused || !self.content().contains(id) {
+            return;
+        }
+        self.send_focus(false);
+        self.content_mut().focused = id;
+        self.send_focus(true);
+        self.reset_focus_state();
+    }
+
+    /// Report focus in/out to the focused terminal if it enabled that mode.
     pub fn send_focus(&self, focused: bool) {
         let term = self.term();
         if self.focused && term.mode().contains(TermMode::FOCUS_IN_OUT) {
@@ -399,14 +576,14 @@ impl WindowState {
     }
 }
 
-/// How many cells fit into an area, minus padding.
-fn grid_size(area: PhysicalSize<u32>, padding: (u32, u32), cell: CellMetrics) -> TermSize {
-    let fit = |available: u32, pad: u32, cell: u32| {
-        (available.saturating_sub(2 * pad) / cell).clamp(1, u16::MAX as u32) as u16
+/// How many cells fit into a pane, minus padding.
+fn grid_size(rect: Rect, padding: (f32, f32), cell: CellMetrics) -> TermSize {
+    let fit = |available: f32, pad: f32, cell: u32| {
+        (((available - 2.0 * pad).max(0.0) as u32) / cell).clamp(1, u16::MAX as u32) as u16
     };
     TermSize {
-        columns: fit(area.width, padding.0, cell.width),
-        lines: fit(area.height, padding.1, cell.height),
+        columns: fit(rect.width, padding.0, cell.width),
+        lines: fit(rect.height, padding.1, cell.height),
         cell_width: cell.width.min(u16::MAX as u32) as u16,
         cell_height: cell.height.min(u16::MAX as u32) as u16,
     }

@@ -3,9 +3,7 @@
 
 #[derive(Debug)]
 pub struct Tab<P> {
-    pub pane: P,
-    /// Title set by the application (OSC 0/2).
-    pub title: Option<String>,
+    pub content: P,
     /// Output arrived while the tab was in the background.
     pub activity: bool,
     /// The bell rang while the tab was in the background.
@@ -13,10 +11,9 @@ pub struct Tab<P> {
 }
 
 impl<P> Tab<P> {
-    fn new(pane: P) -> Self {
+    fn new(content: P) -> Self {
         Self {
-            pane,
-            title: None,
+            content,
             activity: false,
             bell: false,
         }
@@ -57,17 +54,25 @@ impl<P> Tabs<P> {
         self.tabs.get_mut(index)
     }
 
+    pub fn active_mut(&mut self) -> &mut Tab<P> {
+        &mut self.tabs[self.active]
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Tab<P>> {
+        self.tabs.iter_mut()
+    }
+
     pub fn position(&self, mut predicate: impl FnMut(&P) -> bool) -> Option<usize> {
-        self.tabs.iter().position(|t| predicate(&t.pane))
+        self.tabs.iter().position(|t| predicate(&t.content))
     }
 
     /// Open a tab right after the active one and activate it.
-    pub fn open(&mut self, pane: P) {
+    pub fn open(&mut self, content: P) {
         self.active += 1;
-        self.tabs.insert(self.active, Tab::new(pane));
+        self.tabs.insert(self.active, Tab::new(content));
     }
 
-    /// Close a tab. Returns its pane, or `None` if this was the last tab
+    /// Close a tab. Returns its content, or `None` if this was the last tab
     /// (which stays, so the caller can quit).
     pub fn close(&mut self, index: usize) -> Option<P> {
         if self.tabs.len() == 1 || index >= self.tabs.len() {
@@ -78,7 +83,7 @@ impl<P> Tabs<P> {
             self.active -= 1;
         }
         self.clear_flags(self.active);
-        Some(tab.pane)
+        Some(tab.content)
     }
 
     pub fn select(&mut self, index: usize) {
@@ -125,7 +130,7 @@ mod tests {
     }
 
     fn order(t: &Tabs<u32>) -> Vec<u32> {
-        t.iter().map(|t| t.pane).collect()
+        t.iter().map(|t| t.content).collect()
     }
 
     #[test]
@@ -134,7 +139,7 @@ mod tests {
         t.select(0);
         t.open(9);
         assert_eq!(order(&t), [0, 9, 1, 2]);
-        assert_eq!(t.active().pane, 9);
+        assert_eq!(t.active().content, 9);
     }
 
     #[test]
@@ -142,14 +147,18 @@ mod tests {
         let mut t = tabs(4); // active 3
         assert_eq!(t.close(3), Some(3));
         assert_eq!(
-            t.active().pane,
+            t.active().content,
             2,
             "closing the last activates the new last"
         );
 
         t.select(1);
         assert_eq!(t.close(0), Some(0));
-        assert_eq!(t.active().pane, 1, "closing before active keeps it active");
+        assert_eq!(
+            t.active().content,
+            1,
+            "closing before active keeps it active"
+        );
 
         assert_eq!(t.close(1), Some(2));
         assert_eq!(t.close(0), None, "the last tab stays");
@@ -162,15 +171,15 @@ mod tests {
         t.select(1);
         t.move_tab(1, 3);
         assert_eq!(order(&t), [0, 2, 3, 1]);
-        assert_eq!(t.active().pane, 1);
+        assert_eq!(t.active().content, 1);
 
         t.move_tab(0, 3);
         assert_eq!(order(&t), [2, 3, 1, 0]);
-        assert_eq!(t.active().pane, 1);
+        assert_eq!(t.active().content, 1);
 
         t.move_tab(3, 0);
         assert_eq!(order(&t), [0, 2, 3, 1]);
-        assert_eq!(t.active().pane, 1);
+        assert_eq!(t.active().content, 1);
     }
 
     #[test]

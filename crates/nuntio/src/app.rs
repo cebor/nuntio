@@ -27,8 +27,11 @@ use crate::banner::{Banner, Severity};
 use crate::event::{PaneId, UserEvent};
 use crate::input;
 use crate::mouse::{Button, MouseAction};
+use crate::pane_tree::{Axis, Direction, PaneTree};
 use crate::tab_bar::BarHit;
-use crate::window::{BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabDrag, WindowState};
+use crate::window::{
+    BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent, TabDrag, WindowState,
+};
 
 const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
@@ -284,8 +287,8 @@ impl App {
         };
         self.palette = palette_from(theme);
         if let Some(state) = self.state.as_ref() {
-            for tab in state.tabs.iter() {
-                tab.pane.term.set_palette(self.palette.clone());
+            for pane in state.tabs.iter().flat_map(|t| &t.content.panes) {
+                pane.term.set_palette(self.palette.clone());
             }
             state.window.request_redraw();
         }
@@ -377,12 +380,12 @@ impl App {
                 cell_width: 1,
                 cell_height: 1,
             },
-            |s| s.grid,
+            |s| s.grid(),
         );
         let term = TermHandle::spawn(options, size, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));
         })?;
-        Ok(Pane { id, term })
+        Ok(Pane::new(id, term))
     }
 
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState> {
@@ -469,10 +472,83 @@ impl App {
             return;
         };
         state.send_focus(false);
-        state.tabs.open(pane);
+        state.tabs.open(TabContent::new(pane));
         // The first extra tab may show the tab bar and shrink the grid.
         state.resize_terms(&self.config);
-        state.tabs.active().pane.term.resize(state.grid);
+        state.window.request_redraw();
+    }
+
+    /// Split the focused pane; the new pane starts in the same directory.
+    fn split(&mut self, axis: Axis) {
+        let cwd = self
+            .state
+            .as_ref()
+            .and_then(|s| s.term().working_directory());
+        let pane = match self.spawn_pane(cwd) {
+            Ok(pane) => pane,
+            Err(err) => {
+                tracing::error!("failed to split pane: {err:#}");
+                return;
+            }
+        };
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let new = pane.id;
+        let content = state.content_mut();
+        let target = content.focused;
+        content.tree.split(target, new, axis);
+        content.panes.push(pane);
+        state.focus_pane(new);
+        state.resize_terms(&self.config);
+    }
+
+    /// Close a pane; closing a tab's last pane closes the tab.
+    fn close_pane(&mut self, id: PaneId) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let Some(index) = state.tabs.position(|c| c.contains(id)) else {
+            return;
+        };
+        let active = index == state.tabs.active_index();
+        let Some(tab) = state.tabs.get_mut(index) else {
+            return;
+        };
+        let content = &mut tab.content;
+        let Some(next) = content.tree.remove(id) else {
+            // The tab's last pane.
+            self.close_tab(index);
+            return;
+        };
+        let was_focused = content.focused == id;
+        content.panes.retain(|p| p.id != id);
+        if was_focused {
+            content.focused = next;
+            if active {
+                state.send_focus(true);
+            }
+        }
+        state.mouse.divider_drag = None;
+        state.resize_terms(&self.config);
+        state.window.request_redraw();
+    }
+
+    fn resize_pane(&mut self, direction: Direction) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let layout = state.layout(&self.config);
+        let cell = state.renderer.cell_metrics();
+        // Move by two cells, so each press is clearly visible.
+        let step = match direction {
+            Direction::Left | Direction::Right => 2 * cell.width,
+            Direction::Up | Direction::Down => 2 * cell.height,
+        } as f32;
+        let content = state.content_mut();
+        let focused = content.focused;
+        content.tree.resize(focused, direction, step, &layout);
+        state.resize_terms(&self.config);
         state.window.request_redraw();
     }
 
@@ -532,6 +608,26 @@ impl App {
             }
             Action::SelectTab(index) => state.select_tab(index),
             Action::ReloadConfig => self.reload_config(),
+            Action::ClosePane => {
+                let id = state.content().focused;
+                self.close_pane(id);
+            }
+            Action::SplitVertical => self.split(Axis::Vertical),
+            Action::SplitHorizontal => self.split(Axis::Horizontal),
+            Action::FocusPane(direction) => {
+                let layout = state.layout(&self.config);
+                let focused = state.content().focused;
+                if let Some(id) = PaneTree::neighbor(focused, direction, &layout) {
+                    state.focus_pane(id);
+                }
+            }
+            Action::ResizePane(direction) => self.resize_pane(direction),
+            Action::ZoomPane => {
+                let content = state.content_mut();
+                let focused = content.focused;
+                content.tree.toggle_zoom(focused);
+                state.resize_terms(&self.config);
+            }
         }
         if let Some(state) = self.state.as_ref() {
             state.window.request_redraw();
@@ -587,7 +683,10 @@ impl App {
             _ => return,
         };
 
-        if !pressed && button == Button::Left && state.mouse.tab_drag.take().is_some() {
+        if !pressed
+            && button == Button::Left
+            && (state.mouse.tab_drag.take().is_some() || state.mouse.divider_drag.take().is_some())
+        {
             return;
         }
         // A click on the banner dismisses it.
@@ -656,6 +755,19 @@ impl App {
             return;
         }
 
+        if pressed {
+            if button == Button::Left
+                && let Some(divider) = state.divider_at(&self.config, pos)
+            {
+                state.mouse.divider_drag = Some(divider);
+                return;
+            }
+            // Clicking a pane focuses it; the click then acts inside it.
+            if let Some(id) = state.pane_at(&self.config, pos) {
+                state.focus_pane(id);
+            }
+        }
+
         let point = state.cell_at(&self.config, pos);
         // Application mouse mode: forward presses and matching releases.
         let mode = state.term().mode();
@@ -701,9 +813,27 @@ impl App {
         };
         state.mouse.position = Some(pos);
 
+        if let Some(divider) = &state.mouse.divider_drag {
+            let at = match divider.axis {
+                Axis::Vertical => pos.x,
+                Axis::Horizontal => pos.y,
+            } as f32;
+            let divider = divider.clone();
+            state.content_mut().tree.drag_divider(&divider, at);
+            state.resize_terms(&self.config);
+            state.window.request_redraw();
+            return;
+        }
+
+        let divider_icon = state.divider_at(&self.config, pos).map(|d| match d.axis {
+            Axis::Vertical => CursorIcon::ColResize,
+            Axis::Horizontal => CursorIcon::RowResize,
+        });
         let icon = state
             .resize_edge(pos)
-            .map_or(CursorIcon::Default, resize_cursor);
+            .map(resize_cursor)
+            .or(divider_icon)
+            .unwrap_or(CursorIcon::Default);
         let bar = state.tab_bar(&self.config);
         let bar_hit = bar.as_ref().and_then(|b| b.hit(pos.x as f32, pos.y as f32));
         let in_terminal = bar_hit.is_none() && icon == CursorIcon::Default;
@@ -741,7 +871,8 @@ impl App {
             state.window.request_redraw();
             return;
         }
-        if !in_terminal {
+        let over_focused = state.pane_at(&self.config, pos) == Some(state.content().focused);
+        if !in_terminal || !over_focused {
             return;
         }
 
@@ -783,6 +914,22 @@ impl App {
             return;
         }
 
+        // Scrolling over a background pane scrolls its history without
+        // moving focus.
+        let hovered = state
+            .mouse
+            .position
+            .and_then(|pos| state.pane_at(&self.config, pos));
+        if let Some(id) = hovered
+            && id != state.content().focused
+        {
+            if let Some(pane) = state.content().pane(id) {
+                pane.term.scroll(lines);
+            }
+            state.window.request_redraw();
+            return;
+        }
+
         if state.reports_mouse(mode) {
             let Some(pos) = state.mouse.position else {
                 return;
@@ -818,7 +965,7 @@ impl App {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        let Some(index) = state.tabs.position(|p| p.id == pane) else {
+        let Some(index) = state.tabs.position(|c| c.contains(pane)) else {
             return;
         };
         let active = index == state.tabs.active_index();
@@ -829,15 +976,15 @@ impl App {
                 }
                 state.window.request_redraw();
             }
-            TermEvent::Title(title) => {
-                if let Some(tab) = state.tabs.get_mut(index) {
-                    tab.title = Some(title);
-                }
-                state.window.request_redraw();
-            }
-            TermEvent::ResetTitle => {
-                if let Some(tab) = state.tabs.get_mut(index) {
-                    tab.title = None;
+            TermEvent::Title(_) | TermEvent::ResetTitle => {
+                let title = match event {
+                    TermEvent::Title(title) => Some(title),
+                    _ => None,
+                };
+                if let Some(tab) = state.tabs.get_mut(index)
+                    && let Some(p) = tab.content.pane_mut(pane)
+                {
+                    p.title = title;
                 }
                 state.window.request_redraw();
             }
@@ -850,7 +997,7 @@ impl App {
                 }
                 state.window.request_redraw();
             }
-            TermEvent::Exit => self.close_tab(index),
+            TermEvent::Exit => self.close_pane(pane),
             TermEvent::ClipboardStore(text) => self.set_clipboard(text),
         }
     }

@@ -343,7 +343,7 @@ fn truncate(text: &str, cells: usize) -> String {
     out
 }
 
-fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
+pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Rgb {
         r: m(a.r, b.r),

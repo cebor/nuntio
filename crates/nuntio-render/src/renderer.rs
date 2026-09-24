@@ -336,6 +336,12 @@ impl Renderer {
         self.instances.clear();
         for pane in frame.panes {
             self.push_pane(pane.snapshot, pane.x, pane.y)?;
+            if pane.dim > 0.0 {
+                let [x, y, width, height] = pane.area;
+                let mut veil = Instance::solid(x, y, width, height, pane.snapshot.background);
+                veil.color[3] = pane.dim.min(1.0);
+                self.instances.push(veil);
+            }
         }
         for r in frame.rects {
             self.instances

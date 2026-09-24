@@ -5,6 +5,7 @@ mod event;
 mod ime;
 mod input;
 mod mouse;
+mod pane_tree;
 mod tab_bar;
 mod tabs;
 mod window;

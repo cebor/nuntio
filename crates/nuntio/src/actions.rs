@@ -2,6 +2,8 @@
 
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
+use crate::pane_tree::Direction;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Copy,
@@ -16,11 +18,20 @@ pub enum Action {
     ClearScrollback,
     NewTab,
     CloseTab,
+    /// Close the focused pane (the tab, if it's the last pane).
+    ClosePane,
     NextTab,
     PreviousTab,
     /// Activate the tab at this index (0-based).
     SelectTab(usize),
     ReloadConfig,
+    /// Split the focused pane side by side.
+    SplitVertical,
+    /// Split the focused pane top and bottom.
+    SplitHorizontal,
+    FocusPane(Direction),
+    ResizePane(Direction),
+    ZoomPane,
 }
 
 impl Action {
@@ -44,6 +55,18 @@ impl Action {
             "next_tab" => NextTab,
             "previous_tab" => PreviousTab,
             "reload_config" => ReloadConfig,
+            "close_pane" => ClosePane,
+            "split_vertical" => SplitVertical,
+            "split_horizontal" => SplitHorizontal,
+            "zoom_pane" => ZoomPane,
+            "focus_pane_left" => FocusPane(Direction::Left),
+            "focus_pane_right" => FocusPane(Direction::Right),
+            "focus_pane_up" => FocusPane(Direction::Up),
+            "focus_pane_down" => FocusPane(Direction::Down),
+            "resize_pane_left" => ResizePane(Direction::Left),
+            "resize_pane_right" => ResizePane(Direction::Right),
+            "resize_pane_up" => ResizePane(Direction::Up),
+            "resize_pane_down" => ResizePane(Direction::Down),
             _ => {
                 let tab = name
                     .strip_prefix("select_tab_")
@@ -118,17 +141,36 @@ impl Bindings {
             named(NamedKey::ArrowUp, cmd_shift, ScrollLineUp),
             named(NamedKey::ArrowDown, cmd_shift, ScrollLineDown),
             char('t', cmd_shift, NewTab),
-            char('w', cmd_shift, CloseTab),
+            char('w', cmd_shift, ClosePane),
             char(',', cmd_shift | shift, ReloadConfig),
         ];
-        if cfg!(target_os = "macos") {
+        let (focus_mods, resize_mods) = if cfg!(target_os = "macos") {
             let cmd = ModifiersState::SUPER;
             bindings.push(char(']', cmd | shift, NextTab));
             bindings.push(char('[', cmd | shift, PreviousTab));
+            bindings.push(char('d', cmd, SplitVertical));
+            bindings.push(char('d', cmd | shift, SplitHorizontal));
+            bindings.push(named(NamedKey::Enter, cmd | shift, ZoomPane));
+            // Like iTerm2: Cmd+Opt+Arrow focuses, Cmd+Ctrl+Arrow resizes.
+            (cmd | ModifiersState::ALT, cmd | ModifiersState::CONTROL)
         } else {
             let ctrl = ModifiersState::CONTROL;
             bindings.push(named(NamedKey::Tab, ctrl, NextTab));
             bindings.push(named(NamedKey::Tab, ctrl | shift, PreviousTab));
+            bindings.push(char('d', ctrl | shift, SplitVertical));
+            bindings.push(char('e', ctrl | shift, SplitHorizontal));
+            bindings.push(named(NamedKey::Enter, ctrl | shift, ZoomPane));
+            let ctrl_alt = ctrl | ModifiersState::ALT;
+            (ctrl_alt, ctrl_alt | shift)
+        };
+        for (key, direction) in [
+            (NamedKey::ArrowLeft, Direction::Left),
+            (NamedKey::ArrowRight, Direction::Right),
+            (NamedKey::ArrowUp, Direction::Up),
+            (NamedKey::ArrowDown, Direction::Down),
+        ] {
+            bindings.push(named(key, focus_mods, FocusPane(direction)));
+            bindings.push(named(key, resize_mods, ResizePane(direction)));
         }
         // Cmd+1…9 on macOS, Alt+1…9 elsewhere.
         let select_mods = if cfg!(target_os = "macos") {
@@ -287,6 +329,14 @@ mod tests {
             Ok(Some(Action::SelectTab(2)))
         );
         assert_eq!(Action::from_name("none"), Ok(None));
+        assert_eq!(
+            Action::from_name("split_horizontal"),
+            Ok(Some(Action::SplitHorizontal))
+        );
+        assert_eq!(
+            Action::from_name("focus_pane_up"),
+            Ok(Some(Action::FocusPane(Direction::Up)))
+        );
         assert!(Action::from_name("select_tab_0").is_err());
         assert!(Action::from_name("split_sideways").is_err());
     }
@@ -335,6 +385,24 @@ mod tests {
         assert_eq!(
             b.lookup(&ch("3"), ModifiersState::ALT),
             Some(Action::SelectTab(2))
+        );
+        assert_eq!(b.lookup(&ch("d"), ctrl_shift), Some(Action::SplitVertical));
+        assert_eq!(
+            b.lookup(&ch("e"), ctrl_shift),
+            Some(Action::SplitHorizontal)
+        );
+        assert_eq!(b.lookup(&ch("w"), ctrl_shift), Some(Action::ClosePane));
+        let ctrl_alt = ctrl | ModifiersState::ALT;
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::ArrowLeft), ctrl_alt),
+            Some(Action::FocusPane(Direction::Left))
+        );
+        assert_eq!(
+            b.lookup(
+                &Key::Named(NamedKey::ArrowDown),
+                ctrl_alt | ModifiersState::SHIFT
+            ),
+            Some(Action::ResizePane(Direction::Down))
         );
     }
 
