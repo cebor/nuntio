@@ -1,6 +1,8 @@
+mod actions;
 mod app;
 mod event;
 mod input;
+mod mouse;
 
 use std::path::PathBuf;
 

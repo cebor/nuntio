@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{self, Term};
+use alacritty_terminal::term::{self, Term, viewport_to_point};
 use alacritty_terminal::tty;
 use thiserror::Error;
 
@@ -218,10 +220,58 @@ impl TermHandle {
             return;
         }
         // Typing jumps back to the bottom, like every terminal does.
+        self.term.lock().scroll_display(Scroll::Bottom);
+        let _ = self.sender.send(Msg::Input(bytes));
+    }
+
+    /// Paste text, wrapped in bracketed-paste markers if the app asked for them.
+    pub fn paste(&self, text: &str) {
+        let bracketed = self.mode().contains(term::TermMode::BRACKETED_PASTE);
+        self.write(encode_paste(text, bracketed));
+    }
+
+    /// Scroll the viewport; positive values move up into the scrollback.
+    pub fn scroll(&self, lines: i32) {
+        self.term.lock().scroll_display(Scroll::Delta(lines));
+    }
+
+    pub fn scroll_page(&self, up: bool) {
         self.term
             .lock()
-            .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
-        let _ = self.sender.send(Msg::Input(bytes));
+            .scroll_display(if up { Scroll::PageUp } else { Scroll::PageDown });
+    }
+
+    /// Drop the scrollback, keeping the visible screen.
+    pub fn clear_history(&self) {
+        use alacritty_terminal::vte::ansi::{ClearMode, Handler};
+        let mut term = self.term.lock();
+        term.scroll_display(Scroll::Bottom);
+        term.clear_screen(ClearMode::Saved);
+    }
+
+    pub fn start_selection(&self, kind: SelectionKind, point: GridPoint) {
+        let mut term = self.term.lock();
+        let (point, side) = point.to_grid(term.grid().display_offset());
+        term.selection = Some(Selection::new(kind.into(), point, side));
+    }
+
+    pub fn update_selection(&self, point: GridPoint) {
+        let mut term = self.term.lock();
+        let (point, side) = point.to_grid(term.grid().display_offset());
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+        }
+    }
+
+    pub fn clear_selection(&self) {
+        self.term.lock().selection = None;
+    }
+
+    pub fn selection_text(&self) -> Option<String> {
+        self.term
+            .lock()
+            .selection_to_string()
+            .filter(|s| !s.is_empty())
     }
 
     pub fn resize(&self, size: TermSize) {
@@ -249,5 +299,94 @@ impl TermHandle {
 impl Drop for TermHandle {
     fn drop(&mut self) {
         let _ = self.sender.send(Msg::Shutdown);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionKind {
+    /// Character-wise.
+    Simple,
+    /// Rectangular (Alt+drag).
+    Block,
+    /// Word-wise (double click).
+    Semantic,
+    /// Line-wise (triple click).
+    Lines,
+}
+
+impl From<SelectionKind> for SelectionType {
+    fn from(kind: SelectionKind) -> Self {
+        match kind {
+            SelectionKind::Simple => SelectionType::Simple,
+            SelectionKind::Block => SelectionType::Block,
+            SelectionKind::Semantic => SelectionType::Semantic,
+            SelectionKind::Lines => SelectionType::Lines,
+        }
+    }
+}
+
+/// A position in the visible grid, as seen by the mouse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridPoint {
+    pub column: usize,
+    /// Viewport line, 0 = top of the window.
+    pub line: usize,
+    /// The pointer is on the right half of the cell.
+    pub right_half: bool,
+}
+
+impl GridPoint {
+    fn to_grid(self, display_offset: usize) -> (Point, Side) {
+        let point = viewport_to_point(display_offset, Point::new(self.line, Column(self.column)));
+        let side = if self.right_half {
+            Side::Right
+        } else {
+            Side::Left
+        };
+        (point, side)
+    }
+}
+
+/// Paste payload: with bracketed paste the text is wrapped in markers (and any
+/// embedded end marker removed so it cannot break out); without it, newlines
+/// become carriage returns like a typed Enter.
+fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
+    if bracketed {
+        let body = text.replace("\x1b[201~", "");
+        [b"\x1b[200~", body.as_bytes(), b"\x1b[201~"].concat()
+    } else {
+        text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::index::Line;
+
+    use super::*;
+
+    #[test]
+    fn paste_without_brackets_uses_carriage_returns() {
+        assert_eq!(encode_paste("a\nb\r\nc", false), b"a\rb\rc");
+    }
+
+    #[test]
+    fn bracketed_paste_cannot_be_escaped() {
+        assert_eq!(
+            encode_paste("x\x1b[201~rm -rf ~\n", true),
+            b"\x1b[200~xrm -rf ~\n\x1b[201~"
+        );
+    }
+
+    #[test]
+    fn grid_point_respects_scrollback() {
+        let p = GridPoint {
+            column: 3,
+            line: 0,
+            right_half: true,
+        };
+        let (point, side) = p.to_grid(5);
+        assert_eq!(point, Point::new(Line(-5), Column(3)));
+        assert_eq!(side, Side::Right);
     }
 }

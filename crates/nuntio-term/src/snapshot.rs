@@ -87,6 +87,7 @@ impl Snapshot {
         };
         let mut cells = vec![blank; columns * lines];
         let offset = content.display_offset as i32;
+        let selection = content.selection;
 
         for indexed in content.display_iter {
             let cell = indexed.cell;
@@ -99,6 +100,10 @@ impl Snapshot {
             let mut bg = palette.resolve(cell.bg, overrides);
             if flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
+            }
+            if selection.is_some_and(|s| s.contains(indexed.point)) {
+                fg = palette.selection_foreground;
+                bg = palette.selection_background;
             }
             let hidden = flags.contains(Flags::HIDDEN)
                 || flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);

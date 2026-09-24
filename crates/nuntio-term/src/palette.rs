@@ -7,6 +7,8 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 #[derive(Debug, Clone)]
 pub struct Palette {
     colors: [Rgb; COUNT],
+    pub selection_background: Rgb,
+    pub selection_foreground: Rgb,
 }
 
 const fn rgb(hex: u32) -> Rgb {
@@ -24,6 +26,8 @@ const ITERM2_ANSI: [u32; 16] = [
 ];
 const ITERM2_FG: u32 = 0xc7c7c7;
 const ITERM2_BG: u32 = 0x000000;
+const ITERM2_SELECTION_BG: u32 = 0xb5d5ff;
+const ITERM2_SELECTION_FG: u32 = 0x000000;
 
 impl Default for Palette {
     fn default() -> Self {
@@ -61,7 +65,11 @@ impl Palette {
             colors[NamedColor::DimBlack as usize + i] = dim(ansi[i]);
         }
 
-        Self { colors }
+        Self {
+            colors,
+            selection_background: rgb(ITERM2_SELECTION_BG),
+            selection_foreground: rgb(ITERM2_SELECTION_FG),
+        }
     }
 
     pub fn get(&self, index: usize) -> Rgb {

@@ -26,6 +26,7 @@ alacritty_terminal = "0.26"
 cosmic-text = "0.19"
 etagere = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

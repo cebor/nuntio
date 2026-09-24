@@ -3,7 +3,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nuntio_term::{Shell, SpawnOptions, TermEvent, TermHandle, TermSize};
+use nuntio_term::{GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermSize};
 
 const SIZE: TermSize = TermSize {
     columns: 40,
@@ -82,4 +82,42 @@ fn title_is_reported() {
         events.contains(&TermEvent::Title("my title".into())),
         "{events:?}"
     );
+}
+
+fn at(column: usize, line: usize) -> GridPoint {
+    GridPoint {
+        column,
+        line,
+        right_half: false,
+    }
+}
+
+#[test]
+fn selection_kinds() {
+    let (handle, rx) = spawn("printf 'hello world\\r\\nsecond line'");
+    wait_for_exit(&rx);
+
+    handle.start_selection(SelectionKind::Semantic, at(7, 0));
+    assert_eq!(handle.selection_text().as_deref(), Some("world"));
+
+    handle.start_selection(SelectionKind::Lines, at(2, 1));
+    assert_eq!(handle.selection_text().as_deref(), Some("second line\n"));
+
+    handle.start_selection(SelectionKind::Simple, at(0, 0));
+    handle.update_selection(GridPoint {
+        right_half: true,
+        ..at(4, 0)
+    });
+    assert_eq!(handle.selection_text().as_deref(), Some("hello"));
+    assert_eq!(
+        handle.snapshot().cell(0, 0).bg,
+        handle.snapshot().cell(4, 0).bg
+    );
+    assert_ne!(
+        handle.snapshot().cell(0, 0).bg,
+        handle.snapshot().cell(6, 0).bg
+    );
+
+    handle.clear_selection();
+    assert_eq!(handle.selection_text(), None);
 }
