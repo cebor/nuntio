@@ -1,6 +1,7 @@
 mod actions;
 mod app;
 mod event;
+mod ime;
 mod input;
 mod mouse;
 

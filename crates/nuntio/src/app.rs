@@ -1,15 +1,18 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use nuntio_config::{Config, OptionAsMeta};
 use nuntio_render::{CellMetrics, FrameStatus, Renderer, Viewport};
 use nuntio_term::{
-    GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode, TermSize,
+    CursorStyle, GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
+    TermSize,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{
+    ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::ModifiersKeyState;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
@@ -17,14 +20,15 @@ use winit::window::{Window, WindowId};
 
 use crate::actions::{Action, Bindings};
 use crate::event::{PaneId, UserEvent};
-use crate::input;
 use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
+use crate::{ime, input};
 
 const DEFAULT_TITLE: &str = "nuntio";
 const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
 /// Lines scrolled per wheel notch.
 const WHEEL_LINES: f64 = 3.0;
+const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
 /// WSLg's Weston (9.0, RDP backend) segfaults on pointer motion over windows
 /// with winit's client-side decorations, taking every Wayland client down with
@@ -69,6 +73,27 @@ struct WindowState {
     grid: TermSize,
     modifiers: Modifiers,
     mouse: MouseState,
+    focused: bool,
+    /// Uncommitted IME text, shown at the cursor.
+    preedit: Option<String>,
+    blink: Blink,
+    /// Cell the IME candidate window was last anchored to.
+    ime_cell: Option<(usize, usize)>,
+}
+
+/// Cursor blinking, only while the application asks for it (DECSCUSR).
+struct Blink {
+    active: bool,
+    visible: bool,
+    next_toggle: Instant,
+}
+
+impl Blink {
+    /// Show the cursor and restart the interval, e.g. after typing.
+    fn reset(&mut self) {
+        self.visible = true;
+        self.next_toggle = Instant::now() + BLINK_INTERVAL;
+    }
 }
 
 impl WindowState {
@@ -87,9 +112,47 @@ impl WindowState {
     }
 
     fn redraw(&mut self, config: &Config) -> FrameStatus {
-        let snapshot = self.term.snapshot();
+        let mut snapshot = self.term.snapshot();
+        if let Some(preedit) = &self.preedit {
+            ime::overlay_preedit(&mut snapshot, preedit);
+        }
+
+        let blinking =
+            self.focused && self.preedit.is_none() && snapshot.cursor.is_some_and(|c| c.blinking);
+        if blinking != self.blink.active {
+            self.blink.active = blinking;
+            self.blink.reset();
+        }
+
+        if let Some(cursor) = snapshot.cursor.as_mut() {
+            self.update_ime_area(config, cursor.column, cursor.line);
+            if !self.focused {
+                cursor.style = CursorStyle::HollowBlock;
+            }
+        }
+        if self.blink.active && !self.blink.visible {
+            snapshot.cursor = None;
+        }
+
         let (x, y) = self.padding(config);
         self.renderer.render(&snapshot, Viewport { x, y })
+    }
+
+    /// Keep the IME candidate window next to the cursor.
+    fn update_ime_area(&mut self, config: &Config, column: usize, line: usize) {
+        if self.ime_cell == Some((column, line)) {
+            return;
+        }
+        self.ime_cell = Some((column, line));
+        let (pad_x, pad_y) = self.padding(config);
+        let cell = self.renderer.cell_metrics();
+        self.window.set_ime_cursor_area(
+            PhysicalPosition::new(
+                pad_x + column as u32 * cell.width,
+                pad_y + line as u32 * cell.height,
+            ),
+            PhysicalSize::new(cell.width, cell.height),
+        );
     }
 
     /// Grid cell under a window position, clamped to the grid.
@@ -253,6 +316,14 @@ impl App {
             grid,
             modifiers: Modifiers::default(),
             mouse: MouseState::default(),
+            focused: true,
+            preedit: None,
+            blink: Blink {
+                active: false,
+                visible: true,
+                next_toggle: Instant::now(),
+            },
+            ime_cell: None,
         })
     }
 
@@ -350,6 +421,9 @@ impl App {
         if let Some(bytes) = input::encode_key(&key_input, state.term.mode()) {
             state.term.clear_selection();
             state.term.write(bytes);
+            if let Some(state) = self.state.as_mut() {
+                state.blink.reset();
+            }
         }
     }
 
@@ -481,6 +555,22 @@ impl App {
 }
 
 impl ApplicationHandler<UserEvent> for App {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if !state.blink.active {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+        if Instant::now() >= state.blink.next_toggle {
+            state.blink.visible = !state.blink.visible;
+            state.blink.next_toggle = Instant::now() + BLINK_INTERVAL;
+            state.window.request_redraw();
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(state.blink.next_toggle));
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Only render on demand; no redraw loop while idle.
         event_loop.set_control_flow(ControlFlow::Wait);
@@ -528,6 +618,8 @@ impl ApplicationHandler<UserEvent> for App {
                 state.window.request_redraw();
             }
             WindowEvent::Focused(focused) => {
+                state.focused = focused;
+                state.window.request_redraw();
                 if state.term.mode().contains(TermMode::FOCUS_IN_OUT) {
                     state.term.write(if focused {
                         &b"\x1b[I"[..]
@@ -538,7 +630,12 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ModifiersChanged(mods) => state.modifiers = mods,
             WindowEvent::KeyboardInput { event, .. } => self.keyboard_input(event),
-            WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
+            WindowEvent::Ime(Ime::Preedit(text, _)) => {
+                state.preedit = (!text.is_empty()).then_some(text);
+                state.window.request_redraw();
+            }
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                state.preedit = None;
                 state.term.write(text.into_bytes());
             }
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),

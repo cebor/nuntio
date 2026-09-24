@@ -1150,6 +1150,7 @@ dependencies = [
  "nuntio-term",
  "tracing",
  "tracing-subscriber",
+ "unicode-width",
  "winit",
 ]
 

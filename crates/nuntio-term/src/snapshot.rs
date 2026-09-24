@@ -51,6 +51,8 @@ pub struct SnapshotCursor {
     pub color: Rgb,
     /// Cursor sits on a double-width glyph.
     pub wide: bool,
+    /// The application asked for a blinking cursor (DECSCUSR).
+    pub blinking: bool,
 }
 
 /// A copy of the visible screen, taken while briefly holding the term lock,
@@ -147,6 +149,7 @@ impl Snapshot {
                     style,
                     color: palette.resolve(Color::Named(NamedColor::Cursor), overrides),
                     wide: cells[line * columns + column].style.wide,
+                    blinking: term.cursor_style().blinking,
                 }
             });
 

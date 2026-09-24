@@ -14,6 +14,7 @@ tracing-subscriber.workspace = true
 winit.workspace = true
 lexopt.workspace = true
 arboard.workspace = true
+unicode-width.workspace = true
 
 [lints]
 workspace = true
