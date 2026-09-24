@@ -37,6 +37,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Find bar** with incremental search and a regex mode (<kbd>Alt</kbd>+<kbd>R</kbd>).
 - **Clickable URLs**: hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on macOS) and click.
 - **Themes**: five built in, your own as TOML or iTerm2 `.itermcolors`, and a light/dark pair that follows the OS appearance.
+- **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.
 - **Hot reload**: saving the config applies it right away. Mistakes show up as a banner in the window, and the previous settings stay active.
 - **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.

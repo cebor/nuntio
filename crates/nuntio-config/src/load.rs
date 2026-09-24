@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::Config;
+use crate::{Config, Shell};
 
 /// `$XDG_CONFIG_HOME/nuntio`, else `~/.config/nuntio` — on every platform,
 /// so dotfiles work the same on Linux, macOS and Windows.
@@ -107,10 +107,30 @@ impl Config {
                 self.scrollback
             ));
         }
-        if let Some(shell) = &self.shell
-            && shell.program.trim().is_empty()
-        {
-            return Err("`shell.program` must not be empty".into());
+        if let Some(shell) = &self.shell {
+            shell.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl Shell {
+    fn validate(&self) -> Result<(), String> {
+        let not_empty = |name: &str, value: &Option<String>| match value {
+            Some(v) if v.trim().is_empty() => Err(format!("`{name}` must not be empty")),
+            _ => Ok(()),
+        };
+        not_empty("shell.program", &self.program)?;
+        not_empty("shell.wsl", &self.wsl)?;
+        not_empty("shell.wsl_user", &self.wsl_user)?;
+        if self.program.is_none() && self.wsl.is_none() {
+            return Err("`shell` needs `program` or `wsl`".into());
+        }
+        if self.wsl_user.is_some() && self.wsl.is_none() {
+            return Err("`shell.wsl_user` needs `shell.wsl`".into());
+        }
+        if !self.args.is_empty() && self.program.is_none() {
+            return Err("`shell.args` needs `shell.program`".into());
         }
         Ok(())
     }
@@ -158,6 +178,27 @@ mod tests {
         assert!(err.contains("window.opacity"), "{err}");
         let err = parse("shell = { program = \"\" }").unwrap_err();
         assert!(err.contains("shell.program"), "{err}");
+    }
+
+    #[test]
+    fn invalid_shells_are_errors() {
+        for (source, expected) in [
+            ("shell = {}", "`shell` needs"),
+            ("shell = { wsl = \" \" }", "`shell.wsl` must not be empty"),
+            (
+                "shell = { program = \"sh\", wsl_user = \"root\" }",
+                "shell.wsl_user",
+            ),
+            (
+                "shell = { wsl = \"Ubuntu\", args = [\"-l\"] }",
+                "shell.args",
+            ),
+        ] {
+            let err = parse(source).unwrap_err();
+            assert!(err.contains(expected), "{source}: {err}");
+        }
+        assert!(parse("shell = { wsl = \"Ubuntu\", wsl_user = \"root\" }").is_ok());
+        assert!(parse("shell = { wsl = \"Ubuntu\", program = \"fish\" }").is_ok());
     }
 
     #[test]

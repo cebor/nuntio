@@ -40,6 +40,8 @@ This file lists every option with its default value:
 # Program to run in new panes. Default: $SHELL on Linux and macOS
 # (falling back to sh), PowerShell on Windows.
 # shell = { program = "/bin/zsh", args = ["-l"] }
+# On Windows, start in a WSL distribution instead:
+# shell = { wsl = "Ubuntu" }
 
 # Lines of history per pane.
 scrollback = 10000
@@ -85,7 +87,7 @@ option_as_meta = "none"
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `shell` | table | platform shell | `program` (string, required) and `args` (list of strings). `program` must not be empty. |
+| `shell` | table | platform shell | `program` (string) and `args` (list of strings), or `wsl` to start in a WSL distribution. See [Shell](#shell). |
 | `scrollback` | integer | `10000` | Lines of history per pane, at most `1000000`. |
 | `theme` | string or table | `"iTerm2 Default"` | A theme name, or `{ light = "…", dark = "…" }` to follow the OS appearance. See [Themes](#themes). |
 
@@ -128,6 +130,34 @@ option_as_meta = "none"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `option_as_meta` | string | `"none"` | Which Option keys act as Meta (sending `Esc` + key) instead of typing special characters: `"none"`, `"left"`, `"right"` or `"both"`. |
+
+### Shell
+
+| Key | Type | Description |
+|---|---|---|
+| `program` | string | Program to run. With `wsl`, it runs inside the distribution instead of your login shell. |
+| `args` | list of strings | Arguments for `program`. |
+| `wsl` | string | Windows: name of the WSL distribution to start in, as listed by `wsl -l -v`. |
+| `wsl_user` | string | User in the WSL distribution. Default: the distribution's default user. |
+
+Either `program` or `wsl` is required. Without `shell`, nuntio runs `$SHELL` on Linux and macOS (falling back to `sh`) and PowerShell on Windows.
+
+#### WSL
+
+On Windows, `wsl` opens every new tab and pane directly in a WSL distribution, like WezTerm's `default_domain = "WSL:Ubuntu"`:
+
+```toml
+# Your login shell in Ubuntu
+shell = { wsl = "Ubuntu" }
+
+# As another user
+shell = { wsl = "Ubuntu", wsl_user = "root" }
+
+# A specific program instead of the login shell
+shell = { wsl = "Ubuntu", program = "fish", args = ["-l"] }
+```
+
+New tabs and panes start in your Linux home directory (`~`). nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM` and `TERM_PROGRAM_VERSION` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept.
 
 ## Themes
 

@@ -365,10 +365,13 @@ impl App {
         let id = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
         let proxy = self.proxy.clone();
+        let shell = self.config.shell.as_ref();
+        // `wsl.exe --cd ~` picks the directory; a Windows one would be ignored.
+        let cwd = cwd.filter(|_| !shell.is_some_and(|s| s.is_wsl()));
         let options = SpawnOptions {
-            shell: self.config.shell.as_ref().map(|s| Shell {
-                program: s.program.clone(),
-                args: s.args.clone(),
+            shell: shell.map(|s| {
+                let (program, args) = s.command();
+                Shell { program, args }
             }),
             working_directory: cwd,
             scrollback: self.config.scrollback,

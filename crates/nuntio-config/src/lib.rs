@@ -50,11 +50,41 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default)]
 pub struct Shell {
-    pub program: String,
-    #[serde(default)]
+    /// With `wsl`, the program to run inside the distro instead of the
+    /// user's login shell.
+    pub program: Option<String>,
     pub args: Vec<String>,
+    /// WSL distribution to start the shell in (Windows).
+    pub wsl: Option<String>,
+    /// User in the WSL distribution; the distro's default user if unset.
+    pub wsl_user: Option<String>,
+}
+
+impl Shell {
+    /// Program and arguments to spawn.
+    pub fn command(&self) -> (String, Vec<String>) {
+        let Some(distro) = &self.wsl else {
+            let program = self.program.clone().unwrap_or_default();
+            return (program, self.args.clone());
+        };
+        let mut args = vec!["-d".to_owned(), distro.clone()];
+        if let Some(user) = &self.wsl_user {
+            args.extend(["-u".to_owned(), user.clone()]);
+        }
+        args.extend(["--cd".to_owned(), "~".to_owned()]);
+        if let Some(program) = &self.program {
+            args.extend(["--exec".to_owned(), program.clone()]);
+            args.extend(self.args.iter().cloned());
+        }
+        ("wsl.exe".to_owned(), args)
+    }
+
+    pub fn is_wsl(&self) -> bool {
+        self.wsl.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -239,7 +269,9 @@ action = "split_horizontal"
         )
         .unwrap();
 
-        assert_eq!(cfg.shell.unwrap().args, ["-l"]);
+        let shell = cfg.shell.unwrap();
+        assert_eq!(shell.program.as_deref(), Some("/bin/zsh"));
+        assert_eq!(shell.args, ["-l"]);
         assert_eq!(cfg.font.family.as_deref(), Some("JetBrains Mono"));
         assert_eq!(cfg.window.macos_titlebar, MacosTitlebar::Transparent);
         assert_eq!(
@@ -251,6 +283,37 @@ action = "split_horizontal"
         );
         assert_eq!(cfg.macos.option_as_meta, OptionAsMeta::Left);
         assert_eq!(cfg.keybindings.len(), 1);
+    }
+
+    fn shell(toml: &str) -> Shell {
+        Config::from_toml(toml).unwrap().shell.unwrap()
+    }
+
+    #[test]
+    fn shell_command() {
+        assert_eq!(
+            shell(r#"shell = { program = "fish", args = ["-l"] }"#).command(),
+            ("fish".to_owned(), vec!["-l".to_owned()])
+        );
+        assert_eq!(
+            shell(r#"shell = { wsl = "Ubuntu" }"#).command(),
+            (
+                "wsl.exe".to_owned(),
+                ["-d", "Ubuntu", "--cd", "~"].map(String::from).to_vec()
+            )
+        );
+        assert_eq!(
+            shell(r#"shell = { wsl = "Ubuntu", wsl_user = "root" }"#)
+                .command()
+                .1,
+            ["-d", "Ubuntu", "-u", "root", "--cd", "~"]
+        );
+        assert_eq!(
+            shell(r#"shell = { wsl = "Debian", program = "fish", args = ["-l"] }"#)
+                .command()
+                .1,
+            ["-d", "Debian", "--cd", "~", "--exec", "fish", "-l"]
+        );
     }
 
     #[test]

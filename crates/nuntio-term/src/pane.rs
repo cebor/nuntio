@@ -194,19 +194,26 @@ impl TermHandle {
             .as_ref()
             .map(|s| s.program.clone())
             .unwrap_or_else(default_shell_name);
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut env = HashMap::from([
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+            ("TERM_PROGRAM".into(), "nuntio".into()),
+            (
+                "TERM_PROGRAM_VERSION".into(),
+                env!("CARGO_PKG_VERSION").into(),
+            ),
+        ]);
+        #[cfg(windows)]
+        env.insert(
+            "WSLENV".into(),
+            wslenv(std::env::var("WSLENV").ok().as_deref()),
+        );
         let pty_options = tty::Options {
             shell: options.shell.map(|s| tty::Shell::new(s.program, s.args)),
             working_directory: options.working_directory,
             drain_on_exit: true,
-            env: HashMap::from([
-                ("TERM".into(), "xterm-256color".into()),
-                ("COLORTERM".into(), "truecolor".into()),
-                ("TERM_PROGRAM".into(), "nuntio".into()),
-                (
-                    "TERM_PROGRAM_VERSION".into(),
-                    env!("CARGO_PKG_VERSION").into(),
-                ),
-            ]),
+            env,
             #[cfg(target_os = "windows")]
             escape_args: true,
         };
@@ -422,6 +429,24 @@ fn default_shell_name() -> String {
     }
 }
 
+/// `WSLENV` that also passes our terminal variables into WSL, keeping
+/// entries the user already has.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn wslenv(existing: Option<&str>) -> String {
+    let mut entries: Vec<&str> = existing
+        .unwrap_or_default()
+        .split(':')
+        .filter(|e| !e.is_empty())
+        .collect();
+    for var in ["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"] {
+        // Entries may carry flags, like `TERM/u`.
+        if !entries.iter().any(|e| e.split('/').next() == Some(var)) {
+            entries.push(var);
+        }
+    }
+    entries.join(":")
+}
+
 /// Paste payload: with bracketed paste the text is wrapped in markers (and any
 /// embedded end marker removed so it cannot break out); without it, newlines
 /// become carriage returns like a typed Enter.
@@ -439,6 +464,18 @@ mod tests {
     use alacritty_terminal::index::Line;
 
     use super::*;
+
+    #[test]
+    fn wslenv_keeps_user_entries() {
+        let all = "TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION";
+        assert_eq!(wslenv(None), all);
+        assert_eq!(wslenv(Some("")), all);
+        assert_eq!(wslenv(Some("GOPATH/l")), format!("GOPATH/l:{all}"));
+        assert_eq!(
+            wslenv(Some("TERM/u:FOO")),
+            "TERM/u:FOO:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION"
+        );
+    }
 
     #[test]
     fn paste_without_brackets_uses_carriage_returns() {
