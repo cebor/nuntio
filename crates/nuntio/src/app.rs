@@ -59,7 +59,7 @@ fn is_wslg_wayland(event_loop: &ActiveEventLoop) -> bool {
     wslg && wayland
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn is_wslg_wayland(_event_loop: &ActiveEventLoop) -> bool {
     false
 }

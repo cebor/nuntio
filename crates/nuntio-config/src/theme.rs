@@ -248,7 +248,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let dracula = include_str!("../themes/dracula.toml").replace("#282a36", "#000001");
         std::fs::write(dir.join("dracula.toml"), dracula).unwrap();
-        let mine = include_str!("../themes/dracula.toml").replace("name = \"Dracula\"\n", "");
+        // Without a name line (whatever the line endings of the checkout).
+        let mine: String = include_str!("../themes/dracula.toml")
+            .lines()
+            .filter(|line| !line.starts_with("name"))
+            .map(|line| format!("{line}\n"))
+            .collect();
         std::fs::write(dir.join("Mine.toml"), mine).unwrap();
         std::fs::write(dir.join("broken.toml"), "foreground = 1").unwrap();
 

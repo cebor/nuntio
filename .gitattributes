@@ -1,0 +1,7 @@
+# LF everywhere, so files embedded with include_str! are identical on all
+# platforms.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary
