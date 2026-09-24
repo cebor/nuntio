@@ -101,6 +101,9 @@ impl Snapshot {
         let mut cells = vec![blank; columns * lines];
         let offset = content.display_offset as i32;
         let selection = content.selection;
+        // Matches are in grid order and don't overlap, like the cells below,
+        // so one index walks along with the cells.
+        let mut next_match = 0;
 
         for indexed in content.display_iter {
             let cell = indexed.cell;
@@ -120,8 +123,19 @@ impl Snapshot {
             }
             if current.is_some_and(|m| m.contains(&indexed.point)) {
                 (fg, bg) = (BLACK, palette.search_current);
-            } else if matches.iter().any(|m| m.contains(&indexed.point)) {
-                (fg, bg) = (BLACK, palette.search_match);
+            } else {
+                while matches
+                    .get(next_match)
+                    .is_some_and(|m| *m.end() < indexed.point)
+                {
+                    next_match += 1;
+                }
+                if matches
+                    .get(next_match)
+                    .is_some_and(|m| m.contains(&indexed.point))
+                {
+                    (fg, bg) = (BLACK, palette.search_match);
+                }
             }
             let hidden = flags.contains(Flags::HIDDEN)
                 || flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);

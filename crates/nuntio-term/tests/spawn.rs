@@ -260,3 +260,22 @@ fn osc8_links_with_unknown_schemes_are_ignored() {
     assert_eq!(line_text(&handle, 0), "click");
     assert_eq!(handle.link_at(at(2, 0)), None);
 }
+
+#[test]
+fn every_visible_match_is_highlighted() {
+    let (handle, rx) = spawn("printf 'ab ab\\r\\nx ab'");
+    wait_for_exit(&rx);
+    let mut search = nuntio_term::Search::new("ab", false).unwrap();
+    let snapshot = handle.search_snapshot(&mut search);
+
+    let marked = |line: usize| -> String {
+        (0..5)
+            .map(|c| {
+                let bg = snapshot.cell(c, line).bg;
+                if bg == snapshot.background { '.' } else { '#' }
+            })
+            .collect()
+    };
+    assert_eq!(marked(0), "##.##");
+    assert_eq!(marked(1), "..##.");
+}
