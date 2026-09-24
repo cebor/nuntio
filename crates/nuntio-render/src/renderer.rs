@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::rc::Rc;
 
 use bytemuck::{Pod, Zeroable};
 use nuntio_term::{CursorStyle, Rgb, Snapshot, SnapshotCell};
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::atlas::{ATLAS_SIZE, Atlas, AtlasRegion};
+use crate::box_drawing;
 use crate::font::{CellMetrics, FaceStyle, Fonts};
 use crate::gpu::{FrameStatus, GpuContext, GpuError};
 
@@ -84,7 +86,7 @@ pub struct Renderer {
     fonts: Fonts,
     mask_atlas: Atlas,
     color_atlas: Atlas,
-    glyphs: HashMap<GlyphKey, Box<[Sprite]>>,
+    glyphs: HashMap<GlyphKey, Rc<[Sprite]>>,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniforms: wgpu::Buffer,
@@ -416,7 +418,7 @@ impl Renderer {
     }
 
     /// Look up or rasterize the glyphs for a cell.
-    fn sprites(&mut self, cell: &SnapshotCell) -> Result<Box<[Sprite]>, AtlasFull> {
+    fn sprites(&mut self, cell: &SnapshotCell) -> Result<Rc<[Sprite]>, AtlasFull> {
         let style = FaceStyle {
             bold: cell.style.bold,
             italic: cell.style.italic,
@@ -438,10 +440,34 @@ impl Renderer {
             GlyphKey::Char(c, _) => c.to_string(),
             GlyphKey::Cluster(s, _) => s.to_string(),
         };
-        let baseline = self.fonts.metrics().baseline as i32;
+        let metrics = self.fonts.metrics();
         let queue = &self.gpu.queue;
         let mut sprites = Vec::new();
-        for glyph in self.fonts.rasterize(&text, style) {
+
+        // Box-drawing and block characters are drawn to fill the cell exactly.
+        if let GlyphKey::Char(c, _) = key
+            && let Some(mask) =
+                box_drawing::rasterize(c, metrics.width, metrics.height, metrics.stroke)
+        {
+            let region = self
+                .mask_atlas
+                .insert(queue, metrics.width, metrics.height, &mask)
+                .ok_or(AtlasFull)?;
+            sprites.push(Sprite {
+                x: 0,
+                y: 0,
+                region,
+                color: false,
+            });
+        }
+
+        let baseline = metrics.baseline as i32;
+        let glyphs = if sprites.is_empty() {
+            self.fonts.rasterize(&text, style)
+        } else {
+            Vec::new()
+        };
+        for glyph in glyphs {
             let atlas = if glyph.color {
                 &mut self.color_atlas
             } else {
@@ -457,7 +483,7 @@ impl Renderer {
                 color: glyph.color,
             });
         }
-        let sprites: Box<[Sprite]> = sprites.into();
+        let sprites: Rc<[Sprite]> = sprites.into();
         self.glyphs.insert(key, sprites.clone());
         Ok(sprites)
     }
