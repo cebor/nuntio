@@ -2,16 +2,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use nuntio_config::Config;
+use nuntio_config::{Config, OptionAsMeta};
 use nuntio_render::{CellMetrics, FrameStatus, Renderer, Viewport};
 use nuntio_term::{
     GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode, TermSize,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::keyboard::ModifiersState;
+use winit::keyboard::ModifiersKeyState;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{Window, WindowId};
 
@@ -67,7 +67,7 @@ struct WindowState {
     renderer: Renderer,
     term: TermHandle,
     grid: TermSize,
-    modifiers: ModifiersState,
+    modifiers: Modifiers,
     mouse: MouseState,
 }
 
@@ -110,16 +110,16 @@ impl WindowState {
 
     fn mouse_mods(&self) -> MouseMods {
         MouseMods {
-            shift: self.modifiers.shift_key(),
-            alt: self.modifiers.alt_key(),
-            ctrl: self.modifiers.control_key(),
+            shift: self.modifiers.state().shift_key(),
+            alt: self.modifiers.state().alt_key(),
+            ctrl: self.modifiers.state().control_key(),
         }
     }
 
     /// Mouse events go to the application unless Shift is held, which
     /// forces local selection like in xterm.
     fn reports_mouse(&self, mode: TermMode) -> bool {
-        mouse::reporting_enabled(mode) && !self.modifiers.shift_key()
+        mouse::reporting_enabled(mode) && !self.modifiers.state().shift_key()
     }
 
     fn report(&mut self, button: Option<Button>, action: MouseAction, point: GridPoint) {
@@ -130,6 +130,22 @@ impl WindowState {
         {
             self.term.write(bytes);
         }
+    }
+}
+
+/// Whether Alt should act as Meta (ESC prefix). On macOS Option composes
+/// characters unless Option-as-Meta is enabled for the pressed side.
+fn alt_is_meta(mods: &Modifiers, option_as_meta: OptionAsMeta) -> bool {
+    if !cfg!(target_os = "macos") {
+        return mods.state().alt_key();
+    }
+    let left = mods.lalt_state() == ModifiersKeyState::Pressed;
+    let right = mods.ralt_state() == ModifiersKeyState::Pressed;
+    match option_as_meta {
+        OptionAsMeta::None => false,
+        OptionAsMeta::Left => left,
+        OptionAsMeta::Right => right,
+        OptionAsMeta::Both => left || right,
     }
 }
 
@@ -235,7 +251,7 @@ impl App {
             renderer,
             term,
             grid,
-            modifiers: ModifiersState::empty(),
+            modifiers: Modifiers::default(),
             mouse: MouseState::default(),
         })
     }
@@ -312,12 +328,26 @@ impl App {
         if event.state != ElementState::Pressed {
             return;
         }
-        let key = event.key_without_modifiers();
-        if let Some(action) = self.bindings.lookup(&key, state.modifiers) {
+        let mods = state.modifiers.state();
+        let unmodified = event.key_without_modifiers();
+        if let Some(action) = self.bindings.lookup(&unmodified, mods) {
             self.run_action(action);
             return;
         }
-        if let Some(bytes) = input::encode_key(&event, state.modifiers, state.term.mode()) {
+        // Unbound Cmd/Super combinations are shortcuts, not text.
+        if mods.super_key() {
+            return;
+        }
+        let key_input = input::KeyInput {
+            key: &event.logical_key,
+            unmodified: &unmodified,
+            text: event.text.as_deref(),
+            location: event.location,
+            shift: mods.shift_key(),
+            ctrl: mods.control_key(),
+            meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
+        };
+        if let Some(bytes) = input::encode_key(&key_input, state.term.mode()) {
             state.term.clear_selection();
             state.term.write(bytes);
         }
@@ -362,7 +392,7 @@ impl App {
             {
                 2 => SelectionKind::Semantic,
                 3 => SelectionKind::Lines,
-                _ if state.modifiers.alt_key() => SelectionKind::Block,
+                _ if state.modifiers.state().alt_key() => SelectionKind::Block,
                 _ => SelectionKind::Simple,
             };
             state.term.start_selection(kind, point);
@@ -506,7 +536,7 @@ impl ApplicationHandler<UserEvent> for App {
                     });
                 }
             }
-            WindowEvent::ModifiersChanged(mods) => state.modifiers = mods.state(),
+            WindowEvent::ModifiersChanged(mods) => state.modifiers = mods,
             WindowEvent::KeyboardInput { event, .. } => self.keyboard_input(event),
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
                 state.term.write(text.into_bytes());
