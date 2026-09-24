@@ -16,7 +16,9 @@ use thiserror::Error;
 
 use crate::palette::Palette;
 use crate::process;
+use crate::search::{self, Search};
 use crate::snapshot::Snapshot;
+use crate::url::{self, Link};
 
 #[derive(Debug, Error)]
 pub enum SpawnError {
@@ -330,7 +332,33 @@ impl TermHandle {
             .store(false, Ordering::Release);
         let term = self.term.lock();
         let palette = self.listener.inner.palette.read().unwrap();
-        Snapshot::capture(&term, &palette)
+        Snapshot::capture(&term, &palette, &[], None)
+    }
+
+    /// Like [`snapshot`](Self::snapshot), with the matches of `search`
+    /// highlighted.
+    pub fn search_snapshot(&self, search: &mut Search) -> Snapshot {
+        self.listener
+            .inner
+            .wakeup_pending
+            .store(false, Ordering::Release);
+        let term = self.term.lock();
+        let matches = search::visible_matches(&term, search);
+        let palette = self.listener.inner.palette.read().unwrap();
+        Snapshot::capture(&term, &palette, &matches, search.current())
+    }
+
+    /// Select the next match upwards (older output) or downwards and scroll
+    /// to it. Returns whether there is a match.
+    pub fn search(&self, search: &mut Search, up: bool) -> bool {
+        search::find(&mut self.term.lock(), search, up)
+    }
+
+    /// The link (OSC 8 hyperlink or URL) at a viewport position.
+    pub fn link_at(&self, point: GridPoint) -> Option<Link> {
+        let term = self.term.lock();
+        let (point, _) = point.to_grid(term.grid().display_offset());
+        url::link_at(&term, point)
     }
 }
 

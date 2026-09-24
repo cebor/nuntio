@@ -32,6 +32,8 @@ pub enum Action {
     FocusPane(Direction),
     ResizePane(Direction),
     ZoomPane,
+    /// Open the find bar.
+    Search,
 }
 
 impl Action {
@@ -59,6 +61,7 @@ impl Action {
             "split_vertical" => SplitVertical,
             "split_horizontal" => SplitHorizontal,
             "zoom_pane" => ZoomPane,
+            "search" => Search,
             "focus_pane_left" => FocusPane(Direction::Left),
             "focus_pane_right" => FocusPane(Direction::Right),
             "focus_pane_up" => FocusPane(Direction::Up),
@@ -142,6 +145,7 @@ impl Bindings {
             named(NamedKey::ArrowDown, cmd_shift, ScrollLineDown),
             char('t', cmd_shift, NewTab),
             char('w', cmd_shift, ClosePane),
+            char('f', cmd_shift, Search),
             char(',', cmd_shift | shift, ReloadConfig),
         ];
         let (focus_mods, resize_mods) = if cfg!(target_os = "macos") {

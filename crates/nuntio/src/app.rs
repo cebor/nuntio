@@ -16,7 +16,7 @@ use winit::event::{
     ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::keyboard::ModifiersKeyState;
+use winit::keyboard::{Key, ModifiersKeyState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{
     CursorIcon, ResizeDirection, Theme as WindowTheme, Window, WindowAttributes, WindowId,
@@ -28,6 +28,7 @@ use crate::event::{PaneId, UserEvent};
 use crate::input;
 use crate::mouse::{Button, MouseAction};
 use crate::pane_tree::{Axis, Direction, PaneTree};
+use crate::search_bar::SearchBar;
 use crate::tab_bar::BarHit;
 use crate::window::{
     BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent, TabDrag, WindowState,
@@ -580,9 +581,16 @@ impl App {
             Action::Copy => self.copy_selection(),
             Action::Paste => {
                 if let Some(text) = self.clipboard_text()
-                    && let Some(state) = self.state.as_ref()
+                    && let Some(state) = self.state.as_mut()
                 {
-                    state.term().paste(&text);
+                    match state.search.as_mut() {
+                        // Pasting into the find bar extends the query.
+                        Some(bar) => {
+                            bar.query.push_str(text.lines().next().unwrap_or(""));
+                            bar.update(&state.tabs.active().content.focused_pane().term);
+                        }
+                        None => state.term().paste(&text),
+                    }
                 }
             }
             Action::ScrollPageUp => state.term().scroll_page(true),
@@ -622,6 +630,11 @@ impl App {
                 }
             }
             Action::ResizePane(direction) => self.resize_pane(direction),
+            Action::Search => {
+                if state.search.is_none() {
+                    state.search = Some(SearchBar::new());
+                }
+            }
             Action::ZoomPane => {
                 let content = state.content_mut();
                 let focused = content.focused;
@@ -642,6 +655,12 @@ impl App {
             return;
         }
         let mods = state.modifiers.state();
+        if state.search.is_some() && self.search_key(&event) {
+            return;
+        }
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
         let unmodified = event.key_without_modifiers();
         if let Some(action) = self.bindings.lookup(&unmodified, mods) {
             self.run_action(action);
@@ -666,6 +685,67 @@ impl App {
             if let Some(state) = self.state.as_mut() {
                 state.blink.reset();
             }
+        }
+    }
+
+    /// Keys for the open find bar. Returns whether the key was used;
+    /// shortcuts not handled here still work while searching.
+    fn search_key(&mut self, event: &KeyEvent) -> bool {
+        let Some(state) = self.state.as_mut() else {
+            return false;
+        };
+        let mods = state.modifiers.state();
+        let term = &state.tabs.active().content.focused_pane().term;
+        let Some(bar) = state.search.as_mut() else {
+            return false;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => state.search = None,
+            Key::Named(NamedKey::Enter) => bar.next(term, !mods.shift_key()),
+            Key::Named(NamedKey::Backspace) => {
+                bar.query.pop();
+                bar.update(term);
+            }
+            // Alt+R toggles regex mode, like in many editors.
+            Key::Character(c) if mods.alt_key() && c.eq_ignore_ascii_case("r") => {
+                bar.regex = !bar.regex;
+                bar.update(term);
+            }
+            _ => {
+                let text = event.text.as_deref().unwrap_or("");
+                let typed = !text.is_empty() && !text.chars().any(char::is_control);
+                if !typed || mods.control_key() || mods.super_key() || mods.alt_key() {
+                    return false;
+                }
+                bar.query.push_str(text);
+                bar.update(term);
+            }
+        }
+        state.window.request_redraw();
+        true
+    }
+
+    /// The link under the pointer, if the link modifier (Ctrl, Cmd on
+    /// macOS) is held.
+    fn update_hover_link(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let mods = state.modifiers.state();
+        let held = if cfg!(target_os = "macos") {
+            mods.super_key()
+        } else {
+            mods.control_key()
+        };
+        let link = state.mouse.position.filter(|_| held).and_then(|pos| {
+            let id = state.pane_at(&self.config, pos)?;
+            let point = state.cell_in(&self.config, id, pos);
+            let link = state.content().pane(id)?.term.link_at(point)?;
+            Some((id, link))
+        });
+        if link != state.mouse.hover_link {
+            state.mouse.hover_link = link;
+            state.window.request_redraw();
         }
     }
 
@@ -755,6 +835,22 @@ impl App {
             return;
         }
 
+        if pressed && state.search_bar_contains(&self.config, pos) {
+            return;
+        }
+        if pressed
+            && button == Button::Left
+            && let Some((_, link)) = &state.mouse.hover_link
+        {
+            let url = link.url.clone();
+            if let Err(err) = open::that_detached(&url) {
+                self.notify(
+                    Severity::Warning,
+                    vec![format!("failed to open {url}: {err}")],
+                );
+            }
+            return;
+        }
         if pressed {
             if button == Button::Left
                 && let Some(divider) = state.divider_at(&self.config, pos)
@@ -812,6 +908,11 @@ impl App {
             return;
         };
         state.mouse.position = Some(pos);
+        self.update_hover_link();
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let over_link = state.mouse.hover_link.is_some();
 
         if let Some(divider) = &state.mouse.divider_drag {
             let at = match divider.axis {
@@ -837,9 +938,13 @@ impl App {
         let bar = state.tab_bar(&self.config);
         let bar_hit = bar.as_ref().and_then(|b| b.hit(pos.x as f32, pos.y as f32));
         let in_terminal = bar_hit.is_none() && icon == CursorIcon::Default;
-        state
-            .window
-            .set_cursor(if in_terminal { CursorIcon::Text } else { icon });
+        state.window.set_cursor(if over_link {
+            CursorIcon::Pointer
+        } else if in_terminal {
+            CursorIcon::Text
+        } else {
+            icon
+        });
 
         if bar_hit != state.mouse.hovered_bar {
             state.mouse.hovered_bar = bar_hit;
@@ -1073,7 +1178,10 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 state.window.request_redraw();
             }
-            WindowEvent::ModifiersChanged(mods) => state.modifiers = mods,
+            WindowEvent::ModifiersChanged(mods) => {
+                state.modifiers = mods;
+                self.update_hover_link();
+            }
             WindowEvent::KeyboardInput { event, .. } => self.keyboard_input(event),
             WindowEvent::Ime(Ime::Preedit(text, _)) => {
                 state.preedit = (!text.is_empty()).then_some(text);
@@ -1081,7 +1189,14 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 state.preedit = None;
-                state.term().write(text.into_bytes());
+                match state.search.as_mut() {
+                    Some(bar) => {
+                        bar.query.push_str(&text);
+                        bar.update(&state.tabs.active().content.focused_pane().term);
+                        state.window.request_redraw();
+                    }
+                    None => state.term().write(text.into_bytes()),
+                }
             }
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
             WindowEvent::CursorLeft { .. } => {

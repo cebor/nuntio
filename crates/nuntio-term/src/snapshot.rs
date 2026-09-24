@@ -2,10 +2,13 @@ use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::palette::{Palette, dim};
+
+const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
 /// Style bits the renderer cares about.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -73,7 +76,14 @@ impl Snapshot {
         &self.cells[line * self.columns + column]
     }
 
-    pub(crate) fn capture<T: EventListener>(term: &Term<T>, palette: &Palette) -> Self {
+    /// Copy the visible screen. `matches` are highlighted as search
+    /// results, `current` as the selected one.
+    pub(crate) fn capture<T: EventListener>(
+        term: &Term<T>,
+        palette: &Palette,
+        matches: &[Match],
+        current: Option<&Match>,
+    ) -> Self {
         let content = term.renderable_content();
         let overrides = content.colors;
         let columns = term.columns();
@@ -107,6 +117,11 @@ impl Snapshot {
             if selection.is_some_and(|s| s.contains(indexed.point)) {
                 fg = palette.selection_foreground;
                 bg = palette.selection_background;
+            }
+            if current.is_some_and(|m| m.contains(&indexed.point)) {
+                (fg, bg) = (BLACK, palette.search_current);
+            } else if matches.iter().any(|m| m.contains(&indexed.point)) {
+                (fg, bg) = (BLACK, palette.search_match);
             }
             let hidden = flags.contains(Flags::HIDDEN)
                 || flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);

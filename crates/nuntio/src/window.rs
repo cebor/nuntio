@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use nuntio_config::Config;
 use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect};
-use nuntio_term::{CursorStyle, GridPoint, Snapshot, TermHandle, TermMode, TermSize};
+use nuntio_term::{CursorStyle, GridPoint, Link, Snapshot, TermHandle, TermMode, TermSize};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
 use winit::window::{ResizeDirection, Window};
@@ -16,6 +16,7 @@ use crate::event::PaneId;
 use crate::ime;
 use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
 use crate::pane_tree::{Divider, Layout, PaneTree, Rect};
+use crate::search_bar::SearchBar;
 use crate::tab_bar::{BarHit, TabBar, TabLabel, mix};
 use crate::tabs::Tabs;
 
@@ -113,6 +114,8 @@ pub struct MouseState {
     pub tab_drag: Option<TabDrag>,
     /// A pane divider is being dragged.
     pub divider_drag: Option<Divider>,
+    /// Link under the pointer while the link modifier is held.
+    pub hover_link: Option<(PaneId, Link)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -160,6 +163,8 @@ pub struct WindowState {
     pub focused: bool,
     /// Uncommitted IME text, shown at the cursor.
     pub preedit: Option<String>,
+    /// The find bar, searching the focused pane.
+    pub search: Option<SearchBar>,
     pub blink: Blink,
     /// Cell the IME candidate window was last anchored to.
     ime_cell: Option<(u32, u32)>,
@@ -177,6 +182,7 @@ impl WindowState {
             mouse: MouseState::default(),
             focused: true,
             preedit: None,
+            search: None,
             blink: Blink {
                 active: false,
                 visible: true,
@@ -306,11 +312,20 @@ impl WindowState {
 
         let mut snapshots: Vec<(Snapshot, Rect, bool)> = Vec::with_capacity(layout.panes.len());
         for &(id, rect) in &layout.panes {
-            let Some(pane) = self.content().pane(id) else {
+            let Some(pane) = self.tabs.active().content.pane(id) else {
                 continue;
             };
-            let mut snapshot = pane.term.snapshot();
             let is_focused = id == focused_id;
+            let search = self.search.as_mut().and_then(|bar| bar.search_mut());
+            let mut snapshot = match search {
+                Some(search) if is_focused => pane.term.search_snapshot(search),
+                _ => pane.term.snapshot(),
+            };
+            if let Some((link_pane, link)) = &self.mouse.hover_link
+                && *link_pane == id
+            {
+                underline(&mut snapshot, link);
+            }
             if is_focused {
                 self.prepare_focused(config, &mut snapshot, rect);
             } else if let Some(cursor) = snapshot.cursor.as_mut() {
@@ -363,6 +378,20 @@ impl WindowState {
                 height: r.height,
                 color: divider_color,
             });
+        }
+
+        if let Some(bar) = &self.search
+            && let Some(rect) = layout.rect(focused_id)
+        {
+            let (bar_rects, bar_texts) = bar.draw(
+                rect,
+                self.renderer.cell_metrics(),
+                self.scale(),
+                background,
+                foreground,
+            );
+            rects.extend(bar_rects);
+            texts.extend(bar_texts);
         }
 
         if let Some(banner) = banner {
@@ -445,11 +474,20 @@ impl WindowState {
     /// Grid cell of the focused pane under a window position, clamped to
     /// its grid.
     pub fn cell_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> GridPoint {
+        self.cell_in(config, self.content().focused, pos)
+    }
+
+    /// Grid cell of pane `id` under a window position, clamped to its grid.
+    pub fn cell_in(&self, config: &Config, id: PaneId, pos: PhysicalPosition<f64>) -> GridPoint {
         let layout = self.layout(config);
-        let rect = layout.rect(self.content().focused).unwrap_or_default();
+        let rect = layout.rect(id).unwrap_or_default();
         let (x0, y0) = self.grid_origin(config, rect);
         let cell = self.renderer.cell_metrics();
-        let grid = self.grid();
+        let grid = self
+            .content()
+            .pane(id)
+            .and_then(|p| p.size)
+            .unwrap_or(self.grid());
         let x = (pos.x - x0 as f64).max(0.0);
         let y = (pos.y - y0 as f64).max(0.0);
         let column = ((x / cell.width as f64) as usize).min(grid.columns as usize - 1);
@@ -471,6 +509,23 @@ impl WindowState {
         self.layout(config)
             .divider_at(pos.x as f32, pos.y as f32, slop)
             .cloned()
+    }
+
+    /// The pointer is over the find bar.
+    pub fn search_bar_contains(&self, config: &Config, pos: PhysicalPosition<f64>) -> bool {
+        let Some(bar) = &self.search else {
+            return false;
+        };
+        let rect = self.layout(config).rect(self.content().focused);
+        rect.is_some_and(|rect| {
+            bar.contains(
+                rect,
+                self.renderer.cell_metrics(),
+                self.scale(),
+                pos.x as f32,
+                pos.y as f32,
+            )
+        })
     }
 
     /// The pointer is over the notification banner.
@@ -534,6 +589,8 @@ impl WindowState {
 
     /// Forget per-pane pointer and IME state after focus moves.
     fn reset_focus_state(&mut self) {
+        self.search = None;
+        self.mouse.hover_link = None;
         self.mouse.selecting = false;
         self.mouse.reported_button = None;
         self.mouse.last_reported_cell = None;
@@ -572,6 +629,22 @@ impl WindowState {
             } else {
                 &b"\x1b[O"[..]
             });
+        }
+    }
+}
+
+/// Underline the cells of a link (viewport positions, inclusive).
+fn underline(snapshot: &mut Snapshot, link: &Link) {
+    let start = (link.start.1, link.start.0 as i32);
+    let end = (link.end.1, link.end.0 as i32);
+    for line in 0..snapshot.lines {
+        for column in 0..snapshot.columns {
+            let pos = (line as i32, column as i32);
+            if pos >= start && pos <= end {
+                snapshot.cells[line * snapshot.columns + column]
+                    .style
+                    .underline = true;
+            }
         }
     }
 }

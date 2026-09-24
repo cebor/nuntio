@@ -156,3 +156,72 @@ fn foreground_process_and_directory() {
         Some(std::path::Path::new("/tmp"))
     );
 }
+
+#[test]
+fn search_through_scrollback() {
+    let (handle, rx) = spawn(
+        "echo marker-A; for i in $(seq 1 30); do echo x; done; echo marker-B; printf 'x\\r\\nx\\r\\nend'",
+    );
+    wait_for_exit(&rx);
+    let mut search = nuntio_term::Search::new("marker", false).unwrap();
+
+    // Upwards from the bottom: the newest match first, then older, wrapping.
+    assert!(handle.search(&mut search, true));
+    assert!(screen_contains(&handle, "marker-B"));
+    assert!(handle.search(&mut search, true));
+    assert!(
+        screen_contains(&handle, "marker-A"),
+        "scrolled to the older match"
+    );
+    assert!(handle.search(&mut search, true));
+    assert!(screen_contains(&handle, "marker-B"), "wrapped around");
+    assert!(handle.search(&mut search, false));
+    assert!(screen_contains(&handle, "marker-A"), "downwards wraps too");
+
+    // The current match is highlighted.
+    let snapshot = handle.search_snapshot(&mut search);
+    let line = (0..snapshot.lines)
+        .find(|&l| line_text(&handle, l).starts_with("marker-A"))
+        .unwrap();
+    let highlighted = snapshot.cell(0, line).bg;
+    assert_ne!(highlighted, snapshot.background);
+    assert_eq!(snapshot.cell(5, line).bg, highlighted, "whole match");
+    assert_ne!(snapshot.cell(7, line).bg, highlighted, "not beyond");
+
+    let mut none = nuntio_term::Search::new("absent", false).unwrap();
+    assert!(!handle.search(&mut none, true));
+}
+
+fn screen_contains(handle: &TermHandle, text: &str) -> bool {
+    (0..SIZE.lines as usize).any(|l| line_text(handle, l).contains(text))
+}
+
+#[test]
+fn links_in_text_and_osc8() {
+    let (handle, rx) = spawn(
+        "printf 'see https://example.com/x, ok\\r\\n\\033]8;;https://nuntio.dev\\033\\\\click\\033]8;;\\033\\\\ here'",
+    );
+    wait_for_exit(&rx);
+
+    let link = handle.link_at(at(10, 0)).unwrap();
+    assert_eq!(link.url, "https://example.com/x");
+    assert_eq!((link.start, link.end), ((4, 0), (24, 0)));
+    assert_eq!(handle.link_at(at(27, 0)), None);
+
+    let link = handle.link_at(at(2, 1)).unwrap();
+    assert_eq!(link.url, "https://nuntio.dev");
+    assert_eq!((link.start, link.end), ((0, 1), (4, 1)));
+    assert_eq!(handle.link_at(at(7, 1)), None);
+}
+
+#[test]
+fn links_across_wrapped_lines() {
+    // 40 columns: the URL wraps onto the second row.
+    let url = format!("https://example.com/{}", "a".repeat(40));
+    let (handle, rx) = spawn(&format!("printf '{url}'"));
+    wait_for_exit(&rx);
+
+    let link = handle.link_at(at(3, 1)).unwrap();
+    assert_eq!(link.url, url);
+    assert_eq!((link.start, link.end), ((0, 0), (19, 1)));
+}

@@ -6,6 +6,7 @@ mod ime;
 mod input;
 mod mouse;
 mod pane_tree;
+mod search_bar;
 mod tab_bar;
 mod tabs;
 mod window;

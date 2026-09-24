@@ -9,6 +9,10 @@ pub struct Palette {
     colors: [Rgb; COUNT],
     pub selection_background: Rgb,
     pub selection_foreground: Rgb,
+    /// Background of search matches; their text is drawn in black.
+    pub search_match: Rgb,
+    /// Background of the selected search match.
+    pub search_current: Rgb,
 }
 
 const fn rgb(hex: u32) -> Rgb {
@@ -69,6 +73,8 @@ impl Palette {
             colors,
             selection_background: rgb(ITERM2_SELECTION_BG),
             selection_foreground: rgb(ITERM2_SELECTION_FG),
+            search_match: rgb(0xe5c07b),
+            search_current: rgb(0xff9632),
         }
     }
 
