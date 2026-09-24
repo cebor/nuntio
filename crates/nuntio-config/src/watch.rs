@@ -1,7 +1,7 @@
 //! Watching the config file and theme directory for changes.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -11,13 +11,21 @@ const DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Keeps watching as long as it's alive.
 pub struct ConfigWatcher {
-    _watcher: RecommendedWatcher,
+    _watcher: Arc<Mutex<RecommendedWatcher>>,
+}
+
+enum Signal {
+    /// A watched file changed.
+    Changed,
+    /// A directory on the way to a missing watched directory appeared.
+    Rescan,
 }
 
 impl ConfigWatcher {
     /// Call `on_change` (from a watcher thread) when `config_path` or a file
     /// in `themes_dir` changes. Directories are watched rather than files,
-    /// because editors often replace files atomically on save.
+    /// because editors often replace files atomically on save. Directories
+    /// that don't exist yet are picked up once they are created.
     pub fn new(
         config_path: &Path,
         themes_dir: Option<&Path>,
@@ -28,10 +36,19 @@ impl ConfigWatcher {
         // into a dotfiles repository: match and watch every variant.
         let config_files = path_variants(config_path);
         let theme_dirs: Vec<PathBuf> = themes_dir.map(path_variants).unwrap_or_default();
-        let watched_themes = theme_dirs.clone();
-        let (tx, rx) = mpsc::channel::<()>();
+        let mut wanted: Vec<PathBuf> = config_files
+            .iter()
+            .filter_map(|p| p.parent())
+            .map(Path::to_owned)
+            .chain(theme_dirs.iter().cloned())
+            .collect();
+        wanted.sort();
+        wanted.dedup();
 
-        let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
+        let (tx, rx) = mpsc::channel::<Signal>();
+        let watched_themes = theme_dirs;
+        let wanted_dirs = wanted.clone();
+        let watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
             let event = match result {
                 Ok(event) => event,
                 Err(err) => {
@@ -47,36 +64,63 @@ impl ConfigWatcher {
                 config_files.contains(path)
                     || watched_themes.iter().any(|dir| path.starts_with(dir))
             });
+            let on_the_way = event
+                .paths
+                .iter()
+                .any(|path| wanted_dirs.iter().any(|dir| dir.starts_with(path)));
             if relevant {
-                let _ = tx.send(());
+                let _ = tx.send(Signal::Changed);
+            } else if on_the_way {
+                let _ = tx.send(Signal::Rescan);
             }
         })?;
+        let watcher = Arc::new(Mutex::new(watcher));
+        let mut watched = Vec::new();
+        watch_existing(&mut watcher.lock().unwrap(), &wanted, &mut watched)?;
 
         // Collapse bursts of events into one notification.
+        let thread_watcher = watcher.clone();
         std::thread::Builder::new()
             .name("config watcher".into())
             .spawn(move || {
-                while rx.recv().is_ok() {
-                    while rx.recv_timeout(DEBOUNCE).is_ok() {}
+                while let Ok(first) = rx.recv() {
+                    let mut rescan = matches!(first, Signal::Rescan);
+                    while let Ok(signal) = rx.recv_timeout(DEBOUNCE) {
+                        rescan |= matches!(signal, Signal::Rescan);
+                    }
+                    if rescan {
+                        let mut watcher = thread_watcher.lock().unwrap();
+                        if let Err(err) = watch_existing(&mut watcher, &wanted, &mut watched) {
+                            tracing::warn!("config watcher: {err}");
+                        }
+                    }
+                    // A new directory may already contain the config.
                     on_change();
                 }
             })?;
-
-        let mut dirs: Vec<PathBuf> = path_variants(config_path)
-            .iter()
-            .filter_map(|p| p.parent())
-            .filter(|p| p.is_dir())
-            .map(Path::to_owned)
-            .collect();
-        dirs.extend(theme_dirs.into_iter().filter(|d| d.is_dir()));
-        dirs.sort();
-        dirs.dedup();
-        for dir in &dirs {
-            watcher.watch(dir, RecursiveMode::NonRecursive)?;
-            tracing::debug!(dir = %dir.display(), "watching for config changes");
-        }
         Ok(Self { _watcher: watcher })
     }
+}
+
+/// Watch each wanted directory, or its closest existing ancestor while it
+/// doesn't exist, skipping what is already watched.
+fn watch_existing(
+    watcher: &mut RecommendedWatcher,
+    wanted: &[PathBuf],
+    watched: &mut Vec<PathBuf>,
+) -> notify::Result<()> {
+    for dir in wanted {
+        let Some(existing) = dir.ancestors().find(|d| d.is_dir()) else {
+            continue;
+        };
+        if watched.iter().any(|w| w == existing) {
+            continue;
+        }
+        watcher.watch(existing, RecursiveMode::NonRecursive)?;
+        tracing::debug!(dir = %existing.display(), "watching for config changes");
+        watched.push(existing.to_owned());
+    }
+    Ok(())
 }
 
 /// A path as given, with its directory resolved, and fully resolved
@@ -126,6 +170,29 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(changed.is_ok(), "no change reported");
         assert!(settled, "burst reported more than once");
+    }
+
+    #[test]
+    fn notices_a_config_directory_created_later() {
+        let base = std::env::temp_dir().join(format!("nuntio-watch-new-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = base.join("config").join("nuntio");
+        let path = dir.join("config.toml");
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&path, None, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        // Two levels are created before the file appears.
+        std::fs::create_dir_all(&dir).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(&path, "scrollback = 5").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(changed.is_ok(), "config in a new directory not noticed");
     }
 
     #[test]
