@@ -23,8 +23,12 @@ impl ConfigWatcher {
         themes_dir: Option<&Path>,
         on_change: impl Fn() + Send + 'static,
     ) -> notify::Result<Self> {
-        let config_file = config_path.to_owned();
-        let watched_themes = themes_dir.map(Path::to_owned);
+        // Event paths may be canonical (macOS FSEvents resolves symlinks such
+        // as /var -> /private/var), and the config may itself be a symlink
+        // into a dotfiles repository: match and watch every variant.
+        let config_files = path_variants(config_path);
+        let theme_dirs: Vec<PathBuf> = themes_dir.map(path_variants).unwrap_or_default();
+        let watched_themes = theme_dirs.clone();
         let (tx, rx) = mpsc::channel::<()>();
 
         let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
@@ -40,10 +44,8 @@ impl ConfigWatcher {
                 return;
             }
             let relevant = event.paths.iter().any(|path| {
-                *path == config_file
-                    || watched_themes
-                        .as_deref()
-                        .is_some_and(|dir| path.starts_with(dir))
+                config_files.contains(path)
+                    || watched_themes.iter().any(|dir| path.starts_with(dir))
             });
             if relevant {
                 let _ = tx.send(());
@@ -60,19 +62,37 @@ impl ConfigWatcher {
                 }
             })?;
 
-        let mut dirs: Vec<PathBuf> = config_path
-            .parent()
+        let mut dirs: Vec<PathBuf> = path_variants(config_path)
+            .iter()
+            .filter_map(|p| p.parent())
             .filter(|p| p.is_dir())
             .map(Path::to_owned)
-            .into_iter()
             .collect();
-        dirs.extend(themes_dir.filter(|d| d.is_dir()).map(Path::to_owned));
+        dirs.extend(theme_dirs.into_iter().filter(|d| d.is_dir()));
+        dirs.sort();
+        dirs.dedup();
         for dir in &dirs {
             watcher.watch(dir, RecursiveMode::NonRecursive)?;
             tracing::debug!(dir = %dir.display(), "watching for config changes");
         }
         Ok(Self { _watcher: watcher })
     }
+}
+
+/// A path as given, with its directory resolved, and fully resolved
+/// (following a symlinked file to its target).
+fn path_variants(path: &Path) -> Vec<PathBuf> {
+    let mut variants = vec![path.to_owned()];
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+        && let Ok(parent) = parent.canonicalize()
+    {
+        variants.push(parent.join(name));
+    }
+    if let Ok(resolved) = path.canonicalize() {
+        variants.push(resolved);
+    }
+    variants.dedup();
+    variants
 }
 
 #[cfg(test)]
@@ -106,5 +126,30 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(changed.is_ok(), "no change reported");
         assert!(settled, "burst reported more than once");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn follows_a_symlinked_config_file() {
+        let base = std::env::temp_dir().join(format!("nuntio-watch-link-{}", std::process::id()));
+        let (config_dir, dotfiles) = (base.join("config"), base.join("dotfiles"));
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        let target = dotfiles.join("nuntio.toml");
+        std::fs::write(&target, "").unwrap();
+        let link = config_dir.join("config.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&link, None, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        // Editing the file in the dotfiles directory is noticed.
+        std::fs::write(&target, "scrollback = 5").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(changed.is_ok(), "change behind the symlink not reported");
     }
 }
