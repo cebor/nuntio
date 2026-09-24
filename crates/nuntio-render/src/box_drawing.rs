@@ -80,7 +80,9 @@ pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Vec<u8
         }
         // Rounded corners: two straight arms joined by a quarter circle.
         0x256D..=0x2570 => {
-            let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+            // Centered on the pixels of the straight lines in `draw_arms`.
+            let center = |size: i32| ((size - light) / 2) as f32 + light as f32 / 2.0;
+            let (cx, cy) = (center(w), center(h));
             let r = cx.min(cy);
             let (dx, dy) = match c {
                 '╭' => (1.0, 1.0),
@@ -394,6 +396,18 @@ mod tests {
         assert!(at(&diag, 0, 0) > 0);
         assert!(at(&diag, W - 1, H - 1) > 0);
         assert_eq!(at(&diag, W - 1, 0), 0);
+    }
+
+    #[test]
+    fn rounded_corners_line_up_with_straight_lines() {
+        // Odd stroke in an even cell: straight lines sit left of the middle.
+        let mask = |c| rasterize(c, W, H, 1).unwrap();
+        let column = |m: &[u8], y| (0..W).filter(|&x| at(m, x, y) == 255).collect::<Vec<_>>();
+        let row = |m: &[u8], x| (0..H).filter(|&y| at(m, x, y) == 255).collect::<Vec<_>>();
+        let (vertical, horizontal) = (mask('│'), mask('─'));
+        let arc = mask('╭');
+        assert_eq!(column(&arc, H - 1), column(&vertical, H - 1), "down arm");
+        assert_eq!(row(&arc, W - 1), row(&horizontal, W - 1), "right arm");
     }
 
     #[test]
