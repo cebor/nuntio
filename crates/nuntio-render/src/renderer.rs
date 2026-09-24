@@ -88,6 +88,8 @@ pub struct Renderer {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instances: Vec<Instance>,
+    /// Problem with the configured font, reported once.
+    font_warning: Option<String>,
 }
 
 impl Renderer {
@@ -103,7 +105,7 @@ impl Renderer {
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
         let gpu = GpuContext::new(window, width, height)?;
-        let fonts = Fonts::new(font_family, font_size, scale_factor);
+        let (fonts, font_warning) = Fonts::new(font_family, font_size, scale_factor);
         let device = &gpu.device;
 
         let mask_atlas = Atlas::new(device, wgpu::TextureFormat::R8Unorm, "mask atlas");
@@ -223,7 +225,21 @@ impl Renderer {
             instance_buffer,
             instance_capacity,
             instances: Vec::new(),
+            font_warning,
         })
+    }
+
+    /// Warning about the font given to `new`, if any.
+    pub fn take_font_warning(&mut self) -> Option<String> {
+        self.font_warning.take()
+    }
+
+    /// Switch font family (`None` = system monospace). Returns a warning if
+    /// the family isn't installed.
+    pub fn set_font_family(&mut self, family: Option<String>) -> Option<String> {
+        let warning = self.fonts.set_family(family);
+        self.clear_glyphs();
+        warning
     }
 
     pub fn cell_metrics(&self) -> CellMetrics {

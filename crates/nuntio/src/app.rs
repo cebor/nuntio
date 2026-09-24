@@ -1,11 +1,15 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use nuntio_config::{Config, OptionAsMeta};
+use nuntio_config::{
+    Color, Config, ConfigWatcher, DEFAULT_THEME, OptionAsMeta, Theme, ThemeSelection, ThemeSet,
+};
 use nuntio_render::{FrameStatus, Renderer};
-use nuntio_term::{SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode};
+use nuntio_term::{
+    Palette, Rgb, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{
@@ -14,9 +18,12 @@ use winit::event::{
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::ModifiersKeyState;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, WindowId};
+use winit::window::{
+    CursorIcon, ResizeDirection, Theme as WindowTheme, Window, WindowAttributes, WindowId,
+};
 
 use crate::actions::{Action, Bindings};
+use crate::banner::{Banner, Severity};
 use crate::event::{PaneId, UserEvent};
 use crate::input;
 use crate::mouse::{Button, MouseAction};
@@ -125,8 +132,43 @@ fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
     }
 }
 
+fn to_rgb(c: Color) -> Rgb {
+    Rgb {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+    }
+}
+
+fn palette_from(theme: &Theme) -> Palette {
+    let ansi = theme.ansi().map(to_rgb);
+    let mut palette = Palette::new(
+        &ansi,
+        to_rgb(theme.foreground),
+        to_rgb(theme.background),
+        to_rgb(theme.cursor),
+    );
+    palette.selection_foreground = to_rgb(theme.selection_foreground);
+    palette.selection_background = to_rgb(theme.selection_background);
+    palette
+}
+
+/// User themes live next to the config file.
+fn themes_dir(config_path: Option<&Path>) -> Option<PathBuf> {
+    config_path?.parent().map(|dir| dir.join("themes"))
+}
+
 pub struct App {
     config: Config,
+    config_path: Option<PathBuf>,
+    /// Keeps hot reload running.
+    _watcher: Option<ConfigWatcher>,
+    themes: ThemeSet,
+    /// Colors of the active theme, given to every pane.
+    palette: Palette,
+    /// The OS prefers dark mode (for `theme = { light, dark }`).
+    os_dark: bool,
+    banner: Option<Banner>,
     proxy: EventLoopProxy<UserEvent>,
     bindings: Bindings,
     clipboard: Option<arboard::Clipboard>,
@@ -141,21 +183,160 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, proxy: EventLoopProxy<UserEvent>) -> Self {
+    pub fn new(
+        config: Config,
+        config_path: Option<PathBuf>,
+        banner: Option<Banner>,
+        proxy: EventLoopProxy<UserEvent>,
+    ) -> Self {
         let clipboard = arboard::Clipboard::new()
             .inspect_err(|err| tracing::warn!("clipboard unavailable: {err}"))
             .ok();
-        Self {
+        let themes_dir = themes_dir(config_path.as_deref());
+        let watcher = config_path.as_deref().and_then(|path| {
+            let proxy = proxy.clone();
+            ConfigWatcher::new(path, themes_dir.as_deref(), move || {
+                let _ = proxy.send_event(UserEvent::ConfigChanged);
+            })
+            .inspect_err(|err| tracing::info!("config hot reload unavailable: {err}"))
+            .ok()
+        });
+        let (themes, theme_warnings) = ThemeSet::load(themes_dir.as_deref());
+        let (bindings, binding_warnings) = Bindings::from_config(&config.keybindings);
+
+        let mut app = Self {
             font_size: config.font.size,
             config,
+            config_path,
+            _watcher: watcher,
+            themes,
+            palette: Palette::default(),
+            os_dark: true,
+            banner,
             proxy,
-            bindings: Bindings::platform_defaults(),
+            bindings,
             clipboard,
             next_pane_id: 0,
             state: None,
             exit_requested: false,
             error: None,
+        };
+        let theme_warning = app.update_palette();
+        app.notify(
+            Severity::Warning,
+            theme_warnings
+                .into_iter()
+                .chain(binding_warnings)
+                .chain(theme_warning)
+                .collect(),
+        );
+        app
+    }
+
+    /// Show messages in the banner (and log them). Errors take precedence.
+    fn notify(&mut self, severity: Severity, messages: Vec<String>) {
+        for message in &messages {
+            match severity {
+                Severity::Error => tracing::error!("{message}"),
+                Severity::Warning => tracing::warn!("{message}"),
+            }
         }
+        let Some(new) = Banner::new(severity, messages) else {
+            return;
+        };
+        self.banner = match self.banner.take() {
+            Some(mut old) if old.severity == new.severity => {
+                old.messages.extend(new.messages);
+                Some(old)
+            }
+            Some(old) if old.severity == Severity::Error => Some(old),
+            _ => Some(new),
+        };
+        if let Some(state) = self.state.as_ref() {
+            state.window.request_redraw();
+        }
+    }
+
+    /// Pick the theme for the current config and OS appearance and apply
+    /// it to all panes. Returns a warning if the theme doesn't exist.
+    fn update_palette(&mut self) -> Option<String> {
+        let name = match &self.config.theme {
+            ThemeSelection::Single(name) => name,
+            ThemeSelection::Auto { light, dark } => {
+                if self.os_dark {
+                    dark
+                } else {
+                    light
+                }
+            }
+        };
+        let (theme, warning) = match self.themes.get(name) {
+            Some(theme) => (theme, None),
+            None => {
+                let available: Vec<&str> = self.themes.names().collect();
+                let warning = format!(
+                    "theme \"{name}\" not found (available: {})",
+                    available.join(", ")
+                );
+                let default = self.themes.get(DEFAULT_THEME).expect("built-in theme");
+                (default, Some(warning))
+            }
+        };
+        self.palette = palette_from(theme);
+        if let Some(state) = self.state.as_ref() {
+            for tab in state.tabs.iter() {
+                tab.pane.term.set_palette(self.palette.clone());
+            }
+            state.window.request_redraw();
+        }
+        warning
+    }
+
+    /// Re-read the config file and apply what changed. An invalid file
+    /// leaves the current settings untouched.
+    fn reload_config(&mut self) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        let loaded = match nuntio_config::load(&path) {
+            Ok(loaded) => loaded,
+            Err(err) => {
+                self.banner = None;
+                self.notify(Severity::Error, vec![err.to_string()]);
+                return;
+            }
+        };
+        tracing::info!(path = %path.display(), "config reloaded");
+        let mut warnings = loaded.warnings;
+        let (themes, theme_warnings) = ThemeSet::load(themes_dir(Some(&path)).as_deref());
+        let (bindings, binding_warnings) = Bindings::from_config(&loaded.config.keybindings);
+        warnings.extend(theme_warnings);
+        warnings.extend(binding_warnings);
+
+        let old = std::mem::replace(&mut self.config, loaded.config);
+        self.themes = themes;
+        self.bindings = bindings;
+        warnings.extend(self.update_palette());
+
+        if let Some(state) = self.state.as_mut() {
+            if old.font.family != self.config.font.family {
+                warnings.extend(
+                    state
+                        .renderer
+                        .set_font_family(self.config.font.family.clone()),
+                );
+            }
+            if old.font.size != self.config.font.size {
+                self.font_size = self.config.font.size;
+                let scale = state.window.scale_factor();
+                state.renderer.set_font_size(self.font_size, scale);
+            }
+            // Padding, font and tab bar settings all affect the grid.
+            state.resize_terms(&self.config);
+            state.window.request_redraw();
+        }
+        self.banner = None;
+        self.notify(Severity::Warning, warnings);
     }
 
     pub fn into_result(self) -> Result<()> {
@@ -187,6 +368,7 @@ impl App {
             }),
             working_directory: cwd,
             scrollback: self.config.scrollback,
+            palette: self.palette.clone(),
         };
         let size = self.state.as_ref().map_or(
             nuntio_term::TermSize {
@@ -214,7 +396,19 @@ impl App {
                 .context("failed to create window")?,
         );
         window.set_ime_allowed(true);
-        let renderer = self.create_renderer(&window)?;
+        let mut renderer = self.create_renderer(&window)?;
+        if let Some(warning) = renderer.take_font_warning() {
+            self.notify(Severity::Warning, vec![warning]);
+        }
+        // Follow the OS appearance for `theme = { light, dark }`.
+        let os_dark = window.theme() != Some(WindowTheme::Light);
+        if os_dark != self.os_dark {
+            self.os_dark = os_dark;
+            if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
+                let warning = self.update_palette();
+                self.notify(Severity::Warning, warning.into_iter().collect());
+            }
+        }
         let pane = self.spawn_pane(None)?;
         let mut state = WindowState::new(window, renderer, pane, chrome);
         state.resize_terms(&self.config);
@@ -337,6 +531,7 @@ impl App {
                 state.select_tab((state.tabs.active_index() + len - 1) % len);
             }
             Action::SelectTab(index) => state.select_tab(index),
+            Action::ReloadConfig => self.reload_config(),
         }
         if let Some(state) = self.state.as_ref() {
             state.window.request_redraw();
@@ -393,6 +588,15 @@ impl App {
         };
 
         if !pressed && button == Button::Left && state.mouse.tab_drag.take().is_some() {
+            return;
+        }
+        // A click on the banner dismisses it.
+        if pressed
+            && let Some(banner) = &self.banner
+            && state.banner_contains(banner, pos)
+        {
+            self.banner = None;
+            state.window.request_redraw();
             return;
         }
 
@@ -691,7 +895,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Term(pane, event) => self.term_event(pane, event),
-            UserEvent::ConfigReloaded(_) => {}
+            UserEvent::ConfigChanged => self.reload_config(),
         }
     }
 
@@ -745,23 +949,32 @@ impl ApplicationHandler<UserEvent> for App {
                 ..
             } => self.mouse_input(button, button_state == ElementState::Pressed),
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
-            WindowEvent::RedrawRequested => match state.redraw(&self.config) {
-                FrameStatus::Presented => {}
-                FrameStatus::Skipped => state.window.request_redraw(),
-                FrameStatus::Lost => {
-                    tracing::warn!("surface lost, recreating renderer");
-                    let window = state.window.clone();
-                    match self.create_renderer(&window) {
-                        Ok(renderer) => {
-                            if let Some(state) = self.state.as_mut() {
-                                state.renderer = renderer;
+            WindowEvent::ThemeChanged(theme) => {
+                self.os_dark = theme == WindowTheme::Dark;
+                if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
+                    let warning = self.update_palette();
+                    self.notify(Severity::Warning, warning.into_iter().collect());
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                match state.redraw(&self.config, self.banner.as_ref()) {
+                    FrameStatus::Presented => {}
+                    FrameStatus::Skipped => state.window.request_redraw(),
+                    FrameStatus::Lost => {
+                        tracing::warn!("surface lost, recreating renderer");
+                        let window = state.window.clone();
+                        match self.create_renderer(&window) {
+                            Ok(renderer) => {
+                                if let Some(state) = self.state.as_mut() {
+                                    state.renderer = renderer;
+                                }
+                                window.request_redraw();
                             }
-                            window.request_redraw();
+                            Err(err) => self.fail(event_loop, err),
                         }
-                        Err(err) => self.fail(event_loop, err),
                     }
                 }
-            },
+            }
             _ => {}
         }
     }

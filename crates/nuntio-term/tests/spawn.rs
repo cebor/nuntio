@@ -21,6 +21,7 @@ fn spawn(script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
         }),
         working_directory: None,
         scrollback: 100,
+        palette: Default::default(),
     };
     let handle = TermHandle::spawn(options, SIZE, move |event| {
         let _ = tx.send(event);

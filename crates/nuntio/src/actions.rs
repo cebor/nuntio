@@ -1,4 +1,4 @@
-//! Built-in shortcuts. Config-defined bindings replace/extend these in M4.
+//! Keyboard shortcuts: platform defaults plus `[[keybindings]]` from the config.
 
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -20,6 +20,43 @@ pub enum Action {
     PreviousTab,
     /// Activate the tab at this index (0-based).
     SelectTab(usize),
+    ReloadConfig,
+}
+
+impl Action {
+    /// Parse an action name from the config; `"none"` gives `None`.
+    fn from_name(name: &str) -> Result<Option<Self>, String> {
+        use Action::*;
+        let action = match name {
+            "none" => return Ok(None),
+            "copy" => Copy,
+            "paste" => Paste,
+            "scroll_page_up" => ScrollPageUp,
+            "scroll_page_down" => ScrollPageDown,
+            "scroll_line_up" => ScrollLineUp,
+            "scroll_line_down" => ScrollLineDown,
+            "increase_font_size" => FontIncrease,
+            "decrease_font_size" => FontDecrease,
+            "reset_font_size" => FontReset,
+            "clear_scrollback" => ClearScrollback,
+            "new_tab" => NewTab,
+            "close_tab" => CloseTab,
+            "next_tab" => NextTab,
+            "previous_tab" => PreviousTab,
+            "reload_config" => ReloadConfig,
+            _ => {
+                let tab = name
+                    .strip_prefix("select_tab_")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| (1..=9).contains(n));
+                match tab {
+                    Some(n) => SelectTab(n - 1),
+                    None => return Err(format!("unknown action `{name}`")),
+                }
+            }
+        };
+        Ok(Some(action))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +70,8 @@ enum BindKey {
 struct Binding {
     key: BindKey,
     mods: ModifiersState,
-    action: Action,
+    /// `None` disables the key combination (it goes to the terminal).
+    action: Option<Action>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,12 +95,12 @@ impl Bindings {
         let char = |c, mods, action| Binding {
             key: BindKey::Char(c),
             mods,
-            action,
+            action: Some(action),
         };
         let named = |key, mods, action| Binding {
             key: BindKey::Named(key),
             mods,
-            action,
+            action: Some(action),
         };
 
         let mut bindings = vec![
@@ -81,6 +119,7 @@ impl Bindings {
             named(NamedKey::ArrowDown, cmd_shift, ScrollLineDown),
             char('t', cmd_shift, NewTab),
             char('w', cmd_shift, CloseTab),
+            char(',', cmd_shift | shift, ReloadConfig),
         ];
         if cfg!(target_os = "macos") {
             let cmd = ModifiersState::SUPER;
@@ -103,6 +142,26 @@ impl Bindings {
         Self(bindings)
     }
 
+    /// Platform defaults, overridden by the config's `[[keybindings]]`.
+    /// Invalid entries are skipped and reported as warnings.
+    pub fn from_config(entries: &[nuntio_config::Keybinding]) -> (Self, Vec<String>) {
+        let mut warnings = Vec::new();
+        let mut custom = Vec::new();
+        for entry in entries {
+            let parsed = parse_combo(&entry.key).and_then(|(key, mods)| {
+                let action = Action::from_name(&entry.action)?;
+                Ok(Binding { key, mods, action })
+            });
+            match parsed {
+                Ok(binding) => custom.push(binding),
+                Err(err) => warnings.push(format!("keybinding \"{}\": {err}", entry.key)),
+            }
+        }
+        // Earlier entries win in `lookup`, so config bindings go first.
+        custom.extend(Self::platform_defaults().0);
+        (Self(custom), warnings)
+    }
+
     /// `key` should be the key without modifiers applied (so Ctrl+Shift+C
     /// arrives as `c`, not `C` or a control character).
     pub fn lookup(&self, key: &Key, mods: ModifiersState) -> Option<Action> {
@@ -120,8 +179,65 @@ impl Bindings {
                         _ => false,
                     }
             })
-            .map(|b| b.action)
+            .and_then(|b| b.action)
     }
+}
+
+/// Parse a key combination like `"Ctrl+Shift+T"` or `"Cmd+PageUp"`.
+fn parse_combo(combo: &str) -> Result<(BindKey, ModifiersState), String> {
+    let parts: Vec<&str> = combo.split('+').map(str::trim).collect();
+    let (key, modifiers) = parts.split_last().ok_or("empty key")?;
+    let mut mods = ModifiersState::empty();
+    for m in modifiers {
+        mods |= match m.to_lowercase().as_str() {
+            "ctrl" | "control" => ModifiersState::CONTROL,
+            "shift" => ModifiersState::SHIFT,
+            "alt" | "opt" | "option" => ModifiersState::ALT,
+            "cmd" | "command" | "super" | "win" | "meta" => ModifiersState::SUPER,
+            _ => return Err(format!("unknown modifier `{m}`")),
+        };
+    }
+    Ok((parse_key(key)?, mods))
+}
+
+fn parse_key(key: &str) -> Result<BindKey, String> {
+    let mut chars = key.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return Ok(BindKey::Char(c.to_lowercase().next().unwrap_or(c)));
+    }
+    let named = match key.to_lowercase().as_str() {
+        "plus" => return Ok(BindKey::Char('+')),
+        "minus" => return Ok(BindKey::Char('-')),
+        "enter" | "return" => NamedKey::Enter,
+        "tab" => NamedKey::Tab,
+        "escape" | "esc" => NamedKey::Escape,
+        "space" => NamedKey::Space,
+        "backspace" => NamedKey::Backspace,
+        "delete" | "del" => NamedKey::Delete,
+        "insert" | "ins" => NamedKey::Insert,
+        "home" => NamedKey::Home,
+        "end" => NamedKey::End,
+        "pageup" | "pgup" => NamedKey::PageUp,
+        "pagedown" | "pgdn" => NamedKey::PageDown,
+        "up" => NamedKey::ArrowUp,
+        "down" => NamedKey::ArrowDown,
+        "left" => NamedKey::ArrowLeft,
+        "right" => NamedKey::ArrowRight,
+        "f1" => NamedKey::F1,
+        "f2" => NamedKey::F2,
+        "f3" => NamedKey::F3,
+        "f4" => NamedKey::F4,
+        "f5" => NamedKey::F5,
+        "f6" => NamedKey::F6,
+        "f7" => NamedKey::F7,
+        "f8" => NamedKey::F8,
+        "f9" => NamedKey::F9,
+        "f10" => NamedKey::F10,
+        "f11" => NamedKey::F11,
+        "f12" => NamedKey::F12,
+        _ => return Err(format!("unknown key `{key}`")),
+    };
+    Ok(BindKey::Named(named))
 }
 
 fn relevant_mods() -> ModifiersState {
@@ -134,6 +250,66 @@ mod tests {
 
     fn ch(s: &str) -> Key {
         Key::Character(s.into())
+    }
+
+    fn binding(key: &str, action: &str) -> nuntio_config::Keybinding {
+        nuntio_config::Keybinding {
+            key: key.into(),
+            action: action.into(),
+        }
+    }
+
+    #[test]
+    fn combos() {
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(
+            parse_combo("Ctrl+Shift+T").unwrap(),
+            (BindKey::Char('t'), ctrl_shift)
+        );
+        assert_eq!(
+            parse_combo("cmd + pageup").unwrap(),
+            (BindKey::Named(NamedKey::PageUp), ModifiersState::SUPER)
+        );
+        assert_eq!(
+            parse_combo("Alt+Plus").unwrap(),
+            (BindKey::Char('+'), ModifiersState::ALT)
+        );
+        assert_eq!(parse_combo("F5").unwrap().0, BindKey::Named(NamedKey::F5));
+        assert!(parse_combo("Hyper+T").is_err());
+        assert!(parse_combo("Ctrl+Foo").is_err());
+    }
+
+    #[test]
+    fn action_names() {
+        assert_eq!(Action::from_name("new_tab"), Ok(Some(Action::NewTab)));
+        assert_eq!(
+            Action::from_name("select_tab_3"),
+            Ok(Some(Action::SelectTab(2)))
+        );
+        assert_eq!(Action::from_name("none"), Ok(None));
+        assert!(Action::from_name("select_tab_0").is_err());
+        assert!(Action::from_name("split_sideways").is_err());
+    }
+
+    #[test]
+    fn config_overrides_and_disables_defaults() {
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let (b, warnings) = Bindings::from_config(&[
+            binding("Ctrl+Shift+T", "close_tab"),
+            binding("Ctrl+Shift+C", "none"),
+            binding("F12", "new_tab"),
+            binding("Ctrl+Nope", "copy"),
+            binding("F11", "fly"),
+        ]);
+        assert_eq!(b.lookup(&ch("t"), ctrl_shift), Some(Action::CloseTab));
+        assert_eq!(b.lookup(&ch("c"), ctrl_shift), None);
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::F12), ModifiersState::empty()),
+            Some(Action::NewTab)
+        );
+        // Untouched defaults remain.
+        assert!(b.lookup(&ch("v"), ctrl_shift).is_some() || cfg!(target_os = "macos"));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
     }
 
     #[test]

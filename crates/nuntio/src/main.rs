@@ -1,5 +1,6 @@
 mod actions;
 mod app;
+mod banner;
 mod event;
 mod ime;
 mod input;
@@ -8,13 +9,15 @@ mod tab_bar;
 mod tabs;
 mod window;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use nuntio_config::Config;
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::EventLoop;
 
 use crate::app::App;
+use crate::banner::{Banner, Severity};
 use crate::event::UserEvent;
 
 #[derive(Debug, Default)]
@@ -46,6 +49,32 @@ fn parse_args() -> Result<Args, lexopt::Error> {
     Ok(args)
 }
 
+/// Load the config for startup. Unlike a reload, an invalid file doesn't
+/// stop nuntio: it starts with defaults and shows the error.
+fn load_config(path: Option<&Path>) -> (Config, Option<Banner>) {
+    let Some(path) = path else {
+        tracing::warn!("no home directory, using the default config");
+        return (Config::default(), None);
+    };
+    match nuntio_config::load(path) {
+        Ok(loaded) => {
+            tracing::info!(path = %path.display(), "config loaded");
+            for warning in &loaded.warnings {
+                tracing::warn!("{warning}");
+            }
+            (
+                loaded.config,
+                Banner::new(Severity::Warning, loaded.warnings),
+            )
+        }
+        Err(err) => {
+            tracing::error!("{err}");
+            let banner = Banner::new(Severity::Error, vec![err.to_string()]);
+            (Config::default(), banner)
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = parse_args()?;
 
@@ -55,16 +84,13 @@ fn main() -> Result<()> {
     };
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    // Loading from `args.config` / the default path follows in M4.
-    if let Some(path) = &args.config {
-        tracing::warn!(path = %path.display(), "config loading not implemented yet, using defaults");
-    }
-    let config = nuntio_config::Config::default();
+    let config_path = args.config.or_else(nuntio_config::default_config_path);
+    let (config, banner) = load_config(config_path.as_deref());
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .context("failed to create event loop")?;
-    let mut app = App::new(config, event_loop.create_proxy());
+    let mut app = App::new(config, config_path, banner, event_loop.create_proxy());
     event_loop.run_app(&mut app).context("event loop failed")?;
     app.into_result()
 }

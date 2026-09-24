@@ -11,6 +11,7 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
 use winit::window::{ResizeDirection, Window};
 
+use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::ime;
 use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
@@ -201,7 +202,7 @@ impl WindowState {
             .unwrap_or_else(|| tab.pane.term.process_name())
     }
 
-    pub fn redraw(&mut self, config: &Config) -> FrameStatus {
+    pub fn redraw(&mut self, config: &Config, banner: Option<&Banner>) -> FrameStatus {
         let mut snapshot = self.term().snapshot();
         if let Some(preedit) = &self.preedit {
             ime::overlay_preedit(&mut snapshot, preedit);
@@ -229,7 +230,7 @@ impl WindowState {
             self.title = title;
         }
 
-        let (rects, texts) = match self.tab_bar(config) {
+        let (mut rects, mut texts) = match self.tab_bar(config) {
             Some(bar) => {
                 let labels: Vec<TabLabel> = (0..self.tabs.len())
                     .map(|i| {
@@ -252,6 +253,18 @@ impl WindowState {
             }
             None => Default::default(),
         };
+
+        if let Some(banner) = banner {
+            let size = self.window.inner_size();
+            let (rect, text) = banner.draw(
+                size.width as f32,
+                size.height as f32,
+                self.renderer.cell_metrics(),
+                self.scale(),
+            );
+            rects.push(rect);
+            texts.push(text);
+        }
 
         let (x, y) = self.grid_origin(config);
         let panes = [PaneView {
@@ -298,6 +311,17 @@ impl WindowState {
             line,
             right_half: within >= cell.width as f64 / 2.0,
         }
+    }
+
+    /// The pointer is over the notification banner.
+    pub fn banner_contains(&self, banner: &Banner, pos: PhysicalPosition<f64>) -> bool {
+        let height = self.window.inner_size().height as f32;
+        banner.contains(
+            pos.y as f32,
+            height,
+            self.renderer.cell_metrics(),
+            self.scale(),
+        )
     }
 
     /// Resize edge under the pointer, for windows without decorations.

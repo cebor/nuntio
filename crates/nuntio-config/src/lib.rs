@@ -1,6 +1,16 @@
-//! Config schema for nuntio. Loading, validation and hot-reload follow in M4.
+//! Config schema, loading, validation, themes and file watching.
+
+mod color;
+mod load;
+mod theme;
+mod watch;
 
 use serde::Deserialize;
+
+pub use color::Color;
+pub use load::{ConfigError, Loaded, config_dir, default_config_path, load, parse};
+pub use theme::{DEFAULT_THEME, Theme, ThemeSet, builtin_themes, parse_itermcolors};
+pub use watch::ConfigWatcher;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]

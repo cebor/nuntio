@@ -56,8 +56,79 @@ fn points_to_pixels(points: f32, scale_factor: f64) -> f32 {
     points * dpi_factor * scale_factor as f32
 }
 
+/// Result of looking up a configured font family among installed fonts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FamilyMatch {
+    /// Found, ignoring case and spacing; carries the installed name.
+    Exact(String),
+    /// Same words in a different order ("Nerd Font Hack Mono").
+    Reordered(String),
+    NotFound {
+        suggestions: Vec<String>,
+    },
+}
+
+fn normalized(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn words(name: &str) -> Vec<String> {
+    let mut words: Vec<String> = name.split_whitespace().map(str::to_lowercase).collect();
+    words.sort();
+    words
+}
+
+/// Find `requested` among installed family names.
+pub fn resolve_family<'a>(
+    installed: impl IntoIterator<Item = &'a str>,
+    requested: &str,
+) -> FamilyMatch {
+    let mut families: Vec<&str> = installed.into_iter().collect();
+    families.sort_unstable();
+    families.dedup();
+
+    let wanted = normalized(requested);
+    if let Some(name) = families.iter().find(|f| normalized(f) == wanted) {
+        return FamilyMatch::Exact(name.to_string());
+    }
+    let wanted_words = words(requested);
+    if let Some(name) = families.iter().find(|f| words(f) == wanted_words) {
+        return FamilyMatch::Reordered(name.to_string());
+    }
+
+    // Suggest the families sharing the most words with the request.
+    let score = |family: &str| {
+        let family_words = words(family);
+        wanted_words
+            .iter()
+            .filter(|w| family_words.contains(w))
+            .count()
+    };
+    // Only suggest families sharing more than half of the requested words.
+    let best = families.iter().map(|f| score(f)).max().unwrap_or(0);
+    let suggestions = if best * 2 <= wanted_words.len() {
+        Vec::new()
+    } else {
+        families
+            .iter()
+            .filter(|f| score(f) == best)
+            .take(3)
+            .map(|f| f.to_string())
+            .collect()
+    };
+    FamilyMatch::NotFound { suggestions }
+}
+
 impl Fonts {
-    pub fn new(family: Option<String>, size_points: f32, scale_factor: f64) -> Self {
+    /// Load fonts. Returns a warning if the requested family isn't installed.
+    pub fn new(
+        family: Option<String>,
+        size_points: f32,
+        scale_factor: f64,
+    ) -> (Self, Option<String>) {
         let mut system = FontSystem::new();
         let px_size = points_to_pixels(size_points, scale_factor);
         let buffer = new_buffer(&mut system, px_size);
@@ -65,7 +136,7 @@ impl Fonts {
             system,
             swash: SwashCache::new(),
             buffer,
-            family,
+            family: None,
             px_size,
             metrics: CellMetrics {
                 width: 1,
@@ -76,9 +147,46 @@ impl Fonts {
                 strikeout_y: 1,
             },
         };
-        fonts.metrics = fonts.measure();
-        tracing::info!(px_size, metrics = ?fonts.metrics, "font loaded");
-        fonts
+        let warning = fonts.set_family(family);
+        (fonts, warning)
+    }
+
+    /// Switch the font family (`None` = system monospace). Returns a warning
+    /// if the family isn't installed; the system monospace font is used then.
+    pub fn set_family(&mut self, family: Option<String>) -> Option<String> {
+        let (resolved, warning) = match family {
+            None => (None, None),
+            Some(requested) => {
+                let installed = self
+                    .system
+                    .db()
+                    .faces()
+                    .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()));
+                match resolve_family(installed, &requested) {
+                    FamilyMatch::Exact(name) => (Some(name), None),
+                    FamilyMatch::Reordered(name) => {
+                        let warning =
+                            format!("font \"{requested}\" found as \"{name}\"; use that name");
+                        (Some(name), Some(warning))
+                    }
+                    FamilyMatch::NotFound { suggestions } => {
+                        let mut warning = format!(
+                            "font \"{requested}\" is not installed, using the default monospace font"
+                        );
+                        if !suggestions.is_empty() {
+                            warning +=
+                                &format!(" (did you mean \"{}\"?)", suggestions.join("\", \""));
+                        }
+                        (None, Some(warning))
+                    }
+                }
+            }
+        };
+        self.family = resolved;
+        self.buffer = new_buffer(&mut self.system, self.px_size);
+        self.metrics = self.measure();
+        tracing::info!(family = ?self.family, px_size = self.px_size, metrics = ?self.metrics, "font loaded");
+        warning
     }
 
     /// Change font size or scale factor. Returns the new cell metrics.
@@ -221,4 +329,53 @@ fn new_buffer(system: &mut FontSystem, px_size: f32) -> Buffer {
     let mut buffer = Buffer::new(system, Metrics::new(px_size, px_size * 1.5));
     buffer.set_wrap(Wrap::None);
     buffer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INSTALLED: [&str; 5] = [
+        "DejaVu Sans Mono",
+        "Hack Nerd Font",
+        "Hack Nerd Font Mono",
+        "Hack Nerd Font Propo",
+        "Liberation Mono",
+    ];
+
+    #[test]
+    fn exact_ignores_case_and_spacing() {
+        assert_eq!(
+            resolve_family(INSTALLED, "hack nerd font mono"),
+            FamilyMatch::Exact("Hack Nerd Font Mono".into())
+        );
+        assert_eq!(
+            resolve_family(INSTALLED, "DejaVuSansMono"),
+            FamilyMatch::Exact("DejaVu Sans Mono".into())
+        );
+    }
+
+    #[test]
+    fn reordered_words() {
+        assert_eq!(
+            resolve_family(INSTALLED, "Nerd Font Hack Mono"),
+            FamilyMatch::Reordered("Hack Nerd Font Mono".into())
+        );
+    }
+
+    #[test]
+    fn suggestions_for_unknown_families() {
+        assert_eq!(
+            resolve_family(INSTALLED, "Hack Mono"),
+            FamilyMatch::NotFound {
+                suggestions: vec!["Hack Nerd Font Mono".into()]
+            }
+        );
+        assert_eq!(
+            resolve_family(INSTALLED, "Comic Sans"),
+            FamilyMatch::NotFound {
+                suggestions: vec![]
+            }
+        );
+    }
 }

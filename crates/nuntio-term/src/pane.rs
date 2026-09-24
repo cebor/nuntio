@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -52,6 +52,7 @@ pub struct SpawnOptions {
     pub shell: Option<Shell>,
     pub working_directory: Option<PathBuf>,
     pub scrollback: usize,
+    pub palette: Palette,
 }
 
 /// Terminal grid size plus the cell size in physical pixels.
@@ -101,7 +102,7 @@ struct ListenerInner {
     callback: Box<Callback>,
     /// Set once the event loop exists; replies are written back through it.
     sender: OnceLock<EventLoopSender>,
-    palette: Palette,
+    palette: RwLock<Palette>,
     size: Mutex<WindowSize>,
     /// Coalesces wakeups: only one is in flight until the next snapshot.
     wakeup_pending: AtomicBool,
@@ -138,7 +139,8 @@ impl EventListener for Listener {
             Event::ClipboardStore(_, text) => TermEvent::ClipboardStore(text),
             Event::PtyWrite(text) => return inner.write(text),
             Event::ColorRequest(index, format) => {
-                return inner.write(format(inner.palette.get(index)));
+                let color = inner.palette.read().unwrap().get(index);
+                return inner.write(format(color));
             }
             Event::TextAreaSizeRequest(format) => {
                 let size = *inner.size.lock().unwrap();
@@ -173,7 +175,7 @@ impl TermHandle {
             inner: Arc::new(ListenerInner {
                 callback: Box::new(callback),
                 sender: OnceLock::new(),
-                palette: Palette::default(),
+                palette: RwLock::new(options.palette),
                 size: Mutex::new(size.window_size()),
                 wakeup_pending: AtomicBool::new(false),
             }),
@@ -310,6 +312,11 @@ impl TermHandle {
         self.shell_pid.and_then(process::working_directory)
     }
 
+    /// Change the colors, e.g. after a theme switch.
+    pub fn set_palette(&self, palette: Palette) {
+        *self.listener.inner.palette.write().unwrap() = palette;
+    }
+
     /// Terminal modes, e.g. for application cursor keys.
     pub fn mode(&self) -> term::TermMode {
         *self.term.lock().mode()
@@ -322,7 +329,8 @@ impl TermHandle {
             .wakeup_pending
             .store(false, Ordering::Release);
         let term = self.term.lock();
-        Snapshot::capture(&term, &self.listener.inner.palette)
+        let palette = self.listener.inner.palette.read().unwrap();
+        Snapshot::capture(&term, &palette)
     }
 }
 
