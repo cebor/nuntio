@@ -100,7 +100,7 @@ When nuntio is started without a terminal (from a desktop launcher, for example)
 
 ## Configuration
 
-nuntio reads `~/.config/nuntio/config.toml`, or `$XDG_CONFIG_HOME/nuntio/config.toml` if that is set. The path is the same on Linux, macOS and Windows, so one dotfiles repo works everywhere. Without a config file, nuntio runs with the defaults.
+nuntio reads `~/.config/nuntio/config.toml` (or `$XDG_CONFIG_HOME/nuntio/config.toml`) or, if that doesn't exist, `~/.nuntio.toml`. The paths are the same on Linux, macOS and Windows, so one dotfiles repo works everywhere. Without a config file, nuntio runs with the defaults.
 
 ```toml
 [font]

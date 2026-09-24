@@ -8,7 +8,9 @@ mod watch;
 use serde::Deserialize;
 
 pub use color::Color;
-pub use load::{ConfigError, Loaded, config_dir, default_config_path, load, parse};
+pub use load::{
+    ConfigError, ConfigLocation, Loaded, config_dir, load, locate_config, parse, themes_dir,
+};
 pub use theme::{DEFAULT_THEME, Theme, ThemeSet, builtin_themes, parse_itermcolors};
 pub use watch::ConfigWatcher;
 

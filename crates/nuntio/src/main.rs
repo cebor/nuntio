@@ -56,8 +56,9 @@ fn parse_args() -> Result<Args, lexopt::Error> {
 }
 
 /// Load the config for startup. Unlike a reload, an invalid file doesn't
-/// stop nuntio: it starts with defaults and shows the error.
-fn load_config(path: Option<&Path>) -> (Config, Option<Banner>) {
+/// stop nuntio: it starts with defaults and shows the error. `warnings`
+/// are shown along with the config's own.
+fn load_config(path: Option<&Path>, mut warnings: Vec<String>) -> (Config, Option<Banner>) {
     let Some(path) = path else {
         tracing::warn!("no home directory, using the default config");
         return (Config::default(), None);
@@ -65,13 +66,11 @@ fn load_config(path: Option<&Path>) -> (Config, Option<Banner>) {
     match nuntio_config::load(path) {
         Ok(loaded) => {
             tracing::info!(path = %path.display(), "config loaded");
-            for warning in &loaded.warnings {
+            warnings.extend(loaded.warnings);
+            for warning in &warnings {
                 tracing::warn!("{warning}");
             }
-            (
-                loaded.config,
-                Banner::new(Severity::Warning, loaded.warnings),
-            )
+            (loaded.config, Banner::new(Severity::Warning, warnings))
         }
         Err(err) => {
             tracing::error!("{err}");
@@ -106,8 +105,19 @@ fn main() -> Result<()> {
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
     }
 
-    let config_path = args.config.or_else(nuntio_config::default_config_path);
-    let (config, banner) = load_config(config_path.as_deref());
+    let mut warnings = Vec::new();
+    let config_path = args.config.or_else(|| {
+        let location = nuntio_config::locate_config()?;
+        if let Some(shadowed) = location.shadowed {
+            warnings.push(format!(
+                "{} is ignored because {} exists",
+                shadowed.display(),
+                location.path.display()
+            ));
+        }
+        Some(location.path)
+    });
+    let (config, banner) = load_config(config_path.as_deref(), warnings);
 
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()

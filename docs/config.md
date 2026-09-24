@@ -11,15 +11,16 @@ nuntio is configured with a single TOML file. Every setting is optional, so an e
 
 ## Location
 
-| | Path |
-|---|---|
-| Default | `~/.config/nuntio/config.toml` |
-| With `XDG_CONFIG_HOME` set (absolute path) | `$XDG_CONFIG_HOME/nuntio/config.toml` |
-| Custom | `nuntio --config <path>` |
+nuntio uses the first of these files that exists:
 
-The path is the same on Linux, macOS and Windows (on Windows, `~` is your user profile folder), so one dotfiles setup works everywhere. Symlinked config files are supported.
+1. `~/.config/nuntio/config.toml`, or `$XDG_CONFIG_HOME/nuntio/config.toml` if `XDG_CONFIG_HOME` is set to an absolute path
+2. `~/.nuntio.toml`
 
-Custom themes go in a `themes/` directory next to the config file, for example `~/.config/nuntio/themes/`.
+If neither exists, nuntio runs with the defaults. A `config.toml` you then create in an existing `~/.config/nuntio/` directory is picked up right away; a new `~/.nuntio.toml` takes effect when you restart nuntio. If both exist, `~/.nuntio.toml` is ignored and a warning says so. `nuntio --config <path>` skips the lookup and uses the given file.
+
+The paths are the same on Linux, macOS and Windows (on Windows, `~` is your user profile folder, e.g. `C:\Users\<name>`), so one dotfiles setup works everywhere. Symlinked config files are supported.
+
+Custom themes go in a `themes/` directory next to the config file, for example `~/.config/nuntio/themes/`. With `~/.nuntio.toml`, they still go in `~/.config/nuntio/themes/`.
 
 ## Reloading
 
@@ -173,7 +174,7 @@ Theme names are case-insensitive. If a theme can't be found, nuntio falls back t
 
 ### Custom themes
 
-Put theme files in the `themes/` directory next to your config file. Two formats are supported:
+Put theme files in the [`themes/` directory](#location), usually `~/.config/nuntio/themes/`. Two formats are supported:
 
 - **`.itermcolors`**: color presets exported from iTerm2, or downloaded from collections such as [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes). The theme name is the file name without the extension, so `Gruvbox Dark.itermcolors` becomes `theme = "Gruvbox Dark"`.
 - **`.toml`**: the same format as nuntio's built-in themes. If you leave out `name`, the file name is used.

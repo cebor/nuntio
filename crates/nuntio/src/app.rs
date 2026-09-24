@@ -157,9 +157,8 @@ fn palette_from(theme: &Theme) -> Palette {
     palette
 }
 
-/// User themes live next to the config file.
 fn themes_dir(config_path: Option<&Path>) -> Option<PathBuf> {
-    config_path?.parent().map(|dir| dir.join("themes"))
+    nuntio_config::themes_dir(config_path?)
 }
 
 pub struct App {

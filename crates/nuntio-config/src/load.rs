@@ -15,8 +15,60 @@ pub fn config_dir() -> Option<PathBuf> {
     Some(base.join("nuntio"))
 }
 
-pub fn default_config_path() -> Option<PathBuf> {
-    config_dir().map(|dir| dir.join("config.toml"))
+/// File name of the alternative config in the home directory.
+const HOME_CONFIG: &str = ".nuntio.toml";
+
+/// The config file to use when none is given on the command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigLocation {
+    pub path: PathBuf,
+    /// `~/.nuntio.toml`, if it exists but is ignored because
+    /// `<config dir>/config.toml` exists too.
+    pub shadowed: Option<PathBuf>,
+}
+
+/// `<config dir>/config.toml` if it exists, else `~/.nuntio.toml` if that
+/// exists. With neither, the former, so creating it later is picked up by
+/// hot reload.
+pub fn locate_config() -> Option<ConfigLocation> {
+    choose_config(
+        config_dir().map(|dir| dir.join("config.toml")),
+        dirs::home_dir().map(|home| home.join(HOME_CONFIG)),
+        |path| path.is_file(),
+    )
+}
+
+fn choose_config(
+    primary: Option<PathBuf>,
+    home: Option<PathBuf>,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<ConfigLocation> {
+    let home = home.filter(|path| exists(path));
+    let location = match (primary, home) {
+        (Some(primary), home) if exists(&primary) => ConfigLocation {
+            path: primary,
+            shadowed: home,
+        },
+        (_, Some(home)) => ConfigLocation {
+            path: home,
+            shadowed: None,
+        },
+        (primary, None) => ConfigLocation {
+            path: primary?,
+            shadowed: None,
+        },
+    };
+    Some(location)
+}
+
+/// Directory with user themes for the config at `config_path`: `themes/`
+/// next to it, except for `~/.nuntio.toml`, whose themes stay in
+/// `<config dir>/themes` rather than cluttering the home directory.
+pub fn themes_dir(config_path: &Path) -> Option<PathBuf> {
+    if config_path.file_name() == Some(HOME_CONFIG.as_ref()) {
+        return config_dir().map(|dir| dir.join("themes"));
+    }
+    config_path.parent().map(|dir| dir.join("themes"))
 }
 
 /// A config that could not be used; the previous one stays active.
@@ -199,6 +251,39 @@ mod tests {
         }
         assert!(parse("shell = { wsl = \"Ubuntu\", wsl_user = \"root\" }").is_ok());
         assert!(parse("shell = { wsl = \"Ubuntu\", program = \"fish\" }").is_ok());
+    }
+
+    #[test]
+    fn config_location() {
+        let primary = PathBuf::from("/home/u/.config/nuntio/config.toml");
+        let home = PathBuf::from("/home/u/.nuntio.toml");
+        let choose = |existing: &[&PathBuf]| {
+            choose_config(Some(primary.clone()), Some(home.clone()), |p| {
+                existing.iter().any(|e| e.as_path() == p)
+            })
+            .unwrap()
+        };
+        let at = |path: &PathBuf, shadowed: Option<&PathBuf>| ConfigLocation {
+            path: path.clone(),
+            shadowed: shadowed.cloned(),
+        };
+        assert_eq!(choose(&[]), at(&primary, None));
+        assert_eq!(choose(&[&primary]), at(&primary, None));
+        assert_eq!(choose(&[&home]), at(&home, None));
+        assert_eq!(choose(&[&primary, &home]), at(&primary, Some(&home)));
+        assert_eq!(choose_config(None, None, |_| true), None);
+    }
+
+    #[test]
+    fn themes_next_to_config_except_in_home() {
+        assert_eq!(
+            themes_dir(Path::new("/etc/nuntio/custom.toml")).unwrap(),
+            Path::new("/etc/nuntio/themes")
+        );
+        assert_eq!(
+            themes_dir(Path::new("/home/u/.nuntio.toml")),
+            config_dir().map(|dir| dir.join("themes"))
+        );
     }
 
     #[test]
