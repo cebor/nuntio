@@ -42,6 +42,19 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
         return Some(bytes);
     }
 
+    // Windows reports AltGr as Ctrl+Alt: AltGr+Q on a German layout must type
+    // "@", not Ctrl+Meta+Q. A real Ctrl+Alt combination yields no other
+    // printable text than the key itself.
+    if input.ctrl
+        && input.meta
+        && let Some(text) = input.text
+        && !text.is_empty()
+        && !text.chars().any(char::is_control)
+        && !matches!(input.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text))
+    {
+        return Some(text.as_bytes().to_vec());
+    }
+
     if input.ctrl
         && let Key::Character(s) = input.unmodified
         && let Some(byte) = control_byte(s)
@@ -309,6 +322,32 @@ mod tests {
         assert_eq!(char_key("x", None, ctrl_meta).unwrap(), b"\x1b\x18");
         assert_eq!(char_key("é", Some("é"), NONE).unwrap(), "é".as_bytes());
         assert_eq!(char_key("a", None, NONE), None);
+    }
+
+    #[test]
+    fn altgr_types_its_character() {
+        let ctrl_alt = Mods {
+            ctrl: true,
+            meta: true,
+            shift: false,
+        };
+        let key = |c: &str, unmodified: &str, text: Option<&str>| {
+            encode_with(
+                Key::Character(c.into()),
+                Key::Character(unmodified.into()),
+                text,
+                KeyLocation::Standard,
+                ctrl_alt,
+                TermMode::empty(),
+            )
+        };
+        // AltGr+Q and AltGr+7 on a German layout (Windows).
+        assert_eq!(key("@", "q", Some("@")).unwrap(), b"@");
+        assert_eq!(key("{", "7", Some("{")).unwrap(), b"{");
+        // Real Ctrl+Alt combinations stay control characters with ESC.
+        assert_eq!(key("a", "a", Some("\u{1}")).unwrap(), b"\x1b\x01");
+        assert_eq!(key("a", "a", Some("a")).unwrap(), b"\x1b\x01");
+        assert_eq!(key("a", "a", None).unwrap(), b"\x1b\x01");
     }
 
     #[test]
