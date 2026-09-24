@@ -251,3 +251,12 @@ fn search_survives_a_cleared_scrollback() {
         .continue_from(&search);
     assert!(!handle.search(&mut refined, true));
 }
+
+#[test]
+fn osc8_links_with_unknown_schemes_are_ignored() {
+    let (handle, rx) = spawn("printf '\\033]8;;ms-msdt:/id x\\033\\\\click\\033]8;;\\033\\\\'");
+    wait_for_exit(&rx);
+
+    assert_eq!(line_text(&handle, 0), "click");
+    assert_eq!(handle.link_at(at(2, 0)), None);
+}

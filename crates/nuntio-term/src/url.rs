@@ -56,7 +56,7 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
 
     // OSC 8 hyperlink: the run of cells carrying the same link.
     let cell: &Cell = &grid[point];
-    if let Some(link) = cell.hyperlink() {
+    if let Some(link) = cell.hyperlink().filter(|l| has_known_scheme(l.uri())) {
         let same = |p: &Point| grid[*p].hyperlink().as_ref() == Some(&link);
         let start = points[..index]
             .iter()
@@ -85,6 +85,13 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
 const SCHEMES: [&str; 7] = [
     "https://", "http://", "file://", "ftp://", "ssh://", "git://", "mailto:",
 ];
+
+/// Whether `uri` uses one of [`SCHEMES`]. OSC 8 links can carry any URI,
+/// and opening e.g. `ms-msdt:` or `search-ms:` runs OS protocol handlers.
+fn has_known_scheme(uri: &str) -> bool {
+    let chars: Vec<char> = uri.chars().take(8).collect();
+    SCHEMES.iter().any(|scheme| starts_with(&chars, scheme))
+}
 
 /// Characters that end a URL.
 fn is_delimiter(c: char) -> bool {
@@ -186,6 +193,17 @@ mod tests {
             urls("https://en.wikipedia.org/wiki/Rust_(programming_language)"),
             ["https://en.wikipedia.org/wiki/Rust_(programming_language)"]
         );
+    }
+
+    #[test]
+    fn only_known_schemes_are_links() {
+        assert!(has_known_scheme("https://example.com"));
+        assert!(has_known_scheme("MAILTO:me@example.com"));
+        assert!(has_known_scheme("file:///tmp"));
+        assert!(!has_known_scheme("ms-msdt:/id PCWDiagnostic"));
+        assert!(!has_known_scheme("search-ms:query=x"));
+        assert!(!has_known_scheme("javascript:alert(1)"));
+        assert!(!has_known_scheme(""));
     }
 
     #[test]
