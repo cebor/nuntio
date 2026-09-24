@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "xtask"]
+# `cargo run` and friends at the root target the terminal, not the xtask.
+default-members = ["crates/nuntio"]
 
 [workspace.package]
 version = "0.1.0"
