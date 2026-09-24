@@ -447,12 +447,13 @@ fn wslenv(existing: Option<&str>) -> String {
     entries.join(":")
 }
 
-/// Paste payload: with bracketed paste the text is wrapped in markers (and any
-/// embedded end marker removed so it cannot break out); without it, newlines
-/// become carriage returns like a typed Enter.
+/// Paste payload: with bracketed paste the text is wrapped in markers, with
+/// every ESC removed so no end marker can be smuggled in (removing only
+/// `ESC [201~` once would turn `ESC [20ESC [201~1~` into a new one); without
+/// it, newlines become carriage returns like a typed Enter.
 fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
-        let body = text.replace("\x1b[201~", "");
+        let body = text.replace('\x1b', "");
         [b"\x1b[200~", body.as_bytes(), b"\x1b[201~"].concat()
     } else {
         text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
@@ -486,7 +487,12 @@ mod tests {
     fn bracketed_paste_cannot_be_escaped() {
         assert_eq!(
             encode_paste("x\x1b[201~rm -rf ~\n", true),
-            b"\x1b[200~xrm -rf ~\n\x1b[201~"
+            b"\x1b[200~x[201~rm -rf ~\n\x1b[201~"
+        );
+        // Removing the marker would reassemble it from the pieces around it.
+        assert_eq!(
+            encode_paste("\x1b[20\x1b[201~1~echo pwned\n", true),
+            b"\x1b[200~[20[201~1~echo pwned\n\x1b[201~"
         );
     }
 
