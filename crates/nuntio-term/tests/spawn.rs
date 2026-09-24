@@ -121,3 +121,21 @@ fn selection_kinds() {
     handle.clear_selection();
     assert_eq!(handle.selection_text(), None);
 }
+
+#[test]
+fn scrolling_stops_at_both_ends() {
+    let (handle, rx) = spawn("for i in $(seq 1 30); do echo line$i; done; printf end");
+    wait_for_exit(&rx);
+    let top = |h: &TermHandle| line_text(h, 0);
+
+    assert_eq!(top(&handle), "line27");
+    handle.scroll(3);
+    assert_eq!(top(&handle), "line24");
+    handle.scroll(-10);
+    assert_eq!(top(&handle), "line27");
+    handle.scroll(1000);
+    assert_eq!(top(&handle), "line1");
+    handle.scroll_page(false);
+    handle.scroll(-1000);
+    assert_eq!(top(&handle), "line27");
+}

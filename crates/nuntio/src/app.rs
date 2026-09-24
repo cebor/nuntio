@@ -509,19 +509,27 @@ impl App {
         let cell_height = state.renderer.cell_metrics().height as f64;
         // Positive = scroll up (content moves down, towards older lines).
         let lines = match delta {
-            MouseScrollDelta::LineDelta(_, y) => (y as f64 * WHEEL_LINES).round() as i32,
+            MouseScrollDelta::LineDelta(_, y) => {
+                state.mouse.scroll_pixels = 0.0;
+                (y as f64 * WHEEL_LINES).round() as i32
+            }
             MouseScrollDelta::PixelDelta(p) => {
+                // A leftover from the other direction must not eat this scroll.
+                if state.mouse.scroll_pixels * p.y < 0.0 {
+                    state.mouse.scroll_pixels = 0.0;
+                }
                 state.mouse.scroll_pixels += p.y;
                 let lines = (state.mouse.scroll_pixels / cell_height).trunc();
                 state.mouse.scroll_pixels -= lines * cell_height;
                 lines as i32
             }
         };
+        let mode = state.term.mode();
+        tracing::trace!(?delta, lines, ?mode, "mouse wheel");
         if lines == 0 {
             return;
         }
 
-        let mode = state.term.mode();
         if state.reports_mouse(mode) {
             let Some(pos) = state.mouse.position else {
                 return;
