@@ -14,6 +14,12 @@ pub enum Action {
     FontDecrease,
     FontReset,
     ClearScrollback,
+    NewTab,
+    CloseTab,
+    NextTab,
+    PreviousTab,
+    /// Activate the tab at this index (0-based).
+    SelectTab(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +65,7 @@ impl Bindings {
             action,
         };
 
-        Self(vec![
+        let mut bindings = vec![
             char('c', cmd_shift, Copy),
             char('v', cmd_shift, Paste),
             named(NamedKey::Insert, shift, Paste),
@@ -73,7 +79,28 @@ impl Bindings {
             named(NamedKey::PageDown, shift, ScrollPageDown),
             named(NamedKey::ArrowUp, cmd_shift, ScrollLineUp),
             named(NamedKey::ArrowDown, cmd_shift, ScrollLineDown),
-        ])
+            char('t', cmd_shift, NewTab),
+            char('w', cmd_shift, CloseTab),
+        ];
+        if cfg!(target_os = "macos") {
+            let cmd = ModifiersState::SUPER;
+            bindings.push(char(']', cmd | shift, NextTab));
+            bindings.push(char('[', cmd | shift, PreviousTab));
+        } else {
+            let ctrl = ModifiersState::CONTROL;
+            bindings.push(named(NamedKey::Tab, ctrl, NextTab));
+            bindings.push(named(NamedKey::Tab, ctrl | shift, PreviousTab));
+        }
+        // Cmd+1…9 on macOS, Alt+1…9 elsewhere.
+        let select_mods = if cfg!(target_os = "macos") {
+            ModifiersState::SUPER
+        } else {
+            ModifiersState::ALT
+        };
+        for (i, digit) in ('1'..='9').enumerate() {
+            bindings.push(char(digit, select_mods, SelectTab(i)));
+        }
+        Self(bindings)
     }
 
     /// `key` should be the key without modifiers applied (so Ctrl+Shift+C
@@ -124,6 +151,15 @@ mod tests {
             b.lookup(&Key::Named(NamedKey::Insert), ModifiersState::SHIFT),
             Some(Action::Paste)
         );
+        assert_eq!(b.lookup(&ch("t"), ctrl_shift), Some(Action::NewTab));
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::Tab), ctrl | ModifiersState::SHIFT),
+            Some(Action::PreviousTab)
+        );
+        assert_eq!(
+            b.lookup(&ch("3"), ModifiersState::ALT),
+            Some(Action::SelectTab(2))
+        );
     }
 
     #[test]
@@ -134,5 +170,7 @@ mod tests {
         assert_eq!(b.lookup(&ch("c"), cmd), Some(Action::Copy));
         assert_eq!(b.lookup(&ch("k"), cmd), Some(Action::ClearScrollback));
         assert_eq!(b.lookup(&ch("c"), ModifiersState::CONTROL), None);
+        assert_eq!(b.lookup(&ch("t"), cmd), Some(Action::NewTab));
+        assert_eq!(b.lookup(&ch("1"), cmd), Some(Action::SelectTab(0)));
     }
 }

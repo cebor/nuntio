@@ -2,6 +2,7 @@
 
 mod palette;
 mod pane;
+mod process;
 mod snapshot;
 
 pub use alacritty_terminal::term::TermMode;

@@ -78,6 +78,7 @@ mod tests {
                 blinking: false,
             }),
             background: Rgb::default(),
+            foreground: Rgb::default(),
         }
     }
 

@@ -139,3 +139,19 @@ fn scrolling_stops_at_both_ends() {
     handle.scroll(-1000);
     assert_eq!(top(&handle), "line27");
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn foreground_process_and_directory() {
+    let (handle, _rx) = spawn("cd /tmp && exec sleep 5");
+    // Wait until the shell has exec'd into sleep.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while handle.process_name() != "sleep" && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(handle.process_name(), "sleep");
+    assert_eq!(
+        handle.working_directory().as_deref(),
+        Some(std::path::Path::new("/tmp"))
+    );
+}

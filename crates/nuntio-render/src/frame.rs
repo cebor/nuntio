@@ -1,0 +1,40 @@
+use nuntio_term::{Rgb, Snapshot};
+
+/// Everything drawn in one frame, back to front: terminal panes, then UI
+/// rectangles, then UI text.
+#[derive(Debug, Clone, Copy)]
+pub struct Frame<'a> {
+    /// Clear color for areas nothing else covers.
+    pub background: Rgb,
+    pub panes: &'a [PaneView<'a>],
+    pub rects: &'a [UiRect],
+    pub texts: &'a [UiText],
+}
+
+/// A terminal snapshot and where its grid starts, in physical pixels.
+#[derive(Debug, Clone, Copy)]
+pub struct PaneView<'a> {
+    pub snapshot: &'a Snapshot,
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub color: Rgb,
+}
+
+/// A line of UI text in the terminal font. Characters advance by the cell
+/// width (two cells for wide characters); `y` is the top of the text row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiText {
+    pub x: f32,
+    pub y: f32,
+    pub text: String,
+    pub color: Rgb,
+    pub bold: bool,
+}

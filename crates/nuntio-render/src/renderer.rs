@@ -4,11 +4,13 @@ use std::rc::Rc;
 
 use bytemuck::{Pod, Zeroable};
 use nuntio_term::{CursorStyle, Rgb, Snapshot, SnapshotCell};
+use unicode_width::UnicodeWidthChar;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::atlas::{ATLAS_SIZE, Atlas, AtlasRegion};
 use crate::box_drawing;
 use crate::font::{CellMetrics, FaceStyle, Fonts};
+use crate::frame::{Frame, UiText};
 use crate::gpu::{FrameStatus, GpuContext, GpuError};
 
 const KIND_SOLID: u32 = 0;
@@ -73,13 +75,6 @@ struct Sprite {
 }
 
 struct AtlasFull;
-
-/// Where on the surface the terminal grid is drawn, in physical pixels.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Viewport {
-    pub x: u32,
-    pub y: u32,
-}
 
 pub struct Renderer {
     gpu: GpuContext,
@@ -252,19 +247,20 @@ impl Renderer {
         self.color_atlas.clear();
     }
 
-    /// Draw a terminal snapshot and present it.
-    pub fn render(&mut self, snapshot: &Snapshot, viewport: Viewport) -> FrameStatus {
-        if self.build_instances(snapshot, viewport).is_err() {
+    /// Draw a frame and present it.
+    pub fn render(&mut self, frame: &Frame) -> FrameStatus {
+        if self.build_instances(frame).is_err() {
             // The atlas filled up mid-frame: start over with an empty one.
             tracing::debug!("glyph atlas full, clearing");
             self.clear_glyphs();
-            if self.build_instances(snapshot, viewport).is_err() {
+            if self.build_instances(frame).is_err() {
                 tracing::warn!("screen content does not fit into the glyph atlas");
             }
         }
+        let background = frame.background;
 
-        let frame = match self.gpu.acquire() {
-            Ok(frame) => frame,
+        let surface_texture = match self.gpu.acquire() {
+            Ok(texture) => texture,
             Err(status) => return status,
         };
         let device = &self.gpu.device;
@@ -287,15 +283,14 @@ impl Renderer {
             bytemuck::cast_slice(&self.instances),
         );
 
-        let view = frame
+        let view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frame"),
         });
         {
-            let bg = snapshot.background;
-            let [r, g, b, a] = rgba(bg).map(f64::from);
+            let [r, g, b, a] = rgba(background).map(f64::from);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("terminal"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -317,24 +312,64 @@ impl Renderer {
             }
         }
         queue.submit([encoder.finish()]);
-        queue.present(frame);
+        queue.present(surface_texture);
         FrameStatus::Presented
     }
 
-    fn build_instances(
-        &mut self,
-        snapshot: &Snapshot,
-        viewport: Viewport,
-    ) -> Result<(), AtlasFull> {
+    fn build_instances(&mut self, frame: &Frame) -> Result<(), AtlasFull> {
         self.instances.clear();
+        for pane in frame.panes {
+            self.push_pane(pane.snapshot, pane.x, pane.y)?;
+        }
+        for r in frame.rects {
+            self.instances
+                .push(Instance::solid(r.x, r.y, r.width, r.height, r.color));
+        }
+        for text in frame.texts {
+            self.push_text(text)?;
+        }
+        Ok(())
+    }
+
+    fn push_text(&mut self, text: &UiText) -> Result<(), AtlasFull> {
+        let cw = self.fonts.metrics().width as f32;
+        let style = FaceStyle {
+            bold: text.bold,
+            italic: false,
+        };
+        let mut x = text.x;
+        for c in text.text.chars() {
+            let width = c.width().unwrap_or(0);
+            if width == 0 {
+                continue;
+            }
+            if c != ' ' {
+                let sprites = self.glyph_sprites(GlyphKey::Char(c, style))?;
+                self.push_sprites(&sprites, x, text.y, text.color);
+            }
+            x += width as f32 * cw;
+        }
+        Ok(())
+    }
+
+    fn push_sprites(&mut self, sprites: &[Sprite], x: f32, y: f32, color: Rgb) {
+        for sprite in sprites {
+            let r = sprite.region;
+            self.instances.push(Instance {
+                pos: [x + sprite.x as f32, y + sprite.y as f32],
+                size: [r.width as f32, r.height as f32],
+                uv: [r.x as f32, r.y as f32, r.width as f32, r.height as f32],
+                color: rgba(color),
+                kind: if sprite.color { KIND_COLOR } else { KIND_MASK },
+                _pad: [0; 3],
+            });
+        }
+    }
+
+    fn push_pane(&mut self, snapshot: &Snapshot, x0: f32, y0: f32) -> Result<(), AtlasFull> {
         let m = self.fonts.metrics();
         let (cw, ch) = (m.width as f32, m.height as f32);
-        let origin = |column: usize, line: usize| {
-            (
-                viewport.x as f32 + column as f32 * cw,
-                viewport.y as f32 + line as f32 * ch,
-            )
-        };
+        let origin = |column: usize, line: usize| (x0 + column as f32 * cw, y0 + line as f32 * ch);
         let cursor = snapshot.cursor;
         let block_cursor = cursor.filter(|c| c.style == CursorStyle::Block);
 
@@ -401,17 +436,8 @@ impl Renderer {
                 if cell.is_blank() {
                     continue;
                 }
-                for sprite in self.sprites(cell)?.iter() {
-                    let r = sprite.region;
-                    self.instances.push(Instance {
-                        pos: [x + sprite.x as f32, y + sprite.y as f32],
-                        size: [r.width as f32, r.height as f32],
-                        uv: [r.x as f32, r.y as f32, r.width as f32, r.height as f32],
-                        color: rgba(fg),
-                        kind: if sprite.color { KIND_COLOR } else { KIND_MASK },
-                        _pad: [0; 3],
-                    });
-                }
+                let sprites = self.sprites(cell)?;
+                self.push_sprites(&sprites, x, y, fg);
             }
         }
         Ok(())
@@ -432,13 +458,18 @@ impl Renderer {
                 style,
             ),
         };
+        self.glyph_sprites(key)
+    }
+
+    /// Look up or rasterize the glyphs for a key.
+    fn glyph_sprites(&mut self, key: GlyphKey) -> Result<Rc<[Sprite]>, AtlasFull> {
         if let Some(sprites) = self.glyphs.get(&key) {
             return Ok(sprites.clone());
         }
 
-        let text = match &key {
-            GlyphKey::Char(c, _) => c.to_string(),
-            GlyphKey::Cluster(s, _) => s.to_string(),
+        let (text, style) = match &key {
+            GlyphKey::Char(c, style) => (c.to_string(), *style),
+            GlyphKey::Cluster(s, style) => (s.to_string(), *style),
         };
         let metrics = self.fonts.metrics();
         let queue = &self.gpu.queue;

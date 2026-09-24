@@ -3,9 +3,11 @@
 mod atlas;
 mod box_drawing;
 mod font;
+mod frame;
 mod gpu;
 mod renderer;
 
 pub use font::CellMetrics;
+pub use frame::{Frame, PaneView, UiRect, UiText};
 pub use gpu::{FrameStatus, GpuError};
-pub use renderer::{Renderer, Viewport};
+pub use renderer::Renderer;

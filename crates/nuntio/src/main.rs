@@ -4,6 +4,9 @@ mod event;
 mod ime;
 mod input;
 mod mouse;
+mod tab_bar;
+mod tabs;
+mod window;
 
 use std::path::PathBuf;
 

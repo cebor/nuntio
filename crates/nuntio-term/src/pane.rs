@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -15,6 +15,7 @@ use alacritty_terminal::tty;
 use thiserror::Error;
 
 use crate::palette::Palette;
+use crate::process;
 use crate::snapshot::Snapshot;
 
 #[derive(Debug, Error)]
@@ -157,6 +158,8 @@ pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
     listener: Listener,
     sender: EventLoopSender,
+    shell_pid: Option<u32>,
+    shell_name: String,
 }
 
 impl TermHandle {
@@ -182,6 +185,11 @@ impl TermHandle {
         };
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
 
+        let shell_program = options
+            .shell
+            .as_ref()
+            .map(|s| s.program.clone())
+            .unwrap_or_else(default_shell_name);
         let pty_options = tty::Options {
             shell: options.shell.map(|s| tty::Shell::new(s.program, s.args)),
             working_directory: options.working_directory,
@@ -199,6 +207,13 @@ impl TermHandle {
             escape_args: true,
         };
         let pty = tty::new(&pty_options, size.window_size(), 0).map_err(SpawnError::Pty)?;
+        #[cfg(unix)]
+        let shell_pid = Some(pty.child().id());
+        #[cfg(windows)]
+        let shell_pid = pty.child_watcher().pid().map(|pid| pid.get());
+        let shell_name = Path::new(&shell_program)
+            .file_stem()
+            .map_or(shell_program.clone(), |s| s.to_string_lossy().into_owned());
 
         let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)
             .map_err(SpawnError::EventLoop)?;
@@ -210,6 +225,8 @@ impl TermHandle {
             term,
             listener,
             sender,
+            shell_pid,
+            shell_name,
         })
     }
 
@@ -280,6 +297,19 @@ impl TermHandle {
         let _ = self.sender.send(Msg::Resize(size.window_size()));
     }
 
+    /// Name of the foreground process, or the shell's name if unknown.
+    /// Used as the tab title when the application sets none.
+    pub fn process_name(&self) -> String {
+        self.shell_pid
+            .and_then(process::foreground_name)
+            .unwrap_or_else(|| self.shell_name.clone())
+    }
+
+    /// Working directory of the foreground process, if it can be determined.
+    pub fn working_directory(&self) -> Option<PathBuf> {
+        self.shell_pid.and_then(process::working_directory)
+    }
+
     /// Terminal modes, e.g. for application cursor keys.
     pub fn mode(&self) -> term::TermMode {
         *self.term.lock().mode()
@@ -344,6 +374,15 @@ impl GridPoint {
             Side::Left
         };
         (point, side)
+    }
+}
+
+/// The shell alacritty starts when none is configured.
+fn default_shell_name() -> String {
+    if cfg!(windows) {
+        "powershell".into()
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "sh".into())
     }
 }
 

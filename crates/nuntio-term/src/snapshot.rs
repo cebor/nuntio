@@ -65,6 +65,7 @@ pub struct Snapshot {
     pub cells: Vec<SnapshotCell>,
     pub cursor: Option<SnapshotCursor>,
     pub background: Rgb,
+    pub foreground: Rgb,
 }
 
 impl Snapshot {
@@ -159,6 +160,7 @@ impl Snapshot {
             cells,
             cursor,
             background,
+            foreground,
         }
     }
 }

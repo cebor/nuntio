@@ -1,34 +1,34 @@
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use nuntio_config::{Config, OptionAsMeta};
-use nuntio_render::{CellMetrics, FrameStatus, Renderer, Viewport};
-use nuntio_term::{
-    CursorStyle, GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
-    TermSize,
-};
+use nuntio_render::{FrameStatus, Renderer};
+use nuntio_term::{SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{
     ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::ModifiersKeyState;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, WindowId};
 
 use crate::actions::{Action, Bindings};
 use crate::event::{PaneId, UserEvent};
-use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
-use crate::{ime, input};
+use crate::input;
+use crate::mouse::{Button, MouseAction};
+use crate::tab_bar::BarHit;
+use crate::window::{BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabDrag, WindowState};
 
-const DEFAULT_TITLE: &str = "nuntio";
 const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
 /// Lines scrolled per wheel notch.
 const WHEEL_LINES: f64 = 3.0;
-const BLINK_INTERVAL: Duration = Duration::from_millis(530);
+/// Pointer travel before a pressed tab starts moving.
+const TAB_DRAG_THRESHOLD: f64 = 4.0;
 
 /// WSLg's Weston (9.0, RDP backend) segfaults on pointer motion over windows
 /// with winit's client-side decorations, taking every Wayland client down with
@@ -51,147 +51,45 @@ fn is_wslg_wayland(_event_loop: &ActiveEventLoop) -> bool {
     false
 }
 
-/// Pointer state for selection and mouse reporting.
-#[derive(Default)]
-struct MouseState {
-    position: Option<PhysicalPosition<f64>>,
-    /// Button held down that is reported to the application.
-    reported_button: Option<Button>,
-    /// Last cell a motion event was reported for, to avoid duplicates.
-    last_reported_cell: Option<(usize, usize)>,
-    /// A local selection drag is in progress.
-    selecting: bool,
-    clicks: ClickCounter,
-    /// Sub-line remainder of pixel-precise (trackpad) scrolling.
-    scroll_pixels: f64,
-}
+/// Window decorations for this platform and config.
+fn chrome(
+    event_loop: &ActiveEventLoop,
+    config: &Config,
+    attrs: WindowAttributes,
+) -> (WindowAttributes, Chrome) {
+    #[cfg(target_os = "macos")]
+    {
+        use nuntio_config::MacosTitlebar;
+        use winit::platform::macos::WindowAttributesExtMacOS;
 
-struct WindowState {
-    window: Arc<Window>,
-    renderer: Renderer,
-    term: TermHandle,
-    grid: TermSize,
-    modifiers: Modifiers,
-    mouse: MouseState,
-    focused: bool,
-    /// Uncommitted IME text, shown at the cursor.
-    preedit: Option<String>,
-    blink: Blink,
-    /// Cell the IME candidate window was last anchored to.
-    ime_cell: Option<(usize, usize)>,
-}
-
-/// Cursor blinking, only while the application asks for it (DECSCUSR).
-struct Blink {
-    active: bool,
-    visible: bool,
-    next_toggle: Instant,
-}
-
-impl Blink {
-    /// Show the cursor and restart the interval, e.g. after typing.
-    fn reset(&mut self) {
-        self.visible = true;
-        self.next_toggle = Instant::now() + BLINK_INTERVAL;
-    }
-}
-
-impl WindowState {
-    /// Padding around the grid in physical pixels.
-    fn padding(&self, config: &Config) -> (u32, u32) {
-        padding(config, self.window.scale_factor())
-    }
-
-    fn resize_term(&mut self, config: &Config) {
-        self.grid = grid_size(
-            self.window.inner_size(),
-            self.padding(config),
-            self.renderer.cell_metrics(),
-        );
-        self.term.resize(self.grid);
-    }
-
-    fn redraw(&mut self, config: &Config) -> FrameStatus {
-        let mut snapshot = self.term.snapshot();
-        if let Some(preedit) = &self.preedit {
-            ime::overlay_preedit(&mut snapshot, preedit);
-        }
-
-        let blinking =
-            self.focused && self.preedit.is_none() && snapshot.cursor.is_some_and(|c| c.blinking);
-        if blinking != self.blink.active {
-            self.blink.active = blinking;
-            self.blink.reset();
-        }
-
-        if let Some(cursor) = snapshot.cursor.as_mut() {
-            self.update_ime_area(config, cursor.column, cursor.line);
-            if !self.focused {
-                cursor.style = CursorStyle::HollowBlock;
-            }
-        }
-        if self.blink.active && !self.blink.visible {
-            snapshot.cursor = None;
-        }
-
-        let (x, y) = self.padding(config);
-        self.renderer.render(&snapshot, Viewport { x, y })
-    }
-
-    /// Keep the IME candidate window next to the cursor.
-    fn update_ime_area(&mut self, config: &Config, column: usize, line: usize) {
-        if self.ime_cell == Some((column, line)) {
-            return;
-        }
-        self.ime_cell = Some((column, line));
-        let (pad_x, pad_y) = self.padding(config);
-        let cell = self.renderer.cell_metrics();
-        self.window.set_ime_cursor_area(
-            PhysicalPosition::new(
-                pad_x + column as u32 * cell.width,
-                pad_y + line as u32 * cell.height,
+        let _ = event_loop;
+        match config.window.macos_titlebar {
+            MacosTitlebar::Native => (attrs, Chrome::System),
+            // Room for the traffic-light buttons, in logical pixels.
+            MacosTitlebar::Transparent => (
+                attrs
+                    .with_titlebar_transparent(true)
+                    .with_fullsize_content_view(true)
+                    .with_title_hidden(true),
+                Chrome::TitlebarInset { left: 78.0 },
             ),
-            PhysicalSize::new(cell.width, cell.height),
-        );
-    }
-
-    /// Grid cell under a window position, clamped to the grid.
-    fn cell_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> GridPoint {
-        let (pad_x, pad_y) = self.padding(config);
-        let cell = self.renderer.cell_metrics();
-        let x = (pos.x - pad_x as f64).max(0.0);
-        let y = (pos.y - pad_y as f64).max(0.0);
-        let column = ((x / cell.width as f64) as usize).min(self.grid.columns as usize - 1);
-        let line = ((y / cell.height as f64) as usize).min(self.grid.lines as usize - 1);
-        let within = x - column as f64 * cell.width as f64;
-        GridPoint {
-            column,
-            line,
-            right_half: within >= cell.width as f64 / 2.0,
+            MacosTitlebar::None => (
+                attrs
+                    .with_titlebar_transparent(true)
+                    .with_fullsize_content_view(true)
+                    .with_title_hidden(true)
+                    .with_titlebar_buttons_hidden(true),
+                Chrome::TitlebarInset { left: 0.0 },
+            ),
         }
     }
-
-    fn mouse_mods(&self) -> MouseMods {
-        MouseMods {
-            shift: self.modifiers.state().shift_key(),
-            alt: self.modifiers.state().alt_key(),
-            ctrl: self.modifiers.state().control_key(),
-        }
-    }
-
-    /// Mouse events go to the application unless Shift is held, which
-    /// forces local selection like in xterm.
-    fn reports_mouse(&self, mode: TermMode) -> bool {
-        mouse::reporting_enabled(mode) && !self.modifiers.state().shift_key()
-    }
-
-    fn report(&mut self, button: Option<Button>, action: MouseAction, point: GridPoint) {
-        let mode = self.term.mode();
-        let mods = self.mouse_mods();
-        if let Some(bytes) =
-            mouse::encode_report(button, action, mods, point.column, point.line, mode)
-        {
-            self.term.write(bytes);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = config;
+        if is_wslg_wayland(event_loop) {
+            (attrs.with_decorations(false), Chrome::Undecorated)
+        } else {
+            (attrs, Chrome::System)
         }
     }
 }
@@ -212,24 +110,16 @@ fn alt_is_meta(mods: &Modifiers, option_as_meta: OptionAsMeta) -> bool {
     }
 }
 
-fn padding(config: &Config, scale: f64) -> (u32, u32) {
-    let p = config.window.padding;
-    (
-        (p.x as f64 * scale).round() as u32,
-        (p.y as f64 * scale).round() as u32,
-    )
-}
-
-/// How many cells fit into the window, minus padding.
-fn grid_size(window: PhysicalSize<u32>, padding: (u32, u32), cell: CellMetrics) -> TermSize {
-    let fit = |available: u32, pad: u32, cell: u32| {
-        (available.saturating_sub(2 * pad) / cell).clamp(1, u16::MAX as u32) as u16
-    };
-    TermSize {
-        columns: fit(window.width, padding.0, cell.width),
-        lines: fit(window.height, padding.1, cell.height),
-        cell_width: cell.width.min(u16::MAX as u32) as u16,
-        cell_height: cell.height.min(u16::MAX as u32) as u16,
+fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
+    match direction {
+        ResizeDirection::East => CursorIcon::EResize,
+        ResizeDirection::West => CursorIcon::WResize,
+        ResizeDirection::North => CursorIcon::NResize,
+        ResizeDirection::South => CursorIcon::SResize,
+        ResizeDirection::NorthEast => CursorIcon::NeResize,
+        ResizeDirection::NorthWest => CursorIcon::NwResize,
+        ResizeDirection::SouthEast => CursorIcon::SeResize,
+        ResizeDirection::SouthWest => CursorIcon::SwResize,
     }
 }
 
@@ -240,7 +130,10 @@ pub struct App {
     clipboard: Option<arboard::Clipboard>,
     /// Current font size in points; changed by zoom shortcuts.
     font_size: f32,
+    next_pane_id: u64,
     state: Option<WindowState>,
+    /// The last tab was closed; quit at the next opportunity.
+    exit_requested: bool,
     /// A fatal error that ended the event loop.
     error: Option<anyhow::Error>,
 }
@@ -256,7 +149,9 @@ impl App {
             proxy,
             bindings: Bindings::platform_defaults(),
             clipboard,
+            next_pane_id: 0,
             state: None,
+            exit_requested: false,
             error: None,
         }
     }
@@ -277,11 +172,40 @@ impl App {
         )?)
     }
 
-    fn create_window(&self, event_loop: &ActiveEventLoop) -> Result<WindowState> {
+    /// Start a shell in a new pane. The size is corrected by the next
+    /// `resize_terms`.
+    fn spawn_pane(&mut self, cwd: Option<PathBuf>) -> Result<Pane> {
+        let id = PaneId(self.next_pane_id);
+        self.next_pane_id += 1;
+        let proxy = self.proxy.clone();
+        let options = SpawnOptions {
+            shell: self.config.shell.as_ref().map(|s| Shell {
+                program: s.program.clone(),
+                args: s.args.clone(),
+            }),
+            working_directory: cwd,
+            scrollback: self.config.scrollback,
+        };
+        let size = self.state.as_ref().map_or(
+            nuntio_term::TermSize {
+                columns: 80,
+                lines: 24,
+                cell_width: 1,
+                cell_height: 1,
+            },
+            |s| s.grid,
+        );
+        let term = TermHandle::spawn(options, size, move |event| {
+            let _ = proxy.send_event(UserEvent::Term(id, event));
+        })?;
+        Ok(Pane { id, term })
+    }
+
+    fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState> {
         let attrs = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
-            .with_inner_size(LogicalSize::new(900.0, 600.0))
-            .with_decorations(!is_wslg_wayland(event_loop));
+            .with_inner_size(LogicalSize::new(900.0, 600.0));
+        let (attrs, chrome) = chrome(event_loop, &self.config, attrs);
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
@@ -289,42 +213,10 @@ impl App {
         );
         window.set_ime_allowed(true);
         let renderer = self.create_renderer(&window)?;
-        let grid = grid_size(
-            window.inner_size(),
-            padding(&self.config, window.scale_factor()),
-            renderer.cell_metrics(),
-        );
-
-        let pane = PaneId(0);
-        let proxy = self.proxy.clone();
-        let options = SpawnOptions {
-            shell: self.config.shell.as_ref().map(|s| Shell {
-                program: s.program.clone(),
-                args: s.args.clone(),
-            }),
-            working_directory: None,
-            scrollback: self.config.scrollback,
-        };
-        let term = TermHandle::spawn(options, grid, move |event| {
-            let _ = proxy.send_event(UserEvent::Term(pane, event));
-        })?;
-
-        Ok(WindowState {
-            window,
-            renderer,
-            term,
-            grid,
-            modifiers: Modifiers::default(),
-            mouse: MouseState::default(),
-            focused: true,
-            preedit: None,
-            blink: Blink {
-                active: false,
-                visible: true,
-                next_toggle: Instant::now(),
-            },
-            ime_cell: None,
-        })
+        let pane = self.spawn_pane(None)?;
+        let mut state = WindowState::new(window, renderer, pane, chrome);
+        state.resize_terms(&self.config);
+        Ok(state)
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, err: anyhow::Error) {
@@ -350,7 +242,7 @@ impl App {
     }
 
     fn copy_selection(&mut self) {
-        if let Some(text) = self.state.as_ref().and_then(|s| s.term.selection_text()) {
+        if let Some(text) = self.state.as_ref().and_then(|s| s.term().selection_text()) {
             self.set_clipboard(text);
         }
     }
@@ -360,9 +252,52 @@ impl App {
         if let Some(state) = self.state.as_mut() {
             let scale = state.window.scale_factor();
             state.renderer.set_font_size(self.font_size, scale);
-            state.resize_term(&self.config);
+            state.resize_terms(&self.config);
             state.window.request_redraw();
         }
+    }
+
+    fn new_tab(&mut self) {
+        let cwd = self
+            .state
+            .as_ref()
+            .and_then(|s| s.term().working_directory());
+        let pane = match self.spawn_pane(cwd) {
+            Ok(pane) => pane,
+            Err(err) => {
+                tracing::error!("failed to open tab: {err:#}");
+                return;
+            }
+        };
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        state.send_focus(false);
+        state.tabs.open(pane);
+        // The first extra tab may show the tab bar and shrink the grid.
+        state.resize_terms(&self.config);
+        state.tabs.active().pane.term.resize(state.grid);
+        state.window.request_redraw();
+    }
+
+    /// Close a tab; closing the last one quits.
+    fn close_tab(&mut self, index: usize) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if state.tabs.len() == 1 {
+            self.exit_requested = true;
+            return;
+        }
+        let was_active = index == state.tabs.active_index();
+        state.tabs.close(index);
+        if was_active {
+            state.send_focus(true);
+        }
+        state.mouse.hovered_tab = None;
+        state.mouse.tab_drag = None;
+        state.resize_terms(&self.config);
+        state.window.request_redraw();
     }
 
     fn run_action(&mut self, action: Action) {
@@ -375,17 +310,31 @@ impl App {
                 if let Some(text) = self.clipboard_text()
                     && let Some(state) = self.state.as_ref()
                 {
-                    state.term.paste(&text);
+                    state.term().paste(&text);
                 }
             }
-            Action::ScrollPageUp => state.term.scroll_page(true),
-            Action::ScrollPageDown => state.term.scroll_page(false),
-            Action::ScrollLineUp => state.term.scroll(1),
-            Action::ScrollLineDown => state.term.scroll(-1),
-            Action::ClearScrollback => state.term.clear_history(),
+            Action::ScrollPageUp => state.term().scroll_page(true),
+            Action::ScrollPageDown => state.term().scroll_page(false),
+            Action::ScrollLineUp => state.term().scroll(1),
+            Action::ScrollLineDown => state.term().scroll(-1),
+            Action::ClearScrollback => state.term().clear_history(),
             Action::FontIncrease => self.set_font_size(self.font_size + 1.0),
             Action::FontDecrease => self.set_font_size(self.font_size - 1.0),
             Action::FontReset => self.set_font_size(self.config.font.size),
+            Action::NewTab => self.new_tab(),
+            Action::CloseTab => {
+                let index = state.tabs.active_index();
+                self.close_tab(index);
+            }
+            Action::NextTab => {
+                let next = (state.tabs.active_index() + 1) % state.tabs.len();
+                state.select_tab(next);
+            }
+            Action::PreviousTab => {
+                let len = state.tabs.len();
+                state.select_tab((state.tabs.active_index() + len - 1) % len);
+            }
+            Action::SelectTab(index) => state.select_tab(index),
         }
         if let Some(state) = self.state.as_ref() {
             state.window.request_redraw();
@@ -418,9 +367,9 @@ impl App {
             ctrl: mods.control_key(),
             meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
         };
-        if let Some(bytes) = input::encode_key(&key_input, state.term.mode()) {
-            state.term.clear_selection();
-            state.term.write(bytes);
+        if let Some(bytes) = input::encode_key(&key_input, state.term().mode()) {
+            state.term().clear_selection();
+            state.term().write(bytes);
             if let Some(state) = self.state.as_mut() {
                 state.blink.reset();
             }
@@ -434,7 +383,6 @@ impl App {
         let Some(pos) = state.mouse.position else {
             return;
         };
-        let point = state.cell_at(&self.config, pos);
         let button = match button {
             MouseButton::Left => Button::Left,
             MouseButton::Middle => Button::Middle,
@@ -442,8 +390,50 @@ impl App {
             _ => return,
         };
 
+        if !pressed && button == Button::Left && state.mouse.tab_drag.take().is_some() {
+            return;
+        }
+
+        // Window edges (undecorated windows) and the tab bar come first.
+        if pressed && button == Button::Left {
+            if let Some(direction) = state.resize_edge(pos) {
+                let _ = state.window.drag_resize_window(direction);
+                return;
+            }
+            if let Some(bar) = state.tab_bar(&self.config)
+                && let Some(hit) = bar.hit(pos.x as f32, pos.y as f32)
+            {
+                match hit {
+                    BarHit::Tab(index) => {
+                        state.select_tab(index);
+                        state.mouse.tab_drag = Some(TabDrag {
+                            index,
+                            press_x: pos.x,
+                            moved: false,
+                        });
+                    }
+                    BarHit::Close(index) => self.close_tab(index),
+                    BarHit::Empty => {
+                        let _ = state.window.drag_window();
+                    }
+                }
+                return;
+            }
+        }
+        // Middle click closes a tab, like in browsers and iTerm2.
+        if pressed
+            && button == Button::Middle
+            && let Some(bar) = state.tab_bar(&self.config)
+            && let Some(BarHit::Tab(index) | BarHit::Close(index)) =
+                bar.hit(pos.x as f32, pos.y as f32)
+        {
+            self.close_tab(index);
+            return;
+        }
+
+        let point = state.cell_at(&self.config, pos);
         // Application mouse mode: forward presses and matching releases.
-        let mode = state.term.mode();
+        let mode = state.term().mode();
         if pressed && state.reports_mouse(mode) {
             state.report(Some(button), MouseAction::Press, point);
             state.mouse.reported_button = Some(button);
@@ -469,7 +459,7 @@ impl App {
                 _ if state.modifiers.state().alt_key() => SelectionKind::Block,
                 _ => SelectionKind::Simple,
             };
-            state.term.start_selection(kind, point);
+            state.term().start_selection(kind, point);
             state.mouse.selecting = true;
             state.window.request_redraw();
         } else if state.mouse.selecting {
@@ -485,15 +475,57 @@ impl App {
             return;
         };
         state.mouse.position = Some(pos);
-        let point = state.cell_at(&self.config, pos);
 
-        if state.mouse.selecting {
-            state.term.update_selection(point);
+        let icon = state
+            .resize_edge(pos)
+            .map_or(CursorIcon::Default, resize_cursor);
+        let bar = state.tab_bar(&self.config);
+        let bar_hit = bar.as_ref().and_then(|b| b.hit(pos.x as f32, pos.y as f32));
+        let in_terminal = bar_hit.is_none() && icon == CursorIcon::Default;
+        state
+            .window
+            .set_cursor(if in_terminal { CursorIcon::Text } else { icon });
+
+        let hovered = match bar_hit {
+            Some(BarHit::Tab(i) | BarHit::Close(i)) => Some(i),
+            _ => None,
+        };
+        if hovered != state.mouse.hovered_tab {
+            state.mouse.hovered_tab = hovered;
             state.window.request_redraw();
+        }
+
+        // Reorder tabs by dragging them along the bar.
+        if let Some(mut drag) = state.mouse.tab_drag {
+            if (pos.x - drag.press_x).abs() > TAB_DRAG_THRESHOLD {
+                drag.moved = true;
+            }
+            if drag.moved
+                && let Some(bar) = &bar
+            {
+                let target = bar.slot_at(pos.x as f32).unwrap_or(state.tabs.len() - 1);
+                if target != drag.index {
+                    state.tabs.move_tab(drag.index, target);
+                    drag.index = target;
+                    state.window.request_redraw();
+                }
+            }
+            state.mouse.tab_drag = Some(drag);
             return;
         }
 
-        let mode = state.term.mode();
+        if state.mouse.selecting {
+            let point = state.cell_at(&self.config, pos);
+            state.term().update_selection(point);
+            state.window.request_redraw();
+            return;
+        }
+        if !in_terminal {
+            return;
+        }
+
+        let point = state.cell_at(&self.config, pos);
+        let mode = state.term().mode();
         let cell = (point.column, point.line);
         if state.reports_mouse(mode) && state.mouse.last_reported_cell != Some(cell) {
             state.mouse.last_reported_cell = Some(cell);
@@ -524,7 +556,7 @@ impl App {
                 lines as i32
             }
         };
-        let mode = state.term.mode();
+        let mode = state.term().mode();
         tracing::trace!(?delta, lines, ?mode, "mouse wheel");
         if lines == 0 {
             return;
@@ -553,17 +585,62 @@ impl App {
                 (false, false) => b"\x1b[B",
             };
             state
-                .term
+                .term()
                 .write(arrow.repeat(lines.unsigned_abs() as usize));
         } else {
-            state.term.scroll(lines);
+            state.term().scroll(lines);
             state.window.request_redraw();
+        }
+    }
+
+    fn term_event(&mut self, pane: PaneId, event: TermEvent) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        let Some(index) = state.tabs.position(|p| p.id == pane) else {
+            return;
+        };
+        let active = index == state.tabs.active_index();
+        match event {
+            TermEvent::Wakeup => {
+                if !active && let Some(tab) = state.tabs.get_mut(index) {
+                    tab.activity = true;
+                }
+                state.window.request_redraw();
+            }
+            TermEvent::Title(title) => {
+                if let Some(tab) = state.tabs.get_mut(index) {
+                    tab.title = Some(title);
+                }
+                state.window.request_redraw();
+            }
+            TermEvent::ResetTitle => {
+                if let Some(tab) = state.tabs.get_mut(index) {
+                    tab.title = None;
+                }
+                state.window.request_redraw();
+            }
+            TermEvent::Bell => {
+                if !active && let Some(tab) = state.tabs.get_mut(index) {
+                    tab.bell = true;
+                }
+                if !active || !state.focused {
+                    state.window.request_user_attention(None);
+                }
+                state.window.request_redraw();
+            }
+            TermEvent::Exit => self.close_tab(index),
+            TermEvent::ClipboardStore(text) => self.set_clipboard(text),
         }
     }
 }
 
 impl ApplicationHandler<UserEvent> for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit_requested {
+            event_loop.exit();
+            return;
+        }
         let Some(state) = self.state.as_mut() else {
             return;
         };
@@ -594,17 +671,9 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::Term(_, TermEvent::Wakeup) => state.window.request_redraw(),
-            UserEvent::Term(_, TermEvent::Title(title)) => state.window.set_title(&title),
-            UserEvent::Term(_, TermEvent::ResetTitle) => state.window.set_title(DEFAULT_TITLE),
-            UserEvent::Term(_, TermEvent::Exit) => event_loop.exit(),
-            UserEvent::Term(_, TermEvent::ClipboardStore(text)) => self.set_clipboard(text),
-            UserEvent::Term(_, TermEvent::Bell) => state.window.request_user_attention(None),
+            UserEvent::Term(pane, event) => self.term_event(pane, event),
             UserEvent::ConfigReloaded(_) => {}
         }
     }
@@ -617,24 +686,24 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 state.renderer.resize(size.width, size.height);
-                state.resize_term(&self.config);
+                state.resize_terms(&self.config);
                 state.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 state.renderer.set_font_size(self.font_size, scale_factor);
-                state.resize_term(&self.config);
+                state.resize_terms(&self.config);
                 state.window.request_redraw();
             }
             WindowEvent::Focused(focused) => {
-                state.focused = focused;
-                state.window.request_redraw();
-                if state.term.mode().contains(TermMode::FOCUS_IN_OUT) {
-                    state.term.write(if focused {
-                        &b"\x1b[I"[..]
-                    } else {
-                        &b"\x1b[O"[..]
-                    });
+                // Report while still marked focused, so focus-out gets through.
+                if focused {
+                    state.focused = true;
+                    state.send_focus(true);
+                } else {
+                    state.send_focus(false);
+                    state.focused = false;
                 }
+                state.window.request_redraw();
             }
             WindowEvent::ModifiersChanged(mods) => state.modifiers = mods,
             WindowEvent::KeyboardInput { event, .. } => self.keyboard_input(event),
@@ -644,10 +713,15 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 state.preedit = None;
-                state.term.write(text.into_bytes());
+                state.term().write(text.into_bytes());
             }
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
-            WindowEvent::CursorLeft { .. } => state.mouse.position = None,
+            WindowEvent::CursorLeft { .. } => {
+                state.mouse.position = None;
+                if state.mouse.hovered_tab.take().is_some() {
+                    state.window.request_redraw();
+                }
+            }
             WindowEvent::MouseInput {
                 state: button_state,
                 button,
