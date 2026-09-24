@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use nuntio_config::{Config, OptionAsMeta};
@@ -27,6 +27,8 @@ const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
 /// Lines scrolled per wheel notch.
 const WHEEL_LINES: f64 = 3.0;
+/// Two clicks on the tab bar within this time maximize the window.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Pointer travel before a pressed tab starts moving.
 const TAB_DRAG_THRESHOLD: f64 = 4.0;
 
@@ -294,7 +296,7 @@ impl App {
         if was_active {
             state.send_focus(true);
         }
-        state.mouse.hovered_tab = None;
+        state.mouse.hovered_bar = None;
         state.mouse.tab_drag = None;
         state.resize_terms(&self.config);
         state.window.request_redraw();
@@ -414,8 +416,27 @@ impl App {
                     }
                     BarHit::Close(index) => self.close_tab(index),
                     BarHit::Empty => {
-                        let _ = state.window.drag_window();
+                        // Double click maximizes, like a title bar.
+                        let now = Instant::now();
+                        let double = state
+                            .mouse
+                            .last_bar_click
+                            .is_some_and(|t| now.duration_since(t) < DOUBLE_CLICK);
+                        if double {
+                            state.mouse.last_bar_click = None;
+                            let maximized = state.window.is_maximized();
+                            state.window.set_maximized(!maximized);
+                        } else {
+                            state.mouse.last_bar_click = Some(now);
+                            let _ = state.window.drag_window();
+                        }
                     }
+                    BarHit::Minimize => state.window.set_minimized(true),
+                    BarHit::Maximize => {
+                        let maximized = state.window.is_maximized();
+                        state.window.set_maximized(!maximized);
+                    }
+                    BarHit::CloseWindow => self.exit_requested = true,
                 }
                 return;
             }
@@ -486,12 +507,8 @@ impl App {
             .window
             .set_cursor(if in_terminal { CursorIcon::Text } else { icon });
 
-        let hovered = match bar_hit {
-            Some(BarHit::Tab(i) | BarHit::Close(i)) => Some(i),
-            _ => None,
-        };
-        if hovered != state.mouse.hovered_tab {
-            state.mouse.hovered_tab = hovered;
+        if bar_hit != state.mouse.hovered_bar {
+            state.mouse.hovered_bar = bar_hit;
             state.window.request_redraw();
         }
 
@@ -718,7 +735,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
             WindowEvent::CursorLeft { .. } => {
                 state.mouse.position = None;
-                if state.mouse.hovered_tab.take().is_some() {
+                if state.mouse.hovered_bar.take().is_some() {
                     state.window.request_redraw();
                 }
             }

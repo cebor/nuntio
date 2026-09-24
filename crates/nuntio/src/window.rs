@@ -14,7 +14,7 @@ use winit::window::{ResizeDirection, Window};
 use crate::event::PaneId;
 use crate::ime;
 use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
-use crate::tab_bar::{TabBar, TabLabel};
+use crate::tab_bar::{BarHit, TabBar, TabLabel};
 use crate::tabs::Tabs;
 
 pub const DEFAULT_TITLE: &str = "nuntio";
@@ -40,8 +40,10 @@ pub struct MouseState {
     pub clicks: ClickCounter,
     /// Sub-line remainder of pixel-precise (trackpad) scrolling.
     pub scroll_pixels: f64,
-    /// Tab under the pointer.
-    pub hovered_tab: Option<usize>,
+    /// Tab bar element under the pointer.
+    pub hovered_bar: Option<BarHit>,
+    /// Time of the last click on free tab bar space, to detect double clicks.
+    pub last_bar_click: Option<Instant>,
     /// A tab is being pressed or dragged to reorder it.
     pub tab_drag: Option<TabDrag>,
 }
@@ -154,6 +156,7 @@ impl WindowState {
             self.renderer.cell_metrics(),
             self.scale(),
             left_inset,
+            self.chrome == Chrome::Undecorated,
         ))
     }
 
@@ -241,7 +244,8 @@ impl WindowState {
                     .collect();
                 bar.draw(
                     &labels,
-                    self.mouse.hovered_tab,
+                    self.mouse.hovered_bar,
+                    self.window.is_maximized(),
                     snapshot.background,
                     snapshot.foreground,
                 )
