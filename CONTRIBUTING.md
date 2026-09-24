@@ -99,15 +99,29 @@ Extract glyph atlas packing into its own module
 ### Listing changelog entries
 
 ```sh
-git log --format='%(trailers:key=Changelog,valueonly,separator=)%x09%s' <last-tag>..HEAD \
-  | awk -F'\t' '$1 != ""'
+cargo xtask changelog <last-tag>..HEAD
 ```
+
+This prints the entries as Markdown, grouped by category — the same text that becomes the release notes.
 
 ### Pull requests
 
 - Keep a PR to one topic. Multiple commits are fine as long as each one makes sense on its own.
 - If a PR is squash-merged, the `Changelog:` trailer must be kept in the final squash message.
 - For larger changes, please open an issue first to discuss the approach.
+
+## Packaging & releases
+
+```sh
+cargo xtask package   # release build + packages for the host platform in dist/
+cargo xtask icons     # regenerate assets/icons/ after editing assets/icon.svg
+```
+
+- Linux: `.tar.gz`, plus `.deb` if [`cargo-deb`](https://github.com/kornelski/cargo-deb) is installed and an AppImage if `appimagetool` is on the `PATH` (or `$APPIMAGETOOL` points to it).
+- macOS: a universal `.app` (Intel + Apple Silicon) in a `.dmg`; needs both Rust targets (`rustup target add x86_64-apple-darwin aarch64-apple-darwin`).
+- Windows: a `.zip` with `nuntio.exe`.
+
+To release, bump `version` in the workspace `Cargo.toml`, commit, and push a tag like `v0.2.0`. The release workflow builds all packages and publishes a GitHub release with the changelog since the previous tag.
 
 ## License
 

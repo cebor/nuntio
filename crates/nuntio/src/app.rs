@@ -393,6 +393,11 @@ impl App {
         let attrs = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
             .with_inner_size(LogicalSize::new(900.0, 600.0));
+        // App id / WM_CLASS, matching the .desktop file (Wayland and X11).
+        #[cfg(target_os = "linux")]
+        let attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
+            attrs, "nuntio", "nuntio",
+        );
         let (attrs, chrome) = chrome(event_loop, &self.config, attrs);
         let window = Arc::new(
             event_loop

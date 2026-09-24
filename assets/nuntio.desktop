@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=nuntio
+GenericName=Terminal
+Comment=A simple, fast terminal emulator
+Exec=nuntio
+Icon=nuntio
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;terminal;
+StartupWMClass=nuntio

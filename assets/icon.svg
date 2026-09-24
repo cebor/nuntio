@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- nuntio app icon. Regenerate the raster icons with `cargo xtask icons`. -->
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a2f45"/>
+      <stop offset="1" stop-color="#15161e"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#background)"/>
+  <rect x="68" y="68" width="888" height="888" rx="196" fill="none"
+        stroke="#ffffff" stroke-opacity="0.08" stroke-width="8"/>
+  <!-- Prompt chevron -->
+  <path d="M 290 360 L 480 512 L 290 664" fill="none" stroke="#7aa2f7"
+        stroke-width="76" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Cursor -->
+  <rect x="540" y="618" width="210" height="76" rx="22" fill="#c0caf5"/>
+</svg>

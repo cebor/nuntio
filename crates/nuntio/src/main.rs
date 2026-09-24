@@ -1,3 +1,6 @@
+// Release builds on Windows are GUI apps without a console window.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod actions;
 mod app;
 mod banner;
@@ -11,6 +14,7 @@ mod tab_bar;
 mod tabs;
 mod window;
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -77,6 +81,14 @@ fn load_config(path: Option<&Path>) -> (Config, Option<Banner>) {
     }
 }
 
+/// Log file for runs without a terminal, replaced on every start:
+/// `~/.cache/nuntio/nuntio.log` (the platform's cache directory).
+fn log_file() -> Option<std::fs::File> {
+    let dir = dirs::cache_dir()?.join("nuntio");
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::File::create(dir.join("nuntio.log")).ok()
+}
+
 fn main() -> Result<()> {
     let args = parse_args()?;
 
@@ -84,7 +96,15 @@ fn main() -> Result<()> {
         Some(level) => EnvFilter::try_new(level)?,
         None => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
     };
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Started from a desktop launcher there is no terminal to log to.
+    match (!std::io::stderr().is_terminal()).then(log_file).flatten() {
+        Some(file) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .init(),
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
 
     let config_path = args.config.or_else(nuntio_config::default_config_path);
     let (config, banner) = load_config(config_path.as_deref());

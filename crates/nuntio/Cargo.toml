@@ -1,5 +1,6 @@
 [package]
 name = "nuntio"
+description = "A simple, fast terminal emulator"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +17,31 @@ lexopt.workspace = true
 arboard.workspace = true
 unicode-width.workspace = true
 open.workspace = true
+dirs.workspace = true
+
+[build-dependencies]
+winresource = "0.1"
 
 [lints]
 workspace = true
+
+[package.metadata.deb]
+maintainer = "Felix Itzenplitz <felitzn@gmail.com>"
+copyright = "2026, Felix Itzenplitz"
+section = "x11"
+priority = "optional"
+# winit loads these at runtime (dlopen), so they aren't detected automatically.
+depends = "$auto, libxkbcommon0, libwayland-client0, libwayland-cursor0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6"
+recommends = "libvulkan1 | libegl1"
+extended-description = "Terminal emulator with tabs, split panes, GPU rendering and a hot-reloaded TOML config."
+assets = [
+    ["target/release/nuntio", "usr/bin/", "755"],
+    ["../../assets/nuntio.desktop", "usr/share/applications/", "644"],
+    ["../../assets/icons/png/16.png", "usr/share/icons/hicolor/16x16/apps/nuntio.png", "644"],
+    ["../../assets/icons/png/32.png", "usr/share/icons/hicolor/32x32/apps/nuntio.png", "644"],
+    ["../../assets/icons/png/48.png", "usr/share/icons/hicolor/48x48/apps/nuntio.png", "644"],
+    ["../../assets/icons/png/64.png", "usr/share/icons/hicolor/64x64/apps/nuntio.png", "644"],
+    ["../../assets/icons/png/128.png", "usr/share/icons/hicolor/128x128/apps/nuntio.png", "644"],
+    ["../../assets/icons/png/256.png", "usr/share/icons/hicolor/256x256/apps/nuntio.png", "644"],
+    ["../../assets/icons/png/512.png", "usr/share/icons/hicolor/512x512/apps/nuntio.png", "644"],
+]
