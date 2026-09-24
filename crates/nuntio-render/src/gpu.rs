@@ -19,8 +19,11 @@ pub enum GpuError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameStatus {
     Presented,
-    /// Frame skipped (timeout, occluded, reconfigured); try again on the next redraw.
+    /// Frame skipped (timeout, reconfigured); try again right away.
     Skipped,
+    /// Nothing can be drawn now (window occluded); wait for the next event
+    /// instead of retrying, which would spin the event loop.
+    Paused,
     /// The surface is gone and the context must be rebuilt.
     Lost,
 }
@@ -115,9 +118,11 @@ impl GpuContext {
                 Err(FrameStatus::Skipped)
             }
             wgpu::CurrentSurfaceTexture::Lost => Err(FrameStatus::Lost),
+            wgpu::CurrentSurfaceTexture::Timeout => Err(FrameStatus::Skipped),
+            wgpu::CurrentSurfaceTexture::Occluded => Err(FrameStatus::Paused),
             other => {
-                tracing::debug!(?other, "skipping frame");
-                Err(FrameStatus::Skipped)
+                tracing::warn!(?other, "failed to acquire a frame");
+                Err(FrameStatus::Paused)
             }
         }
     }

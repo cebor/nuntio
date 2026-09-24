@@ -1221,6 +1221,8 @@ impl ApplicationHandler<UserEvent> for App {
                 ..
             } => self.mouse_input(button, button_state == ElementState::Pressed),
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
+            // Frames are paused while occluded; catch up once visible.
+            WindowEvent::Occluded(false) => state.window.request_redraw(),
             WindowEvent::ThemeChanged(theme) => {
                 self.os_dark = theme == WindowTheme::Dark;
                 if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
@@ -1230,7 +1232,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 match state.redraw(&self.config, self.banner.as_ref()) {
-                    FrameStatus::Presented => {}
+                    FrameStatus::Presented | FrameStatus::Paused => {}
                     FrameStatus::Skipped => state.window.request_redraw(),
                     FrameStatus::Lost => {
                         tracing::warn!("surface lost, recreating renderer");
