@@ -129,10 +129,11 @@ fn describe(err: &toml::de::Error, source: &str) -> String {
     let message = err.message().trim_end();
     match err.span() {
         Some(span) => {
-            let line = source[..span.start.min(source.len())]
-                .lines()
+            let line = source.as_bytes()[..span.start.min(source.len())]
+                .iter()
+                .filter(|&&b| b == b'\n')
                 .count()
-                .max(1);
+                + 1;
             format!("line {line}: {message}")
         }
         None => message.to_owned(),
@@ -214,6 +215,12 @@ mod tests {
     fn syntax_errors_name_the_line() {
         let err = parse("scrollback = 100\n\n[font\nsize = 1").unwrap_err();
         assert!(err.starts_with("line 3:"), "{err}");
+    }
+
+    #[test]
+    fn errors_at_the_start_of_a_line_name_that_line() {
+        let err = parse("scrollback = 1\nscrollback = 2").unwrap_err();
+        assert!(err.starts_with("line 2:"), "{err}");
     }
 
     #[test]
