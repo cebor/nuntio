@@ -44,7 +44,17 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 
 ## Installation
 
-There is no tagged release yet. Once a `v*` tag is pushed, [GitHub Releases](https://github.com/cebor/nuntio/releases) will have packages for all three platforms. Until then, build from source.
+Download the package for your platform from the [latest release](https://github.com/cebor/nuntio/releases/latest):
+
+| Platform | Package | Install |
+|---|---|---|
+| macOS (Intel and Apple Silicon) | `nuntio-<version>-macos-universal.dmg` | Open the image and drag nuntio to Applications |
+| Linux (Debian / Ubuntu) | `nuntio_<version>-1_amd64.deb` | `sudo apt install ./nuntio_<version>-1_amd64.deb` |
+| Linux (any distribution) | `nuntio-<version>-x86_64-linux.AppImage` | `chmod +x` it and run it |
+| Linux (any distribution) | `nuntio-<version>-x86_64-linux.tar.gz` | Unpack it; it contains `bin/`, a desktop file and icons |
+| Windows | `nuntio-<version>-x86_64-windows.zip` | Unpack it and run `nuntio.exe` |
+
+The packages are not signed yet. On macOS, open nuntio the first time with right-click → **Open**, or run `xattr -dr com.apple.quarantine /Applications/nuntio.app`. On Windows, SmartScreen may ask you to confirm with **More info** → **Run anyway**.
 
 ### Build from source
 
@@ -63,9 +73,9 @@ cd nuntio
 cargo run -r
 ```
 
-### Packages
+### Building packages
 
-`cargo xtask package` builds a release and writes packages for the host OS to `dist/`:
+`cargo xtask package` builds a release and writes packages for the host OS to `dist/`. The release workflow runs the same command for every `v*` tag.
 
 | Platform | Output |
 |---|---|
