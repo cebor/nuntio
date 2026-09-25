@@ -112,7 +112,7 @@ pub enum Mode {
         /// Problem with the current text, shown while typing.
         problem: Option<String>,
         /// Hint that doesn't block Enter.
-        note: Option<String>,
+        note: Option<(Tone, String)>,
     },
     /// Checklist for an ordered set like the status bar items.
     Items {
@@ -141,6 +141,8 @@ pub struct App {
     /// Why the file is invalid, if it is.
     pub error: Option<String>,
     pub warnings: Vec<String>,
+    /// Broken theme files, shown along with the config's warnings.
+    theme_warnings: Vec<String>,
     pub message: Option<(Tone, String)>,
     pub themes: ThemeSet,
     fonts: Option<Vec<String>>,
@@ -230,6 +232,7 @@ impl App {
             defaults,
             error: None,
             warnings: Vec::new(),
+            theme_warnings: Vec::new(),
             message: None,
             themes,
             fonts: None,
@@ -242,6 +245,12 @@ impl App {
         };
         app.revalidate();
         Ok(app)
+    }
+
+    /// Show problems with the theme files, e.g. why a theme is missing.
+    pub fn set_theme_warnings(&mut self, warnings: Vec<String>) {
+        self.theme_warnings = warnings;
+        self.revalidate();
     }
 
     fn revalidate(&mut self) {
@@ -257,6 +266,9 @@ impl App {
                 self.warnings.clear();
             }
         }
+        self.warnings.extend(self.theme_warnings.iter().cloned());
+        // Rows can disappear, e.g. the light/dark theme rows.
+        self.clamp_row();
     }
 
     pub fn is_modified(&self) -> bool {
@@ -418,6 +430,8 @@ impl App {
             _ => SETTINGS
                 .iter()
                 .filter(|s| s.section == section && s.kind != Kind::Theme)
+                // Nothing to choose yet (e.g. `tabs.position`).
+                .filter(|s| !matches!(s.kind, Kind::Choice(values) if values.len() < 2))
                 .map(Row::Setting)
                 .collect(),
         }
@@ -525,7 +539,7 @@ impl App {
         })
     }
 
-    fn theme_name(&self, slot: ThemeSlot) -> String {
+    pub fn theme_name(&self, slot: ThemeSlot) -> String {
         match (&self.config.theme, slot) {
             (ThemeSelection::Single(name), _) => name.clone(),
             (ThemeSelection::Auto { light, .. }, ThemeSlot::Light) => light.clone(),
@@ -945,6 +959,7 @@ impl App {
             ThemeSlot::Dark => "Dark theme",
         };
         let current = Pick::Value(self.theme_name(slot));
+        let title = format!("{title} (type to filter)");
         let picker = Picker::new(title, choices, &current).filterable(false);
         self.open_picker(picker, PickTarget::Theme(slot));
     }
@@ -999,7 +1014,9 @@ impl App {
         let live = !matches!(target, PickTarget::Action { .. });
         match key {
             Key::Esc => {
-                if live && self.source != before {
+                // Unless the file was changed elsewhere meanwhile: then
+                // that change wins and is reloaded instead.
+                if live && self.source != before && self.in_sync() {
                     self.restore_text(before);
                 }
                 return;
@@ -1111,7 +1128,11 @@ impl App {
     }
 
     /// Problem and note for the text typed so far.
-    fn check_input(&self, target: &InputTarget, text: &str) -> (Option<String>, Option<String>) {
+    fn check_input(
+        &self,
+        target: &InputTarget,
+        text: &str,
+    ) -> (Option<String>, Option<(Tone, String)>) {
         match target {
             InputTarget::Setting(setting) => {
                 let problem = Self::parse_input(setting, text)
@@ -1120,7 +1141,7 @@ impl App {
                 (problem, None)
             }
             InputTarget::BindingKey { index } => match KeyCombo::parse(text) {
-                Err(err) => (Some(err), None),
+                Err(err) => (Some(err.to_string()), None),
                 Ok(combo) => {
                     let clash = self
                         .doc
@@ -1128,11 +1149,12 @@ impl App {
                         .iter()
                         .enumerate()
                         .find(|(i, b)| Some(*i) != *index && KeyCombo::parse(&b.key) == Ok(combo))
-                        .map(|(_, b)| format!("{combo} is already bound to `{}`", b.action));
-                    (
-                        None,
-                        clash.or_else(|| Some(format!("Recognized as {combo}"))),
-                    )
+                        .map(|(_, b)| {
+                            let text = format!("{combo} is already bound to `{}`", b.action);
+                            (Tone::Warn, text)
+                        });
+                    let recognized = || (Tone::Dim, format!("Recognized as {combo}"));
+                    (None, Some(clash.unwrap_or_else(recognized)))
                 }
             },
         }
@@ -1146,7 +1168,7 @@ impl App {
         target: InputTarget,
         title: String,
         mut problem: Option<String>,
-        mut note: Option<String>,
+        mut note: Option<(Tone, String)>,
     ) {
         match key {
             Key::Esc => return,
@@ -1472,6 +1494,14 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal));
         app.key(Key::Char('u'));
         assert_eq!(memory.text(), "", "one undo step for the whole picker");
+
+        // Esc doesn't overwrite a change made elsewhere during the preview.
+        app.key(Key::Enter);
+        app.key(Key::Down);
+        memory.set("scrollback = 7\n");
+        app.key(Key::Esc);
+        assert_eq!(memory.text(), "scrollback = 7\n");
+        assert_eq!(app.config.scrollback, 7);
     }
 
     #[test]
@@ -1547,14 +1577,14 @@ mod tests {
         go_to(&mut app, "window.padding.x");
         app.key(Key::Enter);
         app.key(Key::Ctrl('u'));
-        type_text(&mut app, "70000");
+        type_text(&mut app, "1200");
         let Mode::Input { problem, .. } = &app.mode else {
             panic!("no input");
         };
-        assert!(problem.as_deref().unwrap().contains("between 0 and 65535"));
+        assert!(problem.as_deref().unwrap().contains("between 0 and 200"));
         keys(&mut app, &[Key::Backspace, Key::Backspace, Key::Enter]);
         let config = nuntio_config::parse(&memory.text()).unwrap().config;
-        assert_eq!(config.window.padding.x, 700);
+        assert_eq!(config.window.padding.x, 12);
         assert_eq!(config.window.padding.y, 6);
     }
 
@@ -1679,7 +1709,9 @@ mod tests {
         let Mode::Input { note, .. } = &app.mode else {
             panic!("no input");
         };
-        assert!(note.as_deref().unwrap().contains("already bound"));
+        let (tone, note) = note.as_ref().unwrap();
+        assert_eq!(*tone, Tone::Warn);
+        assert!(note.contains("already bound"));
         app.key(Key::Enter);
         app.key(Key::Enter);
         assert!(app.binding_problem(1).unwrap().contains("entry 1"));

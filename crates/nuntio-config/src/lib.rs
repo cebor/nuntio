@@ -10,9 +10,9 @@ mod watch;
 
 use serde::{Deserialize, Serialize};
 
-pub use color::Color;
+pub use color::{Color, ColorError};
 pub use edit::{ConfigDoc, write_config};
-pub use keys::{ACTIONS, KeyCombo, KeyName, Mods, NamedKey};
+pub use keys::{ACTIONS, KeyCombo, KeyComboError, KeyName, Mods, NamedKey};
 pub use load::{
     ConfigError, ConfigLocation, Loaded, config_dir, load, locate_config, parse, themes_dir,
 };
@@ -287,11 +287,57 @@ impl Default for StatusBar {
 }
 
 /// Either a single theme name or a light/dark pair following the OS theme.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum ThemeSelection {
     Single(String),
     Auto { light: String, dark: String },
+}
+
+/// By hand instead of `untagged`, whose error ("data did not match any
+/// variant") doesn't say what is wrong.
+impl<'de> Deserialize<'de> for ThemeSelection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ThemeSelection;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a theme name or a table with `light` and `dark`")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Self::Value, E> {
+                Ok(ThemeSelection::Single(name.to_owned()))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                use serde::de::Error;
+
+                let (mut light, mut dark) = (None, None);
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "light" => light = Some(map.next_value()?),
+                        "dark" => dark = Some(map.next_value()?),
+                        other => {
+                            return Err(A::Error::unknown_field(other, &["light", "dark"]));
+                        }
+                    }
+                }
+                match (light, dark) {
+                    (Some(light), Some(dark)) => Ok(ThemeSelection::Auto { light, dark }),
+                    _ => Err(A::Error::custom(
+                        "`theme` needs both `light` and `dark` to follow the OS appearance",
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 impl Default for ThemeSelection {
@@ -322,7 +368,10 @@ pub struct MacOs {
     pub option_as_meta: OptionAsMeta,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+/// Missing fields are empty, so one incomplete entry is skipped with a
+/// warning instead of rejecting the whole config.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Keybinding {
     pub key: String,
     pub action: String,
@@ -331,6 +380,41 @@ pub struct Keybinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_keybinding_does_not_reject_the_config() {
+        let cfg = Config::from_toml(
+            r#"
+[[keybindings]]
+key = "Ctrl+Shift+X"
+
+[[keybindings]]
+key = "F5"
+action = "new_tab"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.keybindings.len(), 2);
+        assert_eq!(cfg.keybindings[0].action, "");
+    }
+
+    #[test]
+    fn theme_selection_errors_say_what_is_missing() {
+        let pair = Config::from_toml("theme = { light = \"a\", dark = \"b\" }").unwrap();
+        assert_eq!(
+            pair.theme,
+            ThemeSelection::Auto {
+                light: "a".into(),
+                dark: "b".into()
+            }
+        );
+        let err = Config::from_toml("theme = { light = \"a\" }").unwrap_err();
+        assert!(err.message().contains("both `light` and `dark`"), "{err}");
+        let err = Config::from_toml("theme = 3").unwrap_err();
+        assert!(err.message().contains("a theme name"), "{err}");
+        let err = Config::from_toml("theme = { light = \"a\", dark = \"b\", x = 1 }").unwrap_err();
+        assert!(err.message().contains("unknown field `x`"), "{err}");
+    }
 
     #[test]
     fn empty_file_gives_defaults() {

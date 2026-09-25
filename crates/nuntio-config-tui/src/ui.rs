@@ -8,9 +8,9 @@ use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::state::{App, Focus, Mode, PickTarget, Row, ThemeSlot, Tone};
+use crate::state::{App, Focus, Mode, PickTarget, Row, Tone};
 use crate::widgets::{Pick, TextInput};
 
 const ACCENT: Color = Color::Cyan;
@@ -54,10 +54,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Mode::Normal => {}
         Mode::Picker { picker, target, .. } => {
             let filter_line = u16::from(picker.filter.is_some());
+            // At least one line, for "No matches".
             let area = popup(
                 frame.area(),
                 60,
-                picker.visible.len() as u16 + 2 + filter_line,
+                picker.visible.len().max(1) as u16 + 2 + filter_line,
             );
             frame.render_widget(Clear, area);
             let block = Block::bordered()
@@ -73,7 +74,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(filter)]);
                     frame.render_widget(Paragraph::new(line), filter_area);
                     frame.set_cursor_position(Position::new(
-                        filter_area.x + 2 + filter.chars().count() as u16,
+                        filter_area.x + 2 + filter.width() as u16,
                         filter_area.y,
                     ));
                     list_area
@@ -104,6 +105,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
+            if items.is_empty() {
+                let empty = Line::styled("No matches", tone(Tone::Dim));
+                frame.render_widget(Paragraph::new(empty), list_area);
+            }
             let mut state = ListState::default().with_selected(Some(picker.selected));
             let list = List::new(items).highlight_style(selected_style(true));
             frame.render_stateful_widget(list, list_area, &mut state);
@@ -132,10 +137,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             draw_input(frame, line_area, input);
             let info = match (problem, note) {
                 (Some(problem), _) => Span::styled(problem.as_str(), tone(Tone::Error)),
-                (None, Some(note)) if note.contains("already") => {
-                    Span::styled(note.as_str(), tone(Tone::Warn))
-                }
-                (None, Some(note)) => Span::styled(note.as_str(), tone(Tone::Dim)),
+                (None, Some((t, note))) => Span::styled(note.as_str(), tone(*t)),
                 (None, None) => Span::styled("Enter to apply, Esc to cancel", tone(Tone::Dim)),
             };
             frame.render_widget(Paragraph::new(Line::from(info)), info_area);
@@ -210,15 +212,27 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput) {
-    let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(&input.text)]);
+    let width = usize::from(area.width.saturating_sub(2));
+    let (text, cursor) = scrolled(&input.text, input.cursor, width);
+    let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(text)]);
     frame.render_widget(Paragraph::new(line), area);
-    let cursor: usize = input
-        .text
-        .chars()
-        .take(input.cursor)
-        .map(|c| c.width().unwrap_or(0))
-        .sum();
     frame.set_cursor_position(Position::new(area.x + 2 + cursor as u16, area.y));
+}
+
+/// The part of `text` to show in `width` columns so that the cursor (a
+/// char index) stays visible, and the cursor's column in it.
+fn scrolled(text: &str, cursor: usize, width: usize) -> (&str, usize) {
+    let column = |s: &str| -> usize { s.chars().map(|c| c.width().unwrap_or(0)).sum() };
+    let cursor_byte = text
+        .char_indices()
+        .nth(cursor)
+        .map_or(text.len(), |(i, _)| i);
+    // Drop leading characters until the cursor fits, with room for it.
+    let mut start = 0;
+    while column(&text[start..cursor_byte]) >= width.max(1) {
+        start += text[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    (&text[start..], column(&text[start..cursor_byte]))
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -289,7 +303,7 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled(value, tone(value_tone)),
             ];
             if let Row::Theme(slot) = row
-                && let Some(theme) = app.themes.get(&theme_name(app, slot))
+                && let Some(theme) = app.themes.get(&app.theme_name(slot))
             {
                 spans.push(Span::raw("  "));
                 spans.extend(swatch(theme, 16));
@@ -316,13 +330,6 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn theme_name(app: &App, slot: ThemeSlot) -> String {
-    app.row_value(Row::Theme(slot))
-        .1
-        .trim_end_matches(" (not found)")
-        .to_owned()
-}
-
 /// Colored blocks for the theme's first `count` ANSI colors on its
 /// background.
 fn swatch(theme: &Theme, count: usize) -> Vec<Span<'static>> {
@@ -344,11 +351,9 @@ fn swatch(theme: &Theme, count: usize) -> Vec<Span<'static>> {
 }
 
 fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
-    let mut lines: Vec<Line> = app
-        .details()
-        .into_iter()
-        .map(|(t, text)| Line::styled(text, tone(t)))
-        .collect();
+    // Problems and messages first: the pane is short, and help text is
+    // what may be cut off.
+    let mut lines = Vec::new();
     if let Some(error) = &app.error {
         lines.push(Line::styled(
             format!("The file is invalid, nuntio keeps the previous settings: {error}"),
@@ -364,6 +369,11 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
     if let Some((t, message)) = &app.message {
         lines.push(Line::styled(message.as_str(), tone(*t)));
     }
+    lines.extend(
+        app.details()
+            .into_iter()
+            .map(|(t, text)| Line::styled(text, tone(t))),
+    );
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(tone(Tone::Dim));
@@ -391,6 +401,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("Tab", "sections"),
             ("/", "search"),
             ("u", "undo"),
+            ("R", "restore"),
             ("q", "quit"),
         ],
         Mode::Normal => &[
@@ -416,7 +427,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("↑↓", "move"),
             ("Space", "show/hide"),
             ("Shift+↑↓", "reorder"),
-            ("⏎", "done"),
+            ("⏎/Esc", "done"),
         ],
         Mode::Search { .. } => &[
             ("type", "search"),
@@ -431,4 +442,18 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::styled(format!(" {what}  "), tone(Tone::Dim)));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_scrolls_to_keep_the_cursor_visible() {
+        assert_eq!(scrolled("hello", 5, 10), ("hello", 5));
+        assert_eq!(scrolled("hello world", 11, 5), ("orld", 4));
+        assert_eq!(scrolled("hello world", 2, 5), ("hello world", 2));
+        // Wide characters count two columns.
+        assert_eq!(scrolled("日本語", 3, 4), ("語", 2));
+    }
 }

@@ -1,7 +1,7 @@
 //! Watching the config file and theme directory for changes.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -78,8 +78,10 @@ impl ConfigWatcher {
         let mut watched = Vec::new();
         watch_existing(&mut watcher.lock().unwrap(), &wanted, &mut watched)?;
 
-        // Collapse bursts of events into one notification.
-        let thread_watcher = watcher.clone();
+        // Collapse bursts of events into one notification. The thread only
+        // holds a weak reference: dropping `ConfigWatcher` drops the watcher
+        // and with it `tx`, which ends the thread.
+        let thread_watcher = Arc::downgrade(&watcher);
         std::thread::Builder::new()
             .name("config watcher".into())
             .spawn(move || {
@@ -93,7 +95,10 @@ impl ConfigWatcher {
                         }
                     }
                     if rescan {
-                        let mut watcher = thread_watcher.lock().unwrap();
+                        let Some(watcher) = thread_watcher.upgrade() else {
+                            break;
+                        };
+                        let mut watcher = watcher.lock().unwrap_or_else(PoisonError::into_inner);
                         match watch_existing(&mut watcher, &wanted, &mut watched) {
                             // A new directory may already contain the config.
                             Ok(added) => changed |= added,
@@ -104,6 +109,7 @@ impl ConfigWatcher {
                         on_change();
                     }
                 }
+                tracing::debug!("config watcher stopped");
             })?;
         Ok(Self { _watcher: watcher })
     }
@@ -198,6 +204,22 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(changed.is_ok(), "no change reported");
         assert!(settled, "burst reported more than once");
+    }
+
+    #[test]
+    fn dropping_the_watcher_stops_its_thread() {
+        let dir = std::env::temp_dir().join(format!("nuntio-watch-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (tx, rx) = mpsc::channel::<()>();
+        let watcher = ConfigWatcher::new(&dir.join("config.toml"), None, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+        drop(watcher);
+        // The thread owns `on_change`; once it ends, the sender is gone.
+        let result = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(result, Err(mpsc::RecvTimeoutError::Disconnected));
     }
 
     #[test]

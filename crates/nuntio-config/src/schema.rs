@@ -7,6 +7,8 @@ pub const FONT_SIZE: (f64, f64) = (4.0, 72.0);
 pub const OPACITY: (f64, f64) = (0.0, 1.0);
 pub const DIM_INACTIVE: (f64, f64) = (0.0, 1.0);
 pub const MAX_SCROLLBACK: i64 = 1_000_000;
+/// Enough for any sensible margin; more would leave no room for text.
+pub const MAX_PADDING: u16 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -217,7 +219,7 @@ const fn only_on(mut setting: Setting, platform: Platform) -> Setting {
 
 const PADDING: Kind = Kind::Int {
     min: 0,
-    max: u16::MAX as i64,
+    max: MAX_PADDING as i64,
     step: 1,
 };
 
@@ -531,6 +533,53 @@ mod tests {
                 s.path
             );
         }
+    }
+
+    /// The documented default of `path`: the third column of its row in
+    /// the table under its section heading.
+    fn documented_default<'a>(docs: &'a str, path: &str) -> Option<&'a str> {
+        let (heading, key) = match path.split_once('.') {
+            Some((section, key)) => (format!("### `[{section}]`"), key),
+            None => ("### Top level".to_owned(), path),
+        };
+        let section = docs.split(&heading).nth(1)?;
+        let section = section.split("\n### ").next()?;
+        let row = section
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{key}` |")))?;
+        row.split('|').nth(3).map(str::trim)
+    }
+
+    #[test]
+    fn documented_defaults_match() {
+        let docs = include_str!("../../../docs/config.md");
+        let defaults = toml::Value::try_from(Config::default()).unwrap();
+        let mut checked = 0;
+        for s in SETTINGS.iter().filter(|s| s.unset.is_none()) {
+            // Documented as one `padding` table.
+            if s.path.starts_with("window.padding") {
+                continue;
+            }
+            let value = s
+                .path
+                .split('.')
+                .try_fold(&defaults, |v, key| v.get(key))
+                .unwrap();
+            let documented = documented_default(docs, s.path);
+            match value {
+                // Settings are f32, which serialize with f64 noise.
+                toml::Value::Float(f) => {
+                    let parsed = documented.and_then(|d| d.trim_matches('`').parse::<f32>().ok());
+                    assert_eq!(parsed, Some(*f as f32), "{}: {documented:?}", s.path);
+                }
+                _ => {
+                    let expected = format!("`{value}`");
+                    assert_eq!(documented, Some(expected.as_str()), "{}", s.path);
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked > 10);
     }
 
     fn check<T: Serialize + DeserializeOwned + PartialEq + Debug>(variants: &[Variant], all: &[T]) {

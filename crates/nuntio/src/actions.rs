@@ -198,6 +198,14 @@ impl Bindings {
         let mut warnings = Vec::new();
         let mut custom = Vec::new();
         for entry in entries {
+            if entry.key.is_empty() {
+                warnings.push(format!("keybinding for \"{}\" has no `key`", entry.action));
+                continue;
+            }
+            if entry.action.is_empty() {
+                warnings.push(format!("keybinding \"{}\" has no `action`", entry.key));
+                continue;
+            }
             let parsed = parse_combo(&entry.key).and_then(|(key, mods)| {
                 let action = Action::from_name(&entry.action)?;
                 Ok(Binding { key, mods, action })
@@ -237,7 +245,7 @@ impl Bindings {
 fn parse_combo(combo: &str) -> Result<(BindKey, ModifiersState), String> {
     use nuntio_config::KeyName;
 
-    let combo = nuntio_config::KeyCombo::parse(combo)?;
+    let combo = nuntio_config::KeyCombo::parse(combo).map_err(|e| e.to_string())?;
     let mut mods = ModifiersState::empty();
     for (on, flag) in [
         (combo.mods.ctrl, ModifiersState::CONTROL),
@@ -362,6 +370,8 @@ mod tests {
             binding("F12", "new_tab"),
             binding("Ctrl+Nope", "copy"),
             binding("F11", "fly"),
+            binding("", "copy"),
+            binding("F10", ""),
         ]);
         assert_eq!(b.lookup(&ch("t"), ctrl_shift), Some(Action::CloseTab));
         assert_eq!(b.lookup(&ch("c"), ctrl_shift), None);
@@ -371,7 +381,9 @@ mod tests {
         );
         // Untouched defaults remain.
         assert!(b.lookup(&ch("v"), ctrl_shift).is_some() || cfg!(target_os = "macos"));
-        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        assert!(warnings[2].contains("no `key`"), "{warnings:?}");
+        assert!(warnings[3].contains("no `action`"), "{warnings:?}");
     }
 
     #[test]

@@ -66,6 +66,21 @@ pub struct Mods {
     pub super_key: bool,
 }
 
+/// Why a key combination could not be parsed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum KeyComboError {
+    #[error("missing key")]
+    MissingKey,
+    #[error("empty modifier")]
+    EmptyModifier,
+    #[error("unknown modifier `{0}`")]
+    UnknownModifier(String),
+    #[error("modifier `{0}` appears twice")]
+    DuplicateModifier(String),
+    #[error("unknown key `{0}`")]
+    UnknownKey(String),
+}
+
 /// A parsed key combination like `Ctrl+Shift+T`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeyCombo {
@@ -76,9 +91,9 @@ pub struct KeyCombo {
 impl KeyCombo {
     /// Parse a combination like `"Ctrl+Shift+T"` or `"Cmd+PageUp"`.
     /// Case and spaces around `+` don't matter.
-    pub fn parse(combo: &str) -> Result<Self, String> {
+    pub fn parse(combo: &str) -> Result<Self, KeyComboError> {
         let parts: Vec<&str> = combo.split('+').map(str::trim).collect();
-        let (key, modifiers) = parts.split_last().ok_or("empty key")?;
+        let (key, modifiers) = parts.split_last().ok_or(KeyComboError::MissingKey)?;
         let mut mods = Mods::default();
         for m in modifiers {
             let flag = match m.to_lowercase().as_str() {
@@ -86,9 +101,12 @@ impl KeyCombo {
                 "shift" => &mut mods.shift,
                 "alt" | "opt" | "option" => &mut mods.alt,
                 "cmd" | "command" | "super" | "win" | "meta" => &mut mods.super_key,
-                "" => return Err("empty modifier".into()),
-                _ => return Err(format!("unknown modifier `{m}`")),
+                "" => return Err(KeyComboError::EmptyModifier),
+                _ => return Err(KeyComboError::UnknownModifier(m.to_string())),
             };
+            if *flag {
+                return Err(KeyComboError::DuplicateModifier(m.to_string()));
+            }
             *flag = true;
         }
         Ok(Self {
@@ -98,10 +116,10 @@ impl KeyCombo {
     }
 }
 
-fn parse_key(key: &str) -> Result<KeyName, String> {
+fn parse_key(key: &str) -> Result<KeyName, KeyComboError> {
     let mut chars = key.chars();
     match (chars.next(), chars.next()) {
-        (None, _) => return Err("missing key".into()),
+        (None, _) => return Err(KeyComboError::MissingKey),
         (Some(c), None) => return Ok(KeyName::Char(c.to_lowercase().next().unwrap_or(c))),
         _ => {}
     }
@@ -126,7 +144,7 @@ fn parse_key(key: &str) -> Result<KeyName, String> {
         "right" => NamedKey::Right,
         _ => match lower.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
             Some(n @ 1..=12) => NamedKey::F(n),
-            _ => return Err(format!("unknown key `{key}`")),
+            _ => return Err(KeyComboError::UnknownKey(key.to_string())),
         },
     };
     Ok(KeyName::Named(named))
@@ -254,6 +272,8 @@ mod tests {
             "F0",
             "Ctrl+",
             "Ctrl++Shift+T",
+            "Ctrl+Ctrl+T",
+            "Cmd+Super+T",
         ] {
             assert!(KeyCombo::parse(bad).is_err(), "{bad:?}");
         }

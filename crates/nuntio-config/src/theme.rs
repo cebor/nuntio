@@ -73,12 +73,23 @@ impl ThemeSet {
             set.insert(theme);
         }
         let mut warnings = Vec::new();
-        let Some(entries) = dir.and_then(|d| std::fs::read_dir(d).ok()) else {
+        let Some(dir) = dir else {
             return (set, warnings);
+        };
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            // No themes directory is the normal case.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return (set, warnings),
+            Err(err) => {
+                warnings.push(format!("themes {}: {err}", dir.display()));
+                return (set, warnings);
+            }
         };
 
         let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         paths.sort();
+        // Names of user themes, to report two files with the same name.
+        let mut seen: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
         for path in paths {
             let result = match path.extension().and_then(|e| e.to_str()) {
                 Some("toml") => load_toml(&path),
@@ -86,7 +97,17 @@ impl ThemeSet {
                 _ => continue,
             };
             match result {
-                Ok(theme) => set.insert(theme),
+                Ok(theme) => {
+                    if let Some(other) = seen.insert(theme.name.to_lowercase(), path.clone()) {
+                        warnings.push(format!(
+                            "theme {}: \"{}\" is also defined in {}, which is ignored",
+                            path.display(),
+                            theme.name,
+                            other.display()
+                        ));
+                    }
+                    set.insert(theme);
+                }
                 Err(err) => warnings.push(format!("theme {}: {err}", path.display())),
             }
         }
@@ -114,7 +135,7 @@ fn file_stem(path: &Path) -> String {
 
 fn load_toml(path: &Path) -> Result<Theme, String> {
     let src = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut theme: Theme = toml::from_str(&src).map_err(|e| e.message().to_owned())?;
+    let mut theme: Theme = toml::from_str(&src).map_err(|e| crate::load::describe(&e, &src))?;
     if theme.name.is_empty() {
         theme.name = file_stem(path);
     }
@@ -163,13 +184,21 @@ pub fn parse_itermcolors(plist: &plist::Value) -> Result<Theme, String> {
 
     let foreground = color("Foreground Color")?;
     let background = color("Background Color")?;
+    // Without a selection color, selections are shown inverted; the text
+    // must then not be drawn in the foreground color too.
+    let selection = color("Selection Color").ok();
+    let selected_text = color("Selected Text Color").unwrap_or(if selection.is_some() {
+        foreground
+    } else {
+        background
+    });
     Ok(Theme {
         name: String::new(),
         foreground,
         background,
         cursor: color("Cursor Color").unwrap_or(foreground),
-        selection_foreground: color("Selected Text Color").unwrap_or(foreground),
-        selection_background: color("Selection Color").unwrap_or(foreground),
+        selection_foreground: selected_text,
+        selection_background: selection.unwrap_or(foreground),
         normal: ansi(0)?,
         bright: ansi(8)?,
     })
@@ -198,6 +227,10 @@ mod tests {
     }
 
     fn itermcolors(with_cursor: bool) -> plist::Value {
+        itermcolors_with(with_cursor, true)
+    }
+
+    fn itermcolors_with(with_cursor: bool, with_selection: bool) -> plist::Value {
         let mut colors = String::new();
         for i in 0..16 {
             colors += &entry(&format!("Ansi {i} Color"), i as f64 / 15.0, 0.0, 1.0);
@@ -207,7 +240,9 @@ mod tests {
         if with_cursor {
             colors += &entry("Cursor Color", 1.0, 0.0, 0.0);
         }
-        colors += &entry("Selection Color", 0.2, 0.2, 0.2);
+        if with_selection {
+            colors += &entry("Selection Color", 0.2, 0.2, 0.2);
+        }
         let xml = PLIST_TEMPLATE.replace("COLORS", &colors);
         plist::Value::from_reader_xml(xml.as_bytes()).unwrap()
     }
@@ -237,6 +272,13 @@ mod tests {
     }
 
     #[test]
+    fn itermcolors_without_selection_color_inverts() {
+        let theme = parse_itermcolors(&itermcolors_with(true, false)).unwrap();
+        assert_eq!(theme.selection_background, theme.foreground);
+        assert_eq!(theme.selection_foreground, theme.background);
+    }
+
+    #[test]
     fn itermcolors_optional_cursor() {
         let theme = parse_itermcolors(&itermcolors(false)).unwrap();
         assert_eq!(theme.cursor, theme.foreground);
@@ -255,14 +297,20 @@ mod tests {
             .map(|line| format!("{line}\n"))
             .collect();
         std::fs::write(dir.join("Mine.toml"), mine).unwrap();
-        std::fs::write(dir.join("broken.toml"), "foreground = 1").unwrap();
+        std::fs::write(dir.join("broken.toml"), "\nforeground = 1").unwrap();
+        // A second file named "Mine" in its `name` field.
+        let copy = include_str!("../themes/dracula.toml").replace("Dracula", "Mine");
+        std::fs::write(dir.join("zz.toml"), copy).unwrap();
 
         let (set, warnings) = ThemeSet::load(Some(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
 
         assert_eq!(set.get("Dracula").unwrap().background, Color::from_hex(1));
         assert_eq!(set.get("mine").unwrap().name, "Mine");
-        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings[0].contains("broken.toml"), "{warnings:?}");
+        assert!(warnings[0].contains("line 2"), "{warnings:?}");
+        assert!(warnings[1].contains("zz.toml"), "{warnings:?}");
+        assert!(warnings[1].contains("Mine.toml"), "{warnings:?}");
     }
 }

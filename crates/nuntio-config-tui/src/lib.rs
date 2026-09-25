@@ -122,7 +122,7 @@ fn map_key(event: KeyEvent) -> Option<Key> {
 
 pub fn main() -> Result<()> {
     let path = config_path(parse_args()?)?;
-    let (themes, _) = ThemeSet::load(nuntio_config::themes_dir(&path).as_deref());
+    let (themes, theme_warnings) = ThemeSet::load(nuntio_config::themes_dir(&path).as_deref());
     let mut app = App::new(
         Box::new(FileStore(path.clone())),
         display_path(&path),
@@ -130,6 +130,7 @@ pub fn main() -> Result<()> {
         Box::new(installed_fonts),
     )
     .map_err(anyhow::Error::msg)?;
+    app.set_theme_warnings(theme_warnings);
 
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {

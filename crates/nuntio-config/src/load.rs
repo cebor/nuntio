@@ -1,9 +1,8 @@
 //! Locating, reading and validating the config file.
 
-use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::schema::{DIM_INACTIVE, FONT_SIZE, MAX_SCROLLBACK, OPACITY};
+use crate::schema::{DIM_INACTIVE, FONT_SIZE, MAX_PADDING, MAX_SCROLLBACK, OPACITY};
 use crate::{Config, Shell, StatusBar};
 
 /// `$XDG_CONFIG_HOME/nuntio`, else `~/.config/nuntio` — on every platform,
@@ -73,19 +72,12 @@ pub fn themes_dir(config_path: &Path) -> Option<PathBuf> {
 }
 
 /// A config that could not be used; the previous one stays active.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{}: {message}", path.display())]
 pub struct ConfigError {
     pub path: PathBuf,
     pub message: String,
 }
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.path.display(), self.message)
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 /// A successfully loaded config plus problems that didn't prevent loading.
 #[derive(Debug, Clone)]
@@ -126,7 +118,7 @@ pub fn parse(source: &str) -> Result<Loaded, String> {
 }
 
 /// Error message with a 1-based line number.
-fn describe(err: &toml::de::Error, source: &str) -> String {
+pub(crate) fn describe(err: &toml::de::Error, source: &str) -> String {
     let message = err.message().trim_end();
     match err.span() {
         Some(span) => {
@@ -160,6 +152,22 @@ impl Config {
                 "`scrollback` must be at most {MAX_SCROLLBACK}, got {}",
                 self.scrollback
             ));
+        }
+        let padding = self.window.padding;
+        for (name, value) in [("x", padding.x), ("y", padding.y)] {
+            if value > MAX_PADDING {
+                return Err(format!(
+                    "`window.padding.{name}` must be at most {MAX_PADDING}, got {value}"
+                ));
+            }
+        }
+        if self
+            .font
+            .family
+            .as_ref()
+            .is_some_and(|f| f.trim().is_empty())
+        {
+            return Err("`font.family` must not be empty; remove it to use the default".into());
         }
         if let Some(shell) = &self.shell {
             shell.validate()?;
@@ -259,6 +267,10 @@ mod tests {
         assert!(err.contains("window.opacity"), "{err}");
         let err = parse("shell = { program = \"\" }").unwrap_err();
         assert!(err.contains("shell.program"), "{err}");
+        let err = parse("[window]\npadding = { x = 8, y = 500 }").unwrap_err();
+        assert!(err.contains("window.padding.y"), "{err}");
+        let err = parse("[font]\nfamily = \" \"").unwrap_err();
+        assert!(err.contains("font.family"), "{err}");
     }
 
     #[test]

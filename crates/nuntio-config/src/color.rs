@@ -26,15 +26,21 @@ impl Color {
     }
 }
 
+/// A color that isn't written as `"#rrggbb"`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid color {0:?}, expected \"#rrggbb\"")]
+pub struct ColorError(pub String);
+
 impl FromStr for Color {
-    type Err = String;
+    type Err = ColorError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid = || ColorError(s.to_owned());
         let hex = s
             .strip_prefix('#')
             .filter(|h| h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit()))
-            .ok_or_else(|| format!("invalid color {s:?}, expected \"#rrggbb\""))?;
-        let value = u32::from_str_radix(hex, 16).map_err(|e| e.to_string())?;
+            .ok_or_else(invalid)?;
+        let value = u32::from_str_radix(hex, 16).map_err(|_| invalid())?;
         Ok(Self::from_hex(value))
     }
 }
