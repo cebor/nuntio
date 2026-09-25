@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nuntio_config::{Config, StatusBarPosition, TabTitle};
-use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect};
+use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect, UiText};
 use nuntio_term::{
-    CursorStyle, GridPoint, Link, Snapshot, TermHandle, TermMode, TermSize, UnderlineStyle,
+    CursorStyle, GridPoint, Link, Rgb, Snapshot, TermHandle, TermMode, TermSize, UnderlineStyle,
 };
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
@@ -261,6 +261,9 @@ pub struct WindowState {
     pub title_refresh: Option<Instant>,
     /// Cell the IME candidate window was last anchored to.
     ime_cell: Option<(u32, u32)>,
+    /// The status bar as of the last new sample, to skip redraws that
+    /// wouldn't change it.
+    status_drawn: Option<(Vec<UiRect>, Vec<UiText>)>,
     title: String,
 }
 
@@ -291,6 +294,7 @@ impl WindowState {
             skipped_frames: 0,
             title_refresh: None,
             ime_cell: None,
+            status_drawn: None,
             title: String::new(),
         }
     }
@@ -376,6 +380,32 @@ impl WindowState {
             self.renderer.small_cell_metrics(),
             self.scale(),
         ))
+    }
+
+    /// Whether the status bar looks different from the last time this
+    /// was asked, e.g. after a new sample. Most samples change nothing
+    /// visible (same rounded values, a clock without seconds), and a whole
+    /// frame per second would keep an idle terminal busy.
+    pub fn status_bar_changed(&mut self, config: &Config, stats: &Stats) -> bool {
+        let datetime = datetime(config);
+        // Colors come from the theme, which redraws on its own when it
+        // changes; fixed ones compare the rest.
+        let (background, foreground) = (
+            Rgb::default(),
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        );
+        let drawn = self
+            .status_bar(config, stats, &datetime)
+            .map(|bar| bar.draw(stats, &datetime, background, foreground));
+        if drawn == self.status_drawn {
+            return false;
+        }
+        self.status_drawn = drawn;
+        true
     }
 
     /// The pointer is over the status bar.
@@ -571,10 +601,7 @@ impl WindowState {
         }
 
         if config.status_bar.visible() {
-            // Validated when the config was loaded, so formatting can't fail.
-            let datetime = chrono::Local::now()
-                .format(&config.status_bar.datetime_format)
-                .to_string();
+            let datetime = datetime(config);
             if let Some(bar) = self.status_bar(config, stats, &datetime) {
                 let (bar_rects, bar_texts) = bar.draw(stats, &datetime, background, foreground);
                 rects.extend(bar_rects);
@@ -899,6 +926,14 @@ impl WindowState {
             });
         }
     }
+}
+
+/// The status bar's date and time, now.
+fn datetime(config: &Config) -> String {
+    // Validated when the config was loaded, so formatting can't fail.
+    chrono::Local::now()
+        .format(&config.status_bar.datetime_format)
+        .to_string()
 }
 
 /// Which window edge or corner `pos` is on, within `border` of the edge.

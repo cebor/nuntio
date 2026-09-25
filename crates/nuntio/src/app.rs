@@ -1525,7 +1525,9 @@ impl ApplicationHandler<UserEvent> for App {
                     return;
                 }
                 self.stats.push(sample);
-                if let Some(state) = self.state.as_ref() {
+                if let Some(state) = self.state.as_mut()
+                    && state.status_bar_changed(&self.config, &self.stats)
+                {
                     state.window.request_redraw();
                 }
             }
