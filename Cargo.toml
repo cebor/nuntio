@@ -20,6 +20,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
+toml_edit = "0.25"
 serde_ignored = "0.1"
 notify = "8"
 plist = "1"

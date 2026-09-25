@@ -1,6 +1,7 @@
 //! Config schema, loading, validation, themes and file watching.
 
 mod color;
+mod edit;
 mod keys;
 mod load;
 pub mod schema;
@@ -10,11 +11,13 @@ mod watch;
 use serde::{Deserialize, Serialize};
 
 pub use color::Color;
+pub use edit::{ConfigDoc, write_config};
 pub use keys::{ACTIONS, KeyCombo, KeyName, Mods, NamedKey};
 pub use load::{
     ConfigError, ConfigLocation, Loaded, config_dir, load, locate_config, parse, themes_dir,
 };
 pub use theme::{DEFAULT_THEME, Theme, ThemeSet, builtin_themes, parse_itermcolors};
+pub use toml_edit;
 pub use watch::ConfigWatcher;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
