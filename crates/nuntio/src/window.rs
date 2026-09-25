@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use nuntio_config::{Config, StatusBarPosition, TabTitle};
 use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect};
-use nuntio_term::{CursorStyle, GridPoint, Link, Snapshot, TermHandle, TermMode, TermSize};
+use nuntio_term::{
+    CursorStyle, GridPoint, Link, Snapshot, TermHandle, TermMode, TermSize, UnderlineStyle,
+};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
 use winit::window::{ResizeDirection, Window};
@@ -846,7 +848,7 @@ fn underline(snapshot: &mut Snapshot, link: &Link) {
             if pos >= start && pos <= end {
                 snapshot.cells[line * snapshot.columns + column]
                     .style
-                    .underline = true;
+                    .underline = Some(UnderlineStyle::Single);
             }
         }
     }
@@ -949,6 +951,7 @@ mod tests {
             fg: Rgb::default(),
             bg: Rgb::default(),
             style: CellStyle::default(),
+            underline_color: None,
         };
         let mut snapshot = Snapshot {
             columns: 4,
@@ -962,7 +965,11 @@ mod tests {
             end: (1, 1),
         };
         underline(&mut snapshot, &link);
-        let underlined: Vec<bool> = snapshot.cells.iter().map(|c| c.style.underline).collect();
+        let underlined: Vec<bool> = snapshot
+            .cells
+            .iter()
+            .map(|c| c.style.underline.is_some())
+            .collect();
         #[rustfmt::skip]
         let expected = [
             false, false, true, true,

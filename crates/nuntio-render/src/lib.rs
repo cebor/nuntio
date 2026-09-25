@@ -2,6 +2,7 @@
 
 mod atlas;
 mod box_drawing;
+mod decoration;
 mod font;
 mod frame;
 mod gpu;

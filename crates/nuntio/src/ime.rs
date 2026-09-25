@@ -1,6 +1,6 @@
 //! Showing the IME's uncommitted (preedit) text at the cursor.
 
-use nuntio_term::{Snapshot, SnapshotCell};
+use nuntio_term::{Snapshot, SnapshotCell, UnderlineStyle};
 use unicode_width::UnicodeWidthChar;
 
 /// Draw `preedit` over the snapshot, starting at the cursor, underlined.
@@ -34,7 +34,8 @@ pub fn overlay_preedit(snapshot: &mut Snapshot, preedit: &str) {
             zerowidth: None,
             ..base.clone()
         };
-        cell.style.underline = true;
+        cell.style.underline = Some(UnderlineStyle::Single);
+        cell.underline_color = None;
         cell.style.wide = width == 2;
         snapshot.cells[line * columns + column] = cell.clone();
         if width == 2 {
@@ -64,6 +65,7 @@ mod tests {
             fg: Rgb::default(),
             bg: Rgb::default(),
             style: CellStyle::default(),
+            underline_color: None,
         };
         Snapshot {
             columns,
@@ -91,8 +93,8 @@ mod tests {
         let mut s = snapshot(6);
         overlay_preedit(&mut s, "ab");
         assert_eq!(text(&s), " ab   ");
-        assert!(s.cell(1, 0).style.underline);
-        assert!(!s.cell(3, 0).style.underline);
+        assert!(s.cell(1, 0).style.underline.is_some());
+        assert!(s.cell(3, 0).style.underline.is_none());
         assert_eq!(s.cursor.unwrap().column, 3);
     }
 

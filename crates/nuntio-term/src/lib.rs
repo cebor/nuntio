@@ -14,5 +14,7 @@ pub use pane::{
     GridPoint, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent, TermHandle, TermSize,
 };
 pub use search::{Search, SearchError};
-pub use snapshot::{CellStyle, CursorStyle, Snapshot, SnapshotCell, SnapshotCursor};
+pub use snapshot::{
+    CellStyle, CursorStyle, Snapshot, SnapshotCell, SnapshotCursor, UnderlineStyle,
+};
 pub use url::Link;

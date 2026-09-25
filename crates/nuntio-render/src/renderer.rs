@@ -3,15 +3,15 @@ use std::fmt::Debug;
 use std::rc::Rc;
 
 use bytemuck::{Pod, Zeroable};
-use nuntio_term::{CursorStyle, Rgb, Snapshot, SnapshotCell};
+use nuntio_term::{CursorStyle, Rgb, Snapshot, SnapshotCell, UnderlineStyle};
 use unicode_width::UnicodeWidthChar;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
-use crate::box_drawing;
 use crate::font::{CellMetrics, FaceStyle, Fonts};
 use crate::frame::{Frame, UiText};
 use crate::gpu::{FrameStatus, GpuContext, GpuError};
+use crate::{box_drawing, decoration};
 
 const KIND_SOLID: u32 = 0;
 const KIND_MASK: u32 = 1;
@@ -67,6 +67,8 @@ enum GlyphKey {
     Small(char, FaceStyle),
     /// A base character with combining marks.
     Cluster(Box<str>, FaceStyle),
+    /// A patterned underline, one cell wide.
+    Underline(UnderlineStyle),
 }
 
 /// A rasterized glyph placed in an atlas.
@@ -552,10 +554,14 @@ impl Renderer {
                 let (x, y) = origin(column, line);
                 let width = if cell.style.wide { cw * 2.0 } else { cw };
 
-                if cell.style.underline {
-                    let y = y + m.underline_y as f32;
-                    self.instances
-                        .push(Instance::solid(x, y, width, m.stroke as f32, fg));
+                if let Some(style) = cell.style.underline {
+                    // The cursor's contrast color wins over a colored underline.
+                    let color = match cell.underline_color {
+                        Some(color) if !under_block => color,
+                        _ => fg,
+                    };
+                    let cells = if cell.style.wide { 2 } else { 1 };
+                    self.push_underline(style, x, y, cells, color)?;
                 }
                 if cell.style.strikeout {
                     let y = y + m.strikeout_y as f32;
@@ -567,6 +573,43 @@ impl Renderer {
                 }
                 let sprites = self.sprites(cell)?;
                 self.push_sprites(&sprites, x, y, fg);
+            }
+        }
+        Ok(())
+    }
+
+    /// Draw an underline below `cells` cells starting at the cell corner
+    /// `x`, `y`.
+    fn push_underline(
+        &mut self,
+        style: UnderlineStyle,
+        x: f32,
+        y: f32,
+        cells: u32,
+        color: Rgb,
+    ) -> Result<(), AtlasFull> {
+        let m = self.fonts.metrics();
+        let stroke = m.stroke.max(1) as f32;
+        let width = (cells * m.width) as f32;
+        let top = y + m.underline_y as f32;
+        match style {
+            UnderlineStyle::Single => {
+                self.instances
+                    .push(Instance::solid(x, top, width, stroke, color));
+            }
+            UnderlineStyle::Double => {
+                // Two lines one stroke apart, moved up if the cell is too short.
+                let top = top.min(y + m.height as f32 - 3.0 * stroke);
+                for top in [top, top + 2.0 * stroke] {
+                    self.instances
+                        .push(Instance::solid(x, top, width, stroke, color));
+                }
+            }
+            UnderlineStyle::Curly | UnderlineStyle::Dotted | UnderlineStyle::Dashed => {
+                let sprites = self.glyph_sprites(GlyphKey::Underline(style))?;
+                for i in 0..cells {
+                    self.push_sprites(&sprites, x + (i * m.width) as f32, y, color);
+                }
             }
         }
         Ok(())
@@ -599,6 +642,7 @@ impl Renderer {
         let (text, style) = match &key {
             GlyphKey::Char(c, style) | GlyphKey::Small(c, style) => (c.to_string(), *style),
             GlyphKey::Cluster(s, style) => (s.to_string(), *style),
+            GlyphKey::Underline(style) => return self.underline_sprites(key.clone(), *style),
         };
         let small = matches!(key, GlyphKey::Small(..));
         let metrics = if small {
@@ -646,6 +690,33 @@ impl Renderer {
                 y: baseline - glyph.top,
                 region,
                 color: glyph.color,
+            });
+        }
+        let sprites: Rc<[Sprite]> = sprites.into();
+        self.glyphs.insert(key, sprites.clone());
+        Ok(sprites)
+    }
+
+    /// Rasterize a patterned underline into the mask atlas, placed at the
+    /// font's underline position but kept inside the cell.
+    fn underline_sprites(
+        &mut self,
+        key: GlyphKey,
+        style: UnderlineStyle,
+    ) -> Result<Rc<[Sprite]>, AtlasFull> {
+        let m = self.fonts.metrics();
+        let mut sprites = Vec::new();
+        if let Some(mask) = decoration::rasterize(style, m.width, m.stroke) {
+            let region = self
+                .mask_atlas
+                .insert(&self.gpu.queue, mask.width, mask.height, &mask.data)
+                .ok_or(AtlasFull)?;
+            let y = m.underline_y.min(m.height.saturating_sub(mask.height));
+            sprites.push(Sprite {
+                x: 0,
+                y: y as i32,
+                region,
+                color: false,
             });
         }
         let sprites: Rc<[Sprite]> = sprites.into();
