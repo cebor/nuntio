@@ -50,6 +50,8 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "network"] }
 starship-battery = "0.11"
+# Process info on macOS (proc_pidinfo).
+libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Graphics_Dwm"] }
 
 [workspace.lints.rust]

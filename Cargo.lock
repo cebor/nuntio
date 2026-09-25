@@ -1991,6 +1991,7 @@ name = "nuntio-term"
 version = "0.1.4"
 dependencies = [
  "alacritty_terminal",
+ "libc",
  "thiserror 2.0.21",
  "tracing",
 ]

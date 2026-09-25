@@ -160,7 +160,7 @@ option_as_meta = "none"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `hide_when_single` | bool | `true` | Hide the tab bar while only one tab is open. It is always shown when nuntio draws its own header (`decorations = "custom"`, macOS `transparent`/`none` title bar, WSLg). |
-| `title` | string | `"auto"` | What a tab shows. `"auto"`: the directory while the shell waits at its prompt (`~/code`), otherwise the running program (`htop`). `"path"`: always the directory. `"process"`: always the program. `"application"`: the title the shell or program sets, unchanged. Where nuntio can't see the running process (currently macOS, Windows and WSL shells), `"auto"` uses the application's title without a leading `user@host:`. |
+| `title` | string | `"auto"` | What a tab shows. `"auto"`: the directory while the shell waits at its prompt (`~/code`), otherwise the running program (`htop`). `"path"`: always the directory. `"process"`: always the program. `"application"`: the title the shell or program sets, unchanged. Where nuntio can't see the running process (currently Windows and WSL shells), `"auto"` uses the application's title without a leading `user@host:`. |
 
 ### `[panes]`
 
