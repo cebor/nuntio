@@ -1,12 +1,22 @@
 //! Keyboard input to PTY bytes, following xterm's encoding: modifier
 //! parameters on special keys (`CSI 1;<m> A`), SS3/CSI function keys,
 //! application cursor (DECCKM) and keypad (DECKPAM) modes, and Alt as an
-//! ESC prefix.
+//! ESC prefix. Programs that turn on the kitty keyboard protocol get
+//! `kitty_keys` instead.
 
 use nuntio_term::TermMode;
+
+use crate::kitty_keys;
 use winit::keyboard::{Key, KeyCode, KeyLocation, NamedKey, PhysicalKey};
 
-/// The parts of a key press the encoder needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyEventKind {
+    Press,
+    Repeat,
+    Release,
+}
+
+/// The parts of a key event the encoder needs.
 #[derive(Debug, Clone)]
 pub struct KeyInput<'a> {
     pub key: &'a Key,
@@ -15,11 +25,16 @@ pub struct KeyInput<'a> {
     /// Text produced by the key, if any.
     pub text: Option<&'a str>,
     pub location: KeyLocation,
+    pub physical: PhysicalKey,
+    pub event: KeyEventKind,
     pub shift: bool,
     pub ctrl: bool,
     /// Alt acts as Meta. On macOS only when Option-as-Meta is enabled for
     /// the pressed side; otherwise Option composes characters.
     pub meta: bool,
+    /// Only the kitty protocol reports it; otherwise Super combinations
+    /// are shortcuts.
+    pub super_key: bool,
 }
 
 impl KeyInput<'_> {
@@ -30,6 +45,12 @@ impl KeyInput<'_> {
 }
 
 pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
+    if mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
+        return kitty_keys::encode(input, mode);
+    }
+    if input.event == KeyEventKind::Release {
+        return None;
+    }
     if input.location == KeyLocation::Numpad
         && mode.contains(TermMode::APP_KEYPAD)
         && let Some(bytes) = encode_app_keypad(input)
@@ -46,8 +67,10 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
         return Some(text.as_bytes().to_vec());
     }
 
+    // Ctrl+С on a Cyrillic layout is Ctrl+C.
+    let latin = latin_key(input.unmodified, input.physical).filter(|_| input.ctrl);
     if input.ctrl
-        && let Key::Character(s) = input.unmodified
+        && let Key::Character(s) = latin.as_ref().unwrap_or(input.unmodified)
         && let Some(byte) = control_byte(s)
     {
         return Some(with_meta(vec![byte], input.meta));
@@ -68,7 +91,7 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
 }
 
 /// Printable text the key produces, if any.
-fn printable<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
+pub(crate) fn printable<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
     input
         .text
         .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
@@ -77,7 +100,7 @@ fn printable<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
 /// Windows reports AltGr as Ctrl+Alt: AltGr+Q on a German layout must type
 /// "@", not Ctrl+Meta+Q. A real Ctrl+Alt combination yields no other
 /// printable text than the key itself.
-fn altgr_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
+pub(crate) fn altgr_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
     let text = printable(input).filter(|_| input.ctrl && input.meta)?;
     let same_key = matches!(input.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text));
     (!same_key).then_some(text)
@@ -232,7 +255,7 @@ fn is_latin(c: char) -> bool {
 }
 
 /// The unshifted character of a key on a US layout.
-fn us_char(code: KeyCode) -> Option<char> {
+pub(crate) fn us_char(code: KeyCode) -> Option<char> {
     use KeyCode::*;
     let letters = [
         KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
@@ -286,6 +309,7 @@ fn control_byte(s: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winit::keyboard::NativeKeyCode;
 
     #[derive(Clone, Copy, Default)]
     struct Mods {
@@ -306,6 +330,8 @@ mod tests {
     const CTRL: Mods = Mods { ctrl: true, ..NONE };
     const META: Mods = Mods { meta: true, ..NONE };
 
+    const UNIDENTIFIED: PhysicalKey = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+
     fn encode_with(
         key: Key,
         unmodified: Key,
@@ -319,9 +345,12 @@ mod tests {
             unmodified: &unmodified,
             text,
             location,
+            physical: UNIDENTIFIED,
+            event: KeyEventKind::Press,
             shift: mods.shift,
             ctrl: mods.ctrl,
             meta: mods.meta,
+            super_key: false,
         };
         encode_key(&input, mode)
     }
@@ -453,9 +482,12 @@ mod tests {
                 unmodified: &unmodified,
                 text,
                 location: KeyLocation::Standard,
+                physical: UNIDENTIFIED,
+                event: KeyEventKind::Press,
                 shift: mods.shift,
                 ctrl: mods.ctrl,
                 meta: mods.meta,
+                super_key,
             };
             field_text(&input, super_key).map(str::to_owned)
         };
@@ -529,5 +561,41 @@ mod tests {
         assert_eq!(keypad("5", TermMode::APP_KEYPAD), b"\x1bOu");
         assert_eq!(keypad("+", TermMode::APP_KEYPAD), b"\x1bOk");
         assert_eq!(keypad("5", TermMode::empty()), b"5");
+    }
+
+    #[test]
+    fn legacy_keys_send_nothing_on_release() {
+        let key = Key::Character("a".into());
+        let input = KeyInput {
+            key: &key,
+            unmodified: &key,
+            text: Some("a"),
+            location: KeyLocation::Standard,
+            physical: PhysicalKey::Code(KeyCode::KeyA),
+            event: KeyEventKind::Release,
+            shift: false,
+            ctrl: false,
+            meta: false,
+            super_key: false,
+        };
+        assert_eq!(encode_key(&input, TermMode::empty()), None);
+    }
+
+    #[test]
+    fn ctrl_on_other_scripts_sends_the_latin_control_character() {
+        let key = ch("с");
+        let input = KeyInput {
+            key: &key,
+            unmodified: &key,
+            text: None,
+            location: KeyLocation::Standard,
+            physical: PhysicalKey::Code(KeyCode::KeyC),
+            event: KeyEventKind::Press,
+            shift: false,
+            ctrl: true,
+            meta: false,
+            super_key: false,
+        };
+        assert_eq!(encode_key(&input, TermMode::empty()).unwrap(), [0x03]);
     }
 }

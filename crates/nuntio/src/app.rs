@@ -26,7 +26,7 @@ use winit::window::{
 use crate::actions::{Action, Bindings};
 use crate::banner::{Banner, Severity};
 use crate::event::{PaneId, UserEvent};
-use crate::input;
+use crate::input::{self, KeyEventKind};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
 use crate::pane_tree::{Axis, Direction, PaneTree};
 use crate::search_bar::SearchBar;
@@ -225,6 +225,7 @@ fn term_options(config: &Config) -> TermOptions {
     TermOptions {
         scrollback: config.scrollback,
         clipboard_write: config.clipboard_write,
+        kitty_keyboard: config.kitty_keyboard,
     }
 }
 
@@ -1100,48 +1101,73 @@ impl App {
     }
 
     fn keyboard_input(&mut self, event: KeyEvent) {
-        let Some(state) = self.state.as_ref() else {
+        let Some(state) = self.state.as_mut() else {
             return;
         };
-        if event.state != ElementState::Pressed {
+        let kind = match (event.state, event.repeat) {
+            (ElementState::Released, _) => KeyEventKind::Release,
+            (ElementState::Pressed, false) => KeyEventKind::Press,
+            (ElementState::Pressed, true) => KeyEventKind::Repeat,
+        };
+        // The release of a key nuntio used is nuntio's too.
+        let used = state.used_keys.remove(&event.physical_key);
+        if kind == KeyEventKind::Release && used {
             return;
         }
         let mods = state.modifiers.state();
-        if state.search.is_some() && self.search_key(&event) {
+        if kind != KeyEventKind::Release && !self.key_for_program(&event, mods) {
+            if let Some(state) = self.state.as_mut() {
+                state.used_keys.insert(event.physical_key);
+            }
             return;
         }
         let Some(state) = self.state.as_ref() else {
             return;
         };
+        let key_input = input::KeyInput {
+            key: &event.logical_key,
+            unmodified: &event.key_without_modifiers(),
+            text: event.text.as_deref(),
+            location: event.location,
+            physical: event.physical_key,
+            event: kind,
+            shift: mods.shift_key(),
+            ctrl: mods.control_key(),
+            meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
+            super_key: mods.super_key(),
+        };
+        let Some(bytes) = input::encode_key(&key_input, state.term().mode()) else {
+            return;
+        };
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        match kind {
+            // Letting go of a key doesn't count as typing.
+            KeyEventKind::Release => state.term().write(bytes),
+            _ => state.type_bytes(bytes),
+        }
+    }
+
+    /// Runs the find bar and shortcuts for a pressed key. Returns whether
+    /// the key is left for the program in the focused pane.
+    fn key_for_program(&mut self, event: &KeyEvent, mods: ModifiersState) -> bool {
+        if self
+            .state
+            .as_ref()
+            .is_some_and(|state| state.search.is_some())
+            && self.search_key(event)
+        {
+            return false;
+        }
         let unmodified = event.key_without_modifiers();
         let latin = input::latin_key(&unmodified, event.physical_key);
         if let Some(action) = self.lookup_binding(&unmodified, latin.as_ref(), mods) {
             self.run_action(action);
-            return;
+            return false;
         }
         // Unbound Cmd/Super combinations are shortcuts, not text.
-        if mods.super_key() {
-            return;
-        }
-        // Ctrl+С on a Cyrillic layout is Ctrl+C for the shell too.
-        let unmodified = match latin {
-            Some(latin) if mods.control_key() => latin,
-            _ => unmodified,
-        };
-        let key_input = input::KeyInput {
-            key: &event.logical_key,
-            unmodified: &unmodified,
-            text: event.text.as_deref(),
-            location: event.location,
-            shift: mods.shift_key(),
-            ctrl: mods.control_key(),
-            meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
-        };
-        if let Some(bytes) = input::encode_key(&key_input, state.term().mode())
-            && let Some(state) = self.state.as_mut()
-        {
-            state.type_bytes(bytes);
-        }
+        !mods.super_key()
     }
 
     /// The shortcut for a key; on layouts without Latin letters, also
@@ -1193,9 +1219,12 @@ impl App {
                     unmodified: &unmodified,
                     text: event.text.as_deref(),
                     location: event.location,
+                    physical: event.physical_key,
+                    event: KeyEventKind::Press,
                     shift: mods.shift_key(),
                     ctrl: mods.control_key(),
                     meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
+                    super_key: mods.super_key(),
                 };
                 let Some(text) = input::field_text(&key_input, mods.super_key()) else {
                     // Shortcuts still work; other keys (Tab, F1, Ctrl+W, …)

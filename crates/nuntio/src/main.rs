@@ -7,6 +7,7 @@ mod banner;
 mod event;
 mod ime;
 mod input;
+mod kitty_keys;
 mod link;
 mod mouse;
 mod pane_env;

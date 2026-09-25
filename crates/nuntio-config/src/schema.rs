@@ -264,6 +264,13 @@ pub static SETTINGS: &[Setting] = &[
         "Ask before pasting text with line breaks where the shell would run each line at once: paste it again within a few seconds to confirm.",
     ),
     setting(
+        "kitty_keyboard",
+        Section::General,
+        "Kitty keyboard protocol",
+        Kind::Bool,
+        "Let programs like neovim, helix or fish turn on the kitty keyboard protocol, which tells keys like Ctrl+I and Tab apart.",
+    ),
+    setting(
         "theme",
         Section::Theme,
         "Theme",

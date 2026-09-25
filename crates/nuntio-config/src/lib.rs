@@ -31,6 +31,8 @@ pub struct Config {
     pub clipboard_write: bool,
     /// Ask before pasting line breaks that would run commands at once.
     pub confirm_paste: bool,
+    /// Programs may turn on the kitty keyboard protocol.
+    pub kitty_keyboard: bool,
     pub font: Font,
     pub window: Window,
     pub tabs: Tabs,
@@ -49,6 +51,7 @@ impl Default for Config {
             scrollback: 10_000,
             clipboard_write: true,
             confirm_paste: true,
+            kitty_keyboard: true,
             font: Font::default(),
             window: Window::default(),
             tabs: Tabs::default(),

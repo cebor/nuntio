@@ -56,6 +56,8 @@ pub struct TermOptions {
     /// Programs may copy to the clipboard (OSC 52). Reading it is never
     /// allowed.
     pub clipboard_write: bool,
+    /// Programs may turn on the kitty keyboard protocol.
+    pub kitty_keyboard: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -481,6 +483,7 @@ fn term_config(options: TermOptions) -> term::Config {
         } else {
             term::Osc52::Disabled
         },
+        kitty_keyboard: options.kitty_keyboard,
         ..Default::default()
     }
 }

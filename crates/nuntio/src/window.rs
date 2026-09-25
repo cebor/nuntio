@@ -1,6 +1,7 @@
 //! Per-window state: tabs of split panes, layout (tab bar + terminal area),
 //! drawing, and the mouse/keyboard state that belongs to the window.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,6 +12,7 @@ use nuntio_term::{
 };
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
+use winit::keyboard::PhysicalKey;
 use winit::window::{ResizeDirection, Window};
 
 use crate::banner::Banner;
@@ -247,6 +249,9 @@ pub struct WindowState {
     /// The window was created transparent, so `window.opacity` can apply.
     pub transparent: bool,
     pub modifiers: Modifiers,
+    /// Held keys nuntio used itself (shortcuts, the find bar), whose
+    /// release a program must not see either.
+    pub used_keys: HashSet<PhysicalKey>,
     pub mouse: MouseState,
     pub focused: bool,
     /// Uncommitted IME text, shown at the cursor.
@@ -282,6 +287,7 @@ impl WindowState {
             chrome,
             transparent,
             modifiers: Modifiers::default(),
+            used_keys: HashSet::new(),
             mouse: MouseState::default(),
             focused: true,
             preedit: None,

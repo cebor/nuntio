@@ -4,7 +4,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use nuntio_term::{
-    GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize,
+    GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode, TermOptions,
+    TermSize,
 };
 
 const SIZE: TermSize = TermSize {
@@ -21,6 +22,7 @@ fn spawn(script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
 const OPTIONS: TermOptions = TermOptions {
     scrollback: 100,
     clipboard_write: true,
+    kitty_keyboard: true,
 };
 
 fn spawn_with_env(
@@ -345,4 +347,21 @@ fn clipboard_writes_can_be_denied() {
     };
     assert!(stored(true));
     assert!(!stored(false));
+}
+
+#[test]
+fn kitty_keyboard_can_be_turned_off() {
+    // Push "disambiguate escape codes" onto the keyboard mode stack.
+    let script = "printf '\\033[>1u'";
+    let mode = |kitty_keyboard| {
+        let term = TermOptions {
+            kitty_keyboard,
+            ..OPTIONS
+        };
+        let (handle, rx) = spawn_with(script, Vec::new(), term);
+        wait_for_exit(&rx);
+        handle.mode()
+    };
+    assert!(mode(true).contains(TermMode::DISAMBIGUATE_ESC_CODES));
+    assert!(!mode(false).intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
 }
