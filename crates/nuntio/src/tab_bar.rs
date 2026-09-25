@@ -30,6 +30,10 @@ const PILL_INSET: f64 = 4.0;
 /// Horizontal gap between two tab pills, in logical pixels.
 const PILL_GAP: f64 = 4.0;
 const PILL_RADIUS: f64 = 6.0;
+/// Inset and corner radius of the highlight behind a hovered close button,
+/// in logical pixels.
+const CLOSE_INSET: f64 = 2.0;
+const CLOSE_RADIUS: f64 = 4.0;
 /// Window control button size in logical pixels (Windows' caption buttons).
 const CONTROL_WIDTH: f64 = 46.0;
 const CONTROL_ICON: f64 = 10.0;
@@ -246,12 +250,29 @@ impl TabBar {
             }
 
             if label.active || hovered_tab == Some(i) {
-                let (cx, cy, _) = self.close_rect(*slot);
+                let (cx, cy, size) = self.close_rect(*slot);
+                let close_hovered = hovered == Some(BarHit::Close(i));
+                if close_hovered {
+                    let under = if label.active { active_bg } else { hover_bg };
+                    let inset = (CLOSE_INSET as f32 * self.scale).round();
+                    rects.push(UiRect {
+                        x: cx + inset,
+                        y: cy + inset,
+                        width: size - 2.0 * inset,
+                        height: size - 2.0 * inset,
+                        color: mix(under, foreground, 0.10),
+                        radius: (CLOSE_RADIUS as f32 * self.scale).round(),
+                    });
+                }
                 texts.push(UiText {
                     x: cx + ((side - cw) / 2.0).floor(),
                     y: cy,
                     text: "×".into(),
-                    color: inactive_text,
+                    color: if close_hovered {
+                        foreground
+                    } else {
+                        inactive_text
+                    },
                     bold: false,
                 });
             }
@@ -437,6 +458,33 @@ mod tests {
         assert_eq!(bar.hit(930.0, 10.0), Some(BarHit::Maximize));
         assert_eq!(bar.hit(999.0, 10.0), Some(BarHit::CloseWindow));
         assert_eq!(bar.hit(861.0, 10.0), Some(BarHit::Empty));
+    }
+
+    #[test]
+    fn hovered_close_button_is_highlighted() {
+        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
+        let labels = [true, false].map(|active| TabLabel {
+            title: "~".into(),
+            active,
+            activity: false,
+            bell: false,
+        });
+        let (bg, fg) = (Rgb { r: 0, g: 0, b: 0 }, WHITE);
+        let close = |texts: &[UiText]| texts.iter().find(|t| t.text == "×").unwrap().color;
+
+        let (plain, texts) = bar.draw(&labels, Some(BarHit::Tab(0)), false, bg, fg);
+        assert_ne!(close(&texts), fg);
+
+        let (rects, texts) = bar.draw(&labels, Some(BarHit::Close(0)), false, bg, fg);
+        assert_eq!(rects.len(), plain.len() + 1);
+        // Close button of tab 0: 20px square at x 257, inset by 2px.
+        let highlight = rects.last().unwrap();
+        assert_eq!(
+            (highlight.x, highlight.y, highlight.width),
+            (259.0, 9.0, 16.0)
+        );
+        assert!(highlight.radius > 0.0);
+        assert_eq!(close(&texts), fg);
     }
 
     #[test]
