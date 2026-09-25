@@ -178,13 +178,6 @@ impl Default for Window {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TabPosition {
-    #[default]
-    Top,
-}
-
 /// What a tab shows as its title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -205,7 +198,6 @@ pub enum TabTitle {
 #[serde(default)]
 pub struct Tabs {
     pub hide_when_single: bool,
-    pub position: TabPosition,
     pub title: TabTitle,
 }
 
@@ -213,7 +205,6 @@ impl Default for Tabs {
     fn default() -> Self {
         Self {
             hide_when_single: true,
-            position: TabPosition::Top,
             title: TabTitle::default(),
         }
     }
@@ -440,7 +431,6 @@ macos_titlebar = "none"
 
 [tabs]
 hide_when_single = true
-position = "top"
 title = "process"
 
 [panes]

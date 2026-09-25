@@ -430,7 +430,7 @@ impl App {
             _ => SETTINGS
                 .iter()
                 .filter(|s| s.section == section && s.kind != Kind::Theme)
-                // Nothing to choose yet (e.g. `tabs.position`).
+                // A choice with a single value offers nothing to choose.
                 .filter(|s| !matches!(s.kind, Kind::Choice(values) if values.len() < 2))
                 .map(Row::Setting)
                 .collect(),

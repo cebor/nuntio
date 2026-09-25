@@ -154,8 +154,6 @@ pub static MACOS_TITLEBAR: &[Variant] = &[
     variant("none", "No title bar and no buttons."),
 ];
 
-pub static TAB_POSITION: &[Variant] = &[variant("top", "Above the panes.")];
-
 pub static TAB_TITLE: &[Variant] = &[
     variant(
         "auto",
@@ -319,13 +317,6 @@ pub static SETTINGS: &[Setting] = &[
          nuntio draws its own header.",
     ),
     setting(
-        "tabs.position",
-        Section::Tabs,
-        "Position",
-        Kind::Choice(TAB_POSITION),
-        "Where the tab bar sits.",
-    ),
-    setting(
         "tabs.title",
         Section::Tabs,
         "Title",
@@ -452,8 +443,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Config, Decorations, MacosTitlebar, OptionAsMeta, StatusBarPosition, StatusItem,
-        TabPosition, TabTitle,
+        Config, Decorations, MacosTitlebar, OptionAsMeta, StatusBarPosition, StatusItem, TabTitle,
     };
 
     fn leaf_paths(value: &toml::Value, prefix: &str, out: &mut BTreeSet<String>) {
@@ -611,10 +601,6 @@ mod tests {
                 MacosTitlebar::None,
             ],
         );
-        let _ = |p: TabPosition| match p {
-            TabPosition::Top => (),
-        };
-        check(TAB_POSITION, &[TabPosition::Top]);
         let _ = |t: TabTitle| match t {
             TabTitle::Auto | TabTitle::Path | TabTitle::Process | TabTitle::Application => (),
         };
