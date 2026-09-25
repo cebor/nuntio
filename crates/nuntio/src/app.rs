@@ -952,6 +952,7 @@ impl App {
                         });
                     }
                     BarHit::Close(index) => self.close_tab(index),
+                    BarHit::NewTab => self.new_tab(),
                     BarHit::Empty => {
                         // Double click maximizes, like a title bar.
                         let now = Instant::now();

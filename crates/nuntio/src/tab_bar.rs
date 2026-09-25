@@ -48,6 +48,8 @@ struct Slot {
 pub enum BarHit {
     Tab(usize),
     Close(usize),
+    /// The "+" button after the last tab.
+    NewTab,
     /// Free space in the bar (drag area for moving the window).
     Empty,
     Minimize,
@@ -80,6 +82,8 @@ pub struct TabBar {
     slots: Vec<Slot>,
     /// Width of one window control button; 0 without controls.
     control_width: f32,
+    /// Left edge of the new-tab button's area, right after the last tab.
+    new_tab_x: f32,
 }
 
 impl TabBar {
@@ -104,7 +108,9 @@ impl TabBar {
             0.0
         };
         let start = left_inset + inset;
-        let available = (width - start - inset - 3.0 * control_width).max(0.0);
+        let gap = logical(PILL_GAP);
+        let new_tab_width = height - 2.0 * inset + gap;
+        let available = (width - start - inset - 3.0 * control_width - new_tab_width).max(0.0);
         let tab_width = (available / count.max(1) as f32)
             .min(MAX_TAB_CELLS * cell.width as f32)
             .floor();
@@ -114,18 +120,25 @@ impl TabBar {
                 width: tab_width,
             })
             .collect();
+        let new_tab_x = start + count as f32 * tab_width;
         Self {
             height,
             width,
             padding,
             inset,
-            gap: logical(PILL_GAP),
+            gap,
             radius: logical(PILL_RADIUS),
             scale: scale as f32,
             cell,
             slots,
             control_width,
+            new_tab_x,
         }
+    }
+
+    /// Width of the new-tab button's area: a square pill plus the gap.
+    fn new_tab_width(&self) -> f32 {
+        self.height - 2.0 * self.inset + self.gap
     }
 
     /// Left edge of the window control buttons.
@@ -158,6 +171,9 @@ impl TabBar {
         if self.control_width > 0.0 && x >= self.controls_x() {
             let i = ((x - self.controls_x()) / self.control_width) as usize;
             return Some(CONTROLS[i.min(2)]);
+        }
+        if x >= self.new_tab_x && x < self.new_tab_x + self.new_tab_width() {
+            return Some(BarHit::NewTab);
         }
         let Some(index) = self.slot_at(x) else {
             return Some(BarHit::Empty);
@@ -216,6 +232,13 @@ impl TabBar {
             radius: 0.0,
         }];
         let mut texts = Vec::new();
+        self.draw_new_tab(
+            &mut rects,
+            hovered == Some(BarHit::NewTab),
+            hover_bg,
+            inactive_text,
+            foreground,
+        );
 
         for (i, (slot, label)) in self.slots.iter().zip(labels).enumerate() {
             let pill = if label.active {
@@ -315,6 +338,41 @@ impl TabBar {
             height: self.height - 2.0 * self.inset,
             color,
             radius: self.radius,
+        }
+    }
+
+    /// The "+" button, drawn from two rectangles like the window controls.
+    fn draw_new_tab(
+        &self,
+        rects: &mut Vec<UiRect>,
+        hovered: bool,
+        hover_bg: Rgb,
+        color: Rgb,
+        hover_color: Rgb,
+    ) {
+        let x = self.new_tab_x + self.gap / 2.0;
+        let size = self.new_tab_width() - self.gap;
+        if hovered {
+            rects.push(self.pill(x, size, hover_bg));
+        }
+        let color = if hovered { hover_color } else { color };
+        let stroke = self.scale.round().max(1.0);
+        let icon = (CONTROL_ICON as f32 * self.scale).round();
+        let x0 = (x + (size - icon) / 2.0).floor();
+        let y0 = ((self.height - icon) / 2.0).floor();
+        let middle = ((icon - stroke) / 2.0).round();
+        for (x, y, width, height) in [
+            (x0, y0 + middle, icon, stroke),
+            (x0 + middle, y0, stroke, icon),
+        ] {
+            rects.push(UiRect {
+                x,
+                y,
+                width,
+                height,
+                color,
+                radius: 0.0,
+            });
         }
     }
 
@@ -452,9 +510,10 @@ mod tests {
         assert_eq!(bar.slots[0].width, 280.0, "capped at 28 cells");
         assert_eq!(bar.slots[1].x, 284.0);
 
-        // 4px margin on both sides leave 992px for 8 tabs.
+        // 4px margin on both sides and the 30px "+" button leave 962px
+        // for 8 tabs.
         let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, false);
-        assert_eq!(bar.slots[0].width, 124.0);
+        assert_eq!(bar.slots[0].width, 120.0);
         assert_eq!(bar.height, 34.0);
     }
 
@@ -502,12 +561,47 @@ mod tests {
     #[test]
     fn window_controls_take_the_right_edge() {
         let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, true);
-        // 3 × 46px of controls and the margins leave 854px for 8 tabs.
-        assert_eq!(bar.slots[0].width, 106.0);
+        // 3 × 46px of controls, the margins and the "+" button leave 824px
+        // for 8 tabs.
+        assert_eq!(bar.slots[0].width, 103.0);
         assert_eq!(bar.hit(870.0, 10.0), Some(BarHit::Minimize));
         assert_eq!(bar.hit(930.0, 10.0), Some(BarHit::Maximize));
         assert_eq!(bar.hit(999.0, 10.0), Some(BarHit::CloseWindow));
         assert_eq!(bar.hit(861.0, 10.0), Some(BarHit::Empty));
+    }
+
+    #[test]
+    fn new_tab_button_follows_the_last_tab() {
+        // Two 280px tabs end at 564; the button takes the next 30px.
+        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
+        assert_eq!(bar.hit(563.0, 10.0), Some(BarHit::Tab(1)));
+        assert_eq!(bar.hit(564.0, 10.0), Some(BarHit::NewTab));
+        assert_eq!(bar.hit(593.0, 10.0), Some(BarHit::NewTab));
+        assert_eq!(bar.hit(594.0, 10.0), Some(BarHit::Empty));
+        // Dropping a tab onto the button moves it to the end.
+        assert_eq!(bar.drop_index(570.0), Some(1));
+
+        // With many tabs the button still fits before the window controls.
+        let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, true);
+        assert_eq!(bar.hit(830.0, 10.0), Some(BarHit::NewTab));
+        assert_eq!(bar.hit(870.0, 10.0), Some(BarHit::Minimize));
+    }
+
+    #[test]
+    fn hovered_new_tab_button_is_highlighted() {
+        let bar = TabBar::new(1000.0, 1, CELL, 1.0, 0.0, false);
+        let labels = [TabLabel {
+            title: "~".into(),
+            active: true,
+            activity: false,
+            bell: false,
+        }];
+        let (bg, fg) = (Rgb { r: 0, g: 0, b: 0 }, WHITE);
+        let (plain, _) = bar.draw(&labels, None, false, bg, fg);
+        let (rects, _) = bar.draw(&labels, Some(BarHit::NewTab), false, bg, fg);
+        assert_eq!(rects.len(), plain.len() + 1);
+        // The "+" is drawn in the foreground color when hovered.
+        assert_eq!(rects.iter().filter(|r| r.color == fg).count(), 2);
     }
 
     #[test]
