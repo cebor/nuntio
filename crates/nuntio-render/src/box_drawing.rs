@@ -1,7 +1,6 @@
-//! Procedurally drawn box-drawing and block characters (U+2500–U+259F), so
-//! lines connect seamlessly across cells regardless of the font's metrics.
-//!
-//! Double lines (U+2550–U+256C) are left to the font for now.
+//! Procedurally drawn box-drawing and block characters (U+2500–U+259F) and
+//! the Powerline arrows (U+E0B0–U+E0B3), so lines and prompt segments
+//! connect seamlessly across cells regardless of the font's metrics.
 
 /// Line weight of one arm of a box-drawing character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +77,7 @@ pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Vec<u8
             let (segments, arms) = dashed(c)?;
             draw_dashed(&mut canvas, arms, segments, light, heavy);
         }
+        0x2550..=0x256C => draw_double(&mut canvas, double_arms(c)?, light),
         // Rounded corners: two straight arms joined by a quarter circle.
         0x256D..=0x2570 => {
             // Centered on the pixels of the straight lines in `draw_arms`.
@@ -122,6 +122,7 @@ pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Vec<u8
             }
         }
         0x2580..=0x259F => draw_block(&mut canvas, c)?,
+        0xE0B0..=0xE0B3 => draw_powerline(&mut canvas, c, light),
         _ => return None,
     }
     Some(canvas.data)
@@ -244,6 +245,143 @@ fn draw_arms(canvas: &mut Canvas, arms: Arms, light: i32, heavy: i32) {
     }
 }
 
+/// Arms of the double-line characters U+2550–U+256C, as "up right down
+/// left" digits (0 = none, 1 = light, 2 = double).
+fn double_arms(c: char) -> Option<[Line; 4]> {
+    const TABLE: [&str; 29] = [
+        "0202", "2020", // ═ ║
+        "0210", "0120", "0220", // ╒ ╓ ╔
+        "0012", "0021", "0022", // ╕ ╖ ╗
+        "1200", "2100", "2200", // ╘ ╙ ╚
+        "1002", "2001", "2002", // ╛ ╜ ╝
+        "1210", "2120", "2220", // ╞ ╟ ╠
+        "1012", "2021", "2022", // ╡ ╢ ╣
+        "0212", "0121", "0222", // ╤ ╥ ╦
+        "1202", "2101", "2202", // ╧ ╨ ╩
+        "1212", "2121", "2222", // ╪ ╫ ╬
+    ];
+    let spec = TABLE.get((c as u32).checked_sub(0x2550)? as usize)?;
+    let line = |b: u8| match b {
+        b'1' => Line::Single,
+        b'2' => Line::Double,
+        _ => Line::None,
+    };
+    let b = spec.as_bytes();
+    Some([line(b[0]), line(b[1]), line(b[2]), line(b[3])])
+}
+
+/// An arm of a double-line character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Line {
+    None,
+    Single,
+    Double,
+}
+
+/// Draw a character with double lines. A double line is two light lines
+/// with a light line's width between them, centered where a single line
+/// would be, so `═` continues `─`. Each rail runs from the cell edge to
+/// where it meets the lines across it:
+///
+/// - A double rail stops at the near rail of a double arm on its side
+///   (the inner corners of `╔` and `╬`); otherwise it runs on, through the
+///   junction if the line continues, else to the far side of the crossing
+///   line (the outer corner of `╔`).
+/// - A single line crosses if it continues on the other side, and
+///   otherwise stops at the near rail of a double line that runs through
+///   (`╤`) or the far rail of one that ends here (`╒`).
+fn draw_double(canvas: &mut Canvas, arms: [Line; 4], t: i32) {
+    let (w, h) = (canvas.width as i32, canvas.height as i32);
+    // Single line, and the low and high rail of a double line, across a
+    // side of `size` pixels.
+    let rails = |size: i32| {
+        let single = (size - t) / 2;
+        (single, single - t, single + t)
+    };
+
+    for arm in [UP, RIGHT, DOWN, LEFT] {
+        let kind = arms[arm];
+        if kind == Line::None {
+            continue;
+        }
+        let horizontal = arm == LEFT || arm == RIGHT;
+        // `length` runs along the arm; `across` is the other dimension.
+        let (length, across) = if horizontal { (w, h) } else { (h, w) };
+        let from_start = arm == LEFT || arm == UP;
+        let opposite = arms[(arm + 2) % 4];
+        // Arms across this one: the one on the low side (up for horizontal
+        // arms, left for vertical ones) and the high side.
+        let (low_side, high_side) = if horizontal {
+            (arms[UP], arms[DOWN])
+        } else {
+            (arms[LEFT], arms[RIGHT])
+        };
+        let (p_single, p_low, p_high) = rails(length);
+        // How far the arm reaches along its length: a position given as
+        // "the rail at `pos`", reached by covering it.
+        let reach = |pos: i32| if from_start { pos + t } else { pos };
+        let (near, far) = if from_start {
+            (p_low, p_high)
+        } else {
+            (p_high, p_low)
+        };
+        let center = if from_start {
+            (length + t) / 2
+        } else {
+            (length - t) / 2
+        };
+        let through = if from_start { length } else { 0 };
+        let crossing = if low_side == Line::Double || high_side == Line::Double {
+            Some(Line::Double)
+        } else if low_side == Line::Single || high_side == Line::Single {
+            Some(Line::Single)
+        } else {
+            None
+        };
+        // Where a rail ends when nothing on its own side stops it.
+        let open_end = |continues: bool| match (continues, crossing) {
+            (true, _) => through,
+            (false, Some(Line::Double)) => reach(far),
+            (false, Some(_)) => reach(p_single),
+            (false, None) => center,
+        };
+
+        let (a_single, a_low, a_high) = rails(across);
+        let rail_ends: Vec<(i32, i32)> = match kind {
+            Line::Single => {
+                let end = if opposite != Line::None {
+                    through
+                } else if crossing == Some(Line::Double) {
+                    let runs_through = low_side == Line::Double && high_side == Line::Double;
+                    reach(if runs_through { near } else { far })
+                } else {
+                    open_end(false)
+                };
+                vec![(a_single, end)]
+            }
+            _ => [(a_low, low_side), (a_high, high_side)]
+                .into_iter()
+                .map(|(rail, side)| {
+                    let end = if side == Line::Double {
+                        reach(near)
+                    } else {
+                        open_end(opposite != Line::None)
+                    };
+                    (rail, end)
+                })
+                .collect(),
+        };
+        for (rail, end) in rail_ends {
+            let (start, stop) = if from_start { (0, end) } else { (end, length) };
+            if horizontal {
+                canvas.rect(start, rail, stop, rail + t, 255);
+            } else {
+                canvas.rect(rail, start, rail + t, stop, 255);
+            }
+        }
+    }
+}
+
 fn draw_dashed(canvas: &mut Canvas, arms: Arms, segments: i32, light: i32, heavy: i32) {
     let (w, h) = (canvas.width as i32, canvas.height as i32);
     let horizontal = arms[LEFT] != Weight::None;
@@ -263,6 +401,34 @@ fn draw_dashed(canvas: &mut Canvas, arms: Arms, segments: i32, light: i32, heavy
             let x = (w - t) / 2;
             canvas.rect(x, start, x + t, end, 255);
         }
+    }
+}
+
+/// Powerline arrows: a filled triangle pointing right (``) or left
+/// (``), or just its two slanted edges (`` ``), spanning the cell's
+/// full height.
+fn draw_powerline(canvas: &mut Canvas, c: char, stroke: i32) {
+    let (w, h) = (canvas.width as f32, canvas.height as f32);
+    let len = w.hypot(h / 2.0);
+    let pointing_left = matches!(c, '\u{E0B2}' | '\u{E0B3}');
+    // Distances to the upper edge (top-left corner to the tip) and the
+    // lower one, positive inside the triangle.
+    let edges = move |x: f32, y: f32| {
+        let x = if pointing_left { w - x } else { x };
+        let upper = (w * y - h / 2.0 * x) / len;
+        let lower = (w * (h - y) - h / 2.0 * x) / len;
+        (upper, lower, y < h / 2.0)
+    };
+    if matches!(c, '\u{E0B0}' | '\u{E0B2}') {
+        canvas.shape(0.0, |x, y| {
+            let (upper, lower, _) = edges(x, y);
+            -upper.min(lower)
+        });
+    } else {
+        canvas.shape(stroke as f32 / 2.0, |x, y| {
+            let (upper, lower, top_half) = edges(x, y);
+            if top_half { upper.abs() } else { lower.abs() }
+        });
     }
 }
 
@@ -410,9 +576,70 @@ mod tests {
         assert_eq!(row(&arc, W - 1), row(&horizontal, W - 1), "right arm");
     }
 
+    /// A mask as rows of `#` and `.`, for readable assertions.
+    fn picture(c: char, width: u32, height: u32) -> Vec<String> {
+        let mask = rasterize(c, width, height, 1).unwrap();
+        mask.chunks(width as usize)
+            .map(|row| row.iter().map(|&p| if p > 0 { '#' } else { '.' }).collect())
+            .collect()
+    }
+
     #[test]
-    fn double_lines_are_left_to_the_font() {
-        assert_eq!(rasterize('═', W, H, 2), None);
+    fn double_lines_center_on_single_ones() {
+        // 7×7 cell, 1px stroke: single lines at 3, double rails at 2 and 4.
+        assert_eq!(picture('═', 7, 7)[2], "#######");
+        assert_eq!(picture('═', 7, 7)[3], ".......");
+        assert_eq!(picture('═', 7, 7)[4], "#######");
+        assert_eq!(picture('─', 7, 7)[3], "#######");
+    }
+
+    #[test]
+    fn double_corners_and_crossings() {
+        #[rustfmt::skip]
+        let cases: [(char, [&str; 7]); 6] = [
+            ('╔', [".......", ".......", "..#####", "..#....", "..#.###", "..#.#..", "..#.#.."]),
+            ('╬', ["..#.#..", "..#.#..", "###.###", ".......", "###.###", "..#.#..", "..#.#.."]),
+            ('╦', [".......", ".......", "#######", ".......", "###.###", "..#.#..", "..#.#.."]),
+            ('╒', [".......", ".......", "...####", "...#...", "...####", "...#...", "...#..."]),
+            ('╤', [".......", ".......", "#######", ".......", "#######", "...#...", "...#..."]),
+            ('╫', ["..#.#..", "..#.#..", "..#.#..", "#######", "..#.#..", "..#.#..", "..#.#.."]),
+        ];
+        for (c, expected) in cases {
+            assert_eq!(picture(c, 7, 7), expected, "{c}");
+        }
+    }
+
+    #[test]
+    fn every_double_line_character_is_drawn() {
+        for code in 0x2550..=0x256C {
+            let c = char::from_u32(code).unwrap();
+            assert!(render(c).iter().any(|&p| p > 0), "{c} is empty");
+        }
+    }
+
+    #[test]
+    fn powerline_arrows_span_the_cell() {
+        // The outermost corner pixels are half covered (antialiased).
+        let right = render('\u{E0B0}');
+        assert!(at(&right, 0, 0) > 0, "left edge, top");
+        assert!(at(&right, 0, H - 1) > 0, "left edge, bottom");
+        assert!((1..H - 1).all(|y| at(&right, 0, y) == 255), "left edge");
+        assert!(at(&right, W - 1, H / 2) > 0, "tip");
+        assert_eq!(at(&right, W - 2, H / 2), 255, "before the tip");
+        assert_eq!(at(&right, W - 1, 0), 0);
+        let left = render('\u{E0B2}');
+        assert!((1..H - 1).all(|y| at(&left, W - 1, y) == 255), "right edge");
+        assert!(at(&left, 0, H / 2) > 0);
+        assert_eq!(at(&left, 0, 0), 0);
+        let thin = render('\u{E0B1}');
+        assert!(at(&thin, 0, 0) > 0);
+        assert_eq!(at(&thin, 0, H / 2), 0, "hollow");
+        assert!(at(&thin, W - 1, H / 2) > 0);
+        assert!(render('\u{E0B3}').iter().any(|&p| p > 0));
+    }
+
+    #[test]
+    fn other_characters_are_left_to_the_font() {
         assert_eq!(rasterize('a', W, H, 2), None);
     }
 }
