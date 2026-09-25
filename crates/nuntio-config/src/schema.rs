@@ -113,6 +113,10 @@ pub enum Kind {
     /// An installed font family, or any other name.
     Font,
     Text,
+    /// A program to run; the installed shells are offered.
+    Program,
+    /// A WSL distribution; the installed ones are offered.
+    WslDistribution,
     /// A list of strings (program arguments).
     StringList,
     /// A subset of the variants in a chosen order, each at most once
@@ -438,7 +442,7 @@ pub static SETTINGS: &[Setting] = &[
             "shell.program",
             Section::Shell,
             "Program",
-            Kind::Text,
+            Kind::Program,
             "Program to run in new panes. With a WSL distribution, it runs inside it \
              instead of the login shell.",
         ),
@@ -461,7 +465,7 @@ pub static SETTINGS: &[Setting] = &[
                 "shell.wsl",
                 Section::Shell,
                 "WSL distribution",
-                Kind::Text,
+                Kind::WslDistribution,
                 "Start new panes in this WSL distribution, as listed by `wsl -l -v`.",
             ),
             "none",

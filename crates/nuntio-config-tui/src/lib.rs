@@ -3,6 +3,7 @@
 //! change is applied live through nuntio's hot reload.
 
 mod args;
+mod detect;
 mod state;
 mod ui;
 mod widgets;
@@ -14,7 +15,7 @@ use anyhow::{Context, Result};
 use nuntio_config::ThemeSet;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::state::{App, Key, Store};
+use crate::state::{App, Key, Sources, Store};
 
 /// Set by nuntio in its panes: the config file it uses.
 const CONFIG_ENV: &str = "NUNTIO_CONFIG";
@@ -127,7 +128,11 @@ pub fn main() -> Result<()> {
         Box::new(FileStore(path.clone())),
         display_path(&path),
         themes,
-        Box::new(installed_fonts),
+        Sources {
+            fonts: Box::new(installed_fonts),
+            shells: Box::new(detect::installed_shells),
+            wsl_distributions: Box::new(detect::wsl_distributions),
+        },
     )
     .map_err(anyhow::Error::msg)?;
     app.set_theme_warnings(theme_warnings);

@@ -13,6 +13,7 @@ use nuntio_config::toml_edit::{self, InlineTable};
 use nuntio_config::{ACTIONS, Config, ConfigDoc, KeyCombo, Keybinding, ThemeSelection, ThemeSet};
 
 use crate::args;
+use crate::detect::Found;
 use crate::widgets::{Choice, Pick, Picker, TextInput};
 
 /// Where the config lives. A trait so tests can run without files.
@@ -20,6 +21,15 @@ pub trait Store {
     /// Current contents; `None` if the file doesn't exist yet.
     fn read(&self) -> io::Result<Option<String>>;
     fn write(&mut self, contents: &str) -> io::Result<()>;
+}
+
+/// What is installed, for the pickers. Each is asked once, when first
+/// needed; tests pass fixed lists.
+pub struct Sources {
+    /// Monospace font families.
+    pub fonts: Box<dyn Fn() -> Vec<String>>,
+    pub shells: Box<dyn Fn() -> Vec<Found>>,
+    pub wsl_distributions: Box<dyn Fn() -> Vec<Found>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,8 +247,10 @@ pub struct App {
     theme_warnings: Vec<String>,
     pub message: Option<(Tone, String)>,
     pub themes: ThemeSet,
+    sources: Sources,
     fonts: Option<Vec<String>>,
-    font_source: Box<dyn Fn() -> Vec<String>>,
+    shells: Option<Vec<Found>>,
+    wsl_distributions: Option<Vec<Found>>,
     pub section: usize,
     pub row: usize,
     pub focus: Focus,
@@ -304,7 +316,7 @@ impl App {
         store: Box<dyn Store>,
         path_label: String,
         themes: ThemeSet,
-        font_source: Box<dyn Fn() -> Vec<String>>,
+        sources: Sources,
     ) -> Result<Self, String> {
         let source = store
             .read()
@@ -327,8 +339,10 @@ impl App {
             theme_warnings: Vec::new(),
             message: None,
             themes,
+            sources,
             fonts: None,
-            font_source,
+            shells: None,
+            wsl_distributions: None,
             section: 0,
             row: 0,
             focus: Focus::Rows,
@@ -985,7 +999,7 @@ impl App {
             Kind::Font => {
                 let fonts = self
                     .fonts
-                    .get_or_insert_with(|| (self.font_source)())
+                    .get_or_insert_with(|| (self.sources.fonts)())
                     .clone();
                 let mut choices = vec![Choice {
                     pick: Pick::Unset,
@@ -1016,6 +1030,22 @@ impl App {
                 .filterable(true);
                 self.open_picker(picker, PickTarget::Setting(setting));
             }
+            Kind::Program => {
+                let shells = self
+                    .shells
+                    .get_or_insert_with(|| (self.sources.shells)())
+                    .clone();
+                self.open_detected_picker(setting, shells, "Program");
+            }
+            Kind::WslDistribution => {
+                // To tell host shells in `shell.program` apart.
+                self.shells.get_or_insert_with(|| (self.sources.shells)());
+                let distributions = self
+                    .wsl_distributions
+                    .get_or_insert_with(|| (self.sources.wsl_distributions)())
+                    .clone();
+                self.open_detected_picker(setting, distributions, "Distribution");
+            }
             Kind::OrderedSet(_) => {
                 self.mode = Mode::Items {
                     setting,
@@ -1024,6 +1054,34 @@ impl App {
             }
             Kind::Theme => self.open_theme_picker(ThemeSlot::Single),
         }
+    }
+
+    /// A picker of what was found on this system; any other value can be
+    /// typed in.
+    fn open_detected_picker(&mut self, setting: &'static Setting, found: Vec<Found>, what: &str) {
+        let mut choices = vec![Choice {
+            pick: Pick::Unset,
+            label: format!("(default: {})", setting.unset.unwrap_or("none")),
+            help: "Leave the setting out of the file.".into(),
+        }];
+        let current = self.current_pick(setting);
+        if let Pick::Value(value) = &current
+            && !found.iter().any(|f| f.value.eq_ignore_ascii_case(value))
+        {
+            choices.push(Choice {
+                pick: current.clone(),
+                label: value.clone(),
+                help: "Not found on this system.".into(),
+            });
+        }
+        choices.extend(found.into_iter().map(|f| Choice {
+            pick: Pick::Value(f.value.clone()),
+            label: f.value,
+            help: f.help,
+        }));
+        let title = format!("{what} (type to filter, or enter any name)");
+        let picker = Picker::new(title, choices, &current).filterable(true);
+        self.open_picker(picker, PickTarget::Setting(setting));
     }
 
     fn current_pick(&self, setting: &Setting) -> Pick {
@@ -1077,9 +1135,44 @@ impl App {
     }
 
     /// The edit that choosing `pick` makes.
+    /// Whether `program` is one of the shells found on this system.
+    fn is_detected_shell(&self, program: &str) -> bool {
+        self.shells
+            .iter()
+            .flatten()
+            .any(|f| f.value.eq_ignore_ascii_case(program))
+    }
+
     fn pick_edit(&self, target: &PickTarget, pick: Pick) -> Box<dyn FnOnce(&mut ConfigDoc)> {
         match (target, pick) {
             (&PickTarget::Setting(s), Pick::Unset) => Box::new(|doc| doc.unset(s.path)),
+            // A detected shell runs on the host, so it leaves WSL; a program
+            // inside WSL would be looked up in the distribution instead.
+            (&PickTarget::Setting(s), Pick::Value(value))
+                if s.kind == Kind::Program && self.is_detected_shell(&value) =>
+            {
+                Box::new(move |doc| {
+                    doc.unset("shell.wsl");
+                    doc.unset("shell.wsl_user");
+                    doc.set(s.path, value);
+                })
+            }
+            // Likewise, a distribution drops a host shell: it isn't
+            // installed in there.
+            (&PickTarget::Setting(s), Pick::Value(value))
+                if s.kind == Kind::WslDistribution
+                    && self
+                        .doc
+                        .get("shell.program")
+                        .and_then(|item| item.as_str())
+                        .is_some_and(|program| self.is_detected_shell(program)) =>
+            {
+                Box::new(move |doc| {
+                    doc.unset("shell.program");
+                    doc.unset("shell.args");
+                    doc.set(s.path, value);
+                })
+            }
             (&PickTarget::Setting(s), Pick::Value(value)) => {
                 Box::new(move |doc| doc.set(s.path, value))
             }
@@ -1532,7 +1625,33 @@ mod tests {
             Box::new(memory.clone()),
             "config.toml".into(),
             themes,
-            Box::new(|| vec!["Hack".into(), "JetBrains Mono".into()]),
+            Sources {
+                fonts: Box::new(|| vec!["Hack".into(), "JetBrains Mono".into()]),
+                shells: Box::new(|| {
+                    vec![
+                        Found {
+                            value: "pwsh".into(),
+                            help: "PowerShell 7".into(),
+                        },
+                        Found {
+                            value: "cmd".into(),
+                            help: "Command Prompt".into(),
+                        },
+                    ]
+                }),
+                wsl_distributions: Box::new(|| {
+                    vec![
+                        Found {
+                            value: "Ubuntu".into(),
+                            help: "The default distribution.".into(),
+                        },
+                        Found {
+                            value: "Debian".into(),
+                            help: String::new(),
+                        },
+                    ]
+                }),
+            },
         )
         .unwrap();
         (app, memory)
@@ -1691,6 +1810,78 @@ mod tests {
         app.key(Key::Up);
         app.key(Key::Enter);
         assert_eq!(memory.text(), "", "(system monospace) unsets");
+    }
+
+    #[test]
+    fn shell_picker_offers_installed_shells() {
+        let (mut app, memory) = app(None);
+        go_to(&mut app, "shell.program");
+        app.key(Key::Enter);
+        let Mode::Picker { picker, .. } = &app.mode else {
+            panic!("no picker");
+        };
+        let labels: Vec<_> = picker.visible.iter().map(|&e| picker.label(e)).collect();
+        assert_eq!(labels.len(), 3);
+        assert!(labels[0].starts_with("(default: "));
+        assert_eq!(labels[1..], ["pwsh", "cmd"]);
+        app.key(Key::Down);
+        app.key(Key::Enter);
+        assert_eq!(memory.text(), "shell = { program = \"pwsh\" }\n");
+
+        app.key(Key::Enter);
+        type_text(&mut app, "nu");
+        // The typed text is the last entry.
+        app.key(Key::End);
+        app.key(Key::Enter);
+        assert_eq!(memory.text(), "shell = { program = \"nu\" }\n");
+        app.key(Key::Enter);
+        let Mode::Picker { picker, .. } = &app.mode else {
+            panic!("no picker");
+        };
+        assert_eq!(picker.label(picker.visible[picker.selected]), "nu");
+        assert_eq!(
+            picker.choices[1].help, "Not found on this system.",
+            "a value typed earlier stays selectable"
+        );
+    }
+
+    #[test]
+    fn wsl_picker_offers_installed_distributions() {
+        let (mut app, memory) = app(None);
+        go_to(&mut app, "shell.wsl");
+        app.key(Key::Enter);
+        type_text(&mut app, "deb");
+        app.key(Key::Enter);
+        assert_eq!(memory.text(), "shell = { wsl = \"Debian\" }\n");
+    }
+
+    #[test]
+    fn host_shells_and_distributions_replace_each_other() {
+        let (mut app, memory) = app(Some(
+            "shell = { wsl = \"Ubuntu\", wsl_user = \"root\", program = \"fish\" }\n",
+        ));
+        go_to(&mut app, "shell.program");
+        app.key(Key::Enter);
+        type_text(&mut app, "pwsh");
+        app.key(Key::Enter);
+        assert_eq!(memory.text(), "shell = { program = \"pwsh\" }\n");
+
+        go_to(&mut app, "shell.wsl");
+        app.key(Key::Enter);
+        type_text(&mut app, "ubu");
+        app.key(Key::Enter);
+        assert_eq!(memory.text(), "shell = { wsl = \"Ubuntu\" }\n");
+
+        // A program that isn't a host shell runs inside the distribution.
+        go_to(&mut app, "shell.program");
+        app.key(Key::Enter);
+        type_text(&mut app, "zsh");
+        app.key(Key::End);
+        app.key(Key::Enter);
+        assert_eq!(
+            memory.text(),
+            "shell = { wsl = \"Ubuntu\", program = \"zsh\" }\n"
+        );
     }
 
     #[test]
