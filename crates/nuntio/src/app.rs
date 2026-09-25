@@ -52,10 +52,12 @@ const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
 const RESIZE_STEP_CELLS: u32 = 2;
 /// Immediate retries of a skipped frame before waiting for the next event.
 const MAX_FRAME_RETRIES: u32 = 3;
-/// How long a close that asked for confirmation waits for its repetition.
-const CONFIRM_CLOSE: Duration = Duration::from_secs(5);
+/// How long an action that asked for confirmation waits to be repeated.
+const CONFIRM_REPEAT: Duration = Duration::from_secs(5);
 /// Title of the banner that asks to confirm a close.
 const CLOSE_BANNER: &str = "Close";
+/// Title of the banner that asks to confirm a paste.
+const PASTE_BANNER: &str = "Paste";
 
 /// WSLg's Weston (9.0, RDP backend) segfaults on pointer motion over windows
 /// with winit's client-side decorations, taking every Wayland client down with
@@ -246,6 +248,27 @@ struct PendingClose {
     until: Instant,
 }
 
+/// A paste that would run commands at once and waits to be repeated.
+#[derive(Debug, Clone)]
+struct PendingPaste {
+    text: String,
+    until: Instant,
+}
+
+/// Why pasting `text` without bracketed paste needs confirmation: each
+/// line break works like Enter, so the shell runs the lines at once.
+fn paste_warning(text: &str) -> Option<String> {
+    if !text.contains(['\n', '\r']) {
+        return None;
+    }
+    let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
+    Some(if lines > 1 {
+        format!("{lines} lines would run at once; paste again to run them")
+    } else {
+        "the text has a line break and would run at once; paste again to run it".into()
+    })
+}
+
 /// Asks to confirm closing `target`, in which the programs `running` run
 /// (one name per pane).
 fn close_message(running: &[String], target: CloseTarget) -> String {
@@ -314,6 +337,8 @@ pub struct App {
     exit_requested: bool,
     /// A close waiting for confirmation (`window.confirm_close`).
     pending_close: Option<PendingClose>,
+    /// A paste waiting for confirmation (`confirm_paste`).
+    pending_paste: Option<PendingPaste>,
     /// A fatal error that ended the event loop.
     error: Option<anyhow::Error>,
 }
@@ -361,6 +386,7 @@ impl App {
             startup,
             exit_requested: false,
             pending_close: None,
+            pending_paste: None,
             error: None,
         };
         let theme_warning = app.update_palette();
@@ -890,7 +916,7 @@ impl App {
 
     /// Whether `target` may close now. If programs other than the shell
     /// run in it, the first request names them in a banner, and only the
-    /// same request again within `CONFIRM_CLOSE` closes it.
+    /// same request again within `CONFIRM_REPEAT` closes it.
     fn confirm_close(&mut self, target: CloseTarget) -> bool {
         let now = Instant::now();
         let pending = self.pending_close.take();
@@ -916,28 +942,66 @@ impl App {
             .filter(|p| p.term.foreground_is_shell() == Some(false))
             .map(|p| p.term.process_name())
             .collect();
-        if self
-            .banner
-            .as_ref()
-            .is_some_and(|b| b.title == CLOSE_BANNER)
-        {
-            self.banner = None;
-        }
+        self.dismiss_banner(CLOSE_BANNER);
         if running.is_empty() || pending.is_some_and(|p| p.target == target && now < p.until) {
             return true;
         }
         self.pending_close = Some(PendingClose {
             target,
-            until: now + CONFIRM_CLOSE,
+            until: now + CONFIRM_REPEAT,
         });
-        // Shown even over an error: closing must not look like it failed.
-        let message = close_message(&running, target);
+        self.ask_to_repeat(CLOSE_BANNER, close_message(&running, target));
+        false
+    }
+
+    /// Paste into the focused pane. Where the program doesn't use
+    /// bracketed paste, text with line breaks would run at once: the
+    /// first paste only warns, and the same paste again within
+    /// `CONFIRM_REPEAT` goes through.
+    fn paste(&mut self, text: String) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        let bracketed = state.term().mode().contains(TermMode::BRACKETED_PASTE);
+        let pending = self.pending_paste.take();
+        self.dismiss_banner(PASTE_BANNER);
+        let now = Instant::now();
+        if self.config.confirm_paste
+            && !bracketed
+            && let Some(message) = paste_warning(&text)
+            && !pending.is_some_and(|p| p.text == text && now < p.until)
+        {
+            self.pending_paste = Some(PendingPaste {
+                text,
+                until: now + CONFIRM_REPEAT,
+            });
+            self.ask_to_repeat(PASTE_BANNER, message);
+            return;
+        }
+        if let Some(state) = self.state.as_ref() {
+            state.term().paste(&text);
+        }
+    }
+
+    /// Drop the banner titled `title`, if it is shown.
+    fn dismiss_banner(&mut self, title: &str) {
+        if self.banner.as_ref().is_some_and(|b| b.title == title) {
+            self.banner = None;
+            if let Some(state) = self.state.as_ref() {
+                state.window.request_redraw();
+            }
+        }
+    }
+
+    /// Show a banner asking to repeat an action to confirm it. It replaces
+    /// any other banner, even an error: the action must not look like it
+    /// failed.
+    fn ask_to_repeat(&mut self, title: &'static str, message: String) {
         tracing::info!("{message}");
-        self.banner = Banner::new(Severity::Warning, CLOSE_BANNER, vec![message]);
+        self.banner = Banner::new(Severity::Warning, title, vec![message]);
         if let Some(state) = self.state.as_ref() {
             state.window.request_redraw();
         }
-        false
     }
 
     fn run_action(&mut self, action: Action) {
@@ -947,16 +1011,14 @@ impl App {
         match action {
             Action::Copy => self.copy_selection(),
             Action::Paste => {
-                if let Some(text) = self.clipboard_text()
-                    && let Some(state) = self.state.as_mut()
-                {
-                    match state.search_and_term() {
+                if let Some(text) = self.clipboard_text() {
+                    match self.state.as_mut().and_then(|s| s.search_and_term()) {
                         // Pasting into the find bar extends the query.
                         Some((bar, term)) => {
                             bar.query.push_str(text.lines().next().unwrap_or(""));
                             bar.update(term);
                         }
-                        None => state.term().paste(&text),
+                        None => self.paste(text),
                     }
                 }
             }
@@ -1344,9 +1406,8 @@ impl App {
             if pressed
                 && button == Button::Middle
                 && let Some(text) = self.primary_text()
-                && let Some(state) = self.state.as_ref()
             {
-                state.term().paste(&text);
+                self.paste(text);
             }
             return;
         }
@@ -1826,6 +1887,19 @@ mod tests {
     use winit::keyboard::ModifiersState;
 
     use super::*;
+
+    #[test]
+    fn pastes_with_line_breaks_are_confirmed() {
+        assert_eq!(paste_warning("ls -la"), None);
+        assert_eq!(
+            paste_warning("rm -rf build\n").as_deref(),
+            Some("the text has a line break and would run at once; paste again to run it")
+        );
+        assert_eq!(
+            paste_warning("cd /tmp\r\nls\n\nmake\n").as_deref(),
+            Some("3 lines would run at once; paste again to run them")
+        );
+    }
 
     #[test]
     fn close_messages_name_the_programs() {

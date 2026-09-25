@@ -253,6 +253,13 @@ pub static SETTINGS: &[Setting] = &[
         "Let programs copy to the clipboard with OSC 52, e.g. vim or tmux over ssh. Programs can never read it.",
     ),
     setting(
+        "confirm_paste",
+        Section::General,
+        "Confirm paste",
+        Kind::Bool,
+        "Ask before pasting text with line breaks where the shell would run each line at once: paste it again within a few seconds to confirm.",
+    ),
+    setting(
         "theme",
         Section::Theme,
         "Theme",

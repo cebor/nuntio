@@ -29,6 +29,8 @@ pub struct Config {
     pub scrollback: usize,
     /// Programs may copy to the clipboard (OSC 52).
     pub clipboard_write: bool,
+    /// Ask before pasting line breaks that would run commands at once.
+    pub confirm_paste: bool,
     pub font: Font,
     pub window: Window,
     pub tabs: Tabs,
@@ -46,6 +48,7 @@ impl Default for Config {
             shell: None,
             scrollback: 10_000,
             clipboard_write: true,
+            confirm_paste: true,
             font: Font::default(),
             window: Window::default(),
             tabs: Tabs::default(),
