@@ -3,6 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::schema::{DIM_INACTIVE, FONT_SIZE, MAX_SCROLLBACK, OPACITY};
 use crate::{Config, Shell, StatusBar};
 
 /// `$XDG_CONFIG_HOME/nuntio`, else `~/.config/nuntio` — on every platform,
@@ -142,8 +143,8 @@ fn describe(err: &toml::de::Error, source: &str) -> String {
 
 impl Config {
     fn validate(&self) -> Result<(), String> {
-        let in_range = |name: &str, value: f32, min: f32, max: f32| {
-            if (min..=max).contains(&value) {
+        let in_range = |name: &str, value: f32, (min, max): (f64, f64)| {
+            if (min..=max).contains(&f64::from(value)) {
                 Ok(())
             } else {
                 Err(format!(
@@ -151,12 +152,12 @@ impl Config {
                 ))
             }
         };
-        in_range("font.size", self.font.size, 4.0, 72.0)?;
-        in_range("window.opacity", self.window.opacity, 0.0, 1.0)?;
-        in_range("panes.dim_inactive", self.panes.dim_inactive, 0.0, 1.0)?;
-        if self.scrollback > 1_000_000 {
+        in_range("font.size", self.font.size, FONT_SIZE)?;
+        in_range("window.opacity", self.window.opacity, OPACITY)?;
+        in_range("panes.dim_inactive", self.panes.dim_inactive, DIM_INACTIVE)?;
+        if self.scrollback as u64 > MAX_SCROLLBACK as u64 {
             return Err(format!(
-                "`scrollback` must be at most 1000000, got {}",
+                "`scrollback` must be at most {MAX_SCROLLBACK}, got {}",
                 self.scrollback
             ));
         }

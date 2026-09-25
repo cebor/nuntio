@@ -1,20 +1,23 @@
 //! Config schema, loading, validation, themes and file watching.
 
 mod color;
+mod keys;
 mod load;
+pub mod schema;
 mod theme;
 mod watch;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub use color::Color;
+pub use keys::{ACTIONS, KeyCombo, KeyName, Mods, NamedKey};
 pub use load::{
     ConfigError, ConfigLocation, Loaded, config_dir, load, locate_config, parse, themes_dir,
 };
 pub use theme::{DEFAULT_THEME, Theme, ThemeSet, builtin_themes, parse_itermcolors};
 pub use watch::ConfigWatcher;
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub shell: Option<Shell>,
@@ -54,7 +57,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Shell {
     /// With `wsl`, the program to run inside the distro instead of the
@@ -91,7 +94,7 @@ impl Shell {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Font {
     pub family: Option<String>,
@@ -107,7 +110,7 @@ impl Default for Font {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Padding {
     pub x: u16,
@@ -121,7 +124,7 @@ impl Default for Padding {
 }
 
 /// Who draws the window frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Decorations {
     /// nuntio's own header: the tab bar with window buttons (on macOS, the
@@ -132,7 +135,7 @@ pub enum Decorations {
     System,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MacosTitlebar {
     Native,
@@ -140,7 +143,7 @@ pub enum MacosTitlebar {
     None,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Window {
     pub padding: Padding,
@@ -172,7 +175,7 @@ impl Default for Window {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TabPosition {
     #[default]
@@ -180,7 +183,7 @@ pub enum TabPosition {
 }
 
 /// What a tab shows as its title.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TabTitle {
     /// The directory while the shell waits at its prompt, otherwise the
@@ -195,7 +198,7 @@ pub enum TabTitle {
     Application,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Tabs {
     pub hide_when_single: bool,
@@ -213,7 +216,7 @@ impl Default for Tabs {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Panes {
     pub dim_inactive: f32,
@@ -225,7 +228,7 @@ impl Default for Panes {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StatusBarPosition {
     #[default]
@@ -235,7 +238,7 @@ pub enum StatusBarPosition {
 }
 
 /// Something the status bar shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StatusItem {
     Cpu,
@@ -245,7 +248,7 @@ pub enum StatusItem {
     Datetime,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct StatusBar {
     pub enabled: bool,
@@ -281,7 +284,7 @@ impl Default for StatusBar {
 }
 
 /// Either a single theme name or a light/dark pair following the OS theme.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ThemeSelection {
     Single(String),
@@ -294,13 +297,13 @@ impl Default for ThemeSelection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Mouse {
     pub copy_on_select: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionAsMeta {
     #[default]
@@ -310,13 +313,13 @@ pub enum OptionAsMeta {
     Both,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct MacOs {
     pub option_as_meta: OptionAsMeta,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Keybinding {
     pub key: String,
     pub action: String,

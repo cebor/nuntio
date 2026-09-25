@@ -235,59 +235,60 @@ impl Bindings {
 
 /// Parse a key combination like `"Ctrl+Shift+T"` or `"Cmd+PageUp"`.
 fn parse_combo(combo: &str) -> Result<(BindKey, ModifiersState), String> {
-    let parts: Vec<&str> = combo.split('+').map(str::trim).collect();
-    let (key, modifiers) = parts.split_last().ok_or("empty key")?;
+    use nuntio_config::KeyName;
+
+    let combo = nuntio_config::KeyCombo::parse(combo)?;
     let mut mods = ModifiersState::empty();
-    for m in modifiers {
-        mods |= match m.to_lowercase().as_str() {
-            "ctrl" | "control" => ModifiersState::CONTROL,
-            "shift" => ModifiersState::SHIFT,
-            "alt" | "opt" | "option" => ModifiersState::ALT,
-            "cmd" | "command" | "super" | "win" | "meta" => ModifiersState::SUPER,
-            _ => return Err(format!("unknown modifier `{m}`")),
-        };
+    for (on, flag) in [
+        (combo.mods.ctrl, ModifiersState::CONTROL),
+        (combo.mods.shift, ModifiersState::SHIFT),
+        (combo.mods.alt, ModifiersState::ALT),
+        (combo.mods.super_key, ModifiersState::SUPER),
+    ] {
+        if on {
+            mods |= flag;
+        }
     }
-    Ok((parse_key(key)?, mods))
+    let key = match combo.key {
+        KeyName::Char(c) => BindKey::Char(c),
+        KeyName::Named(named) => BindKey::Named(named_key(named)),
+    };
+    Ok((key, mods))
 }
 
-fn parse_key(key: &str) -> Result<BindKey, String> {
-    let mut chars = key.chars();
-    if let (Some(c), None) = (chars.next(), chars.next()) {
-        return Ok(BindKey::Char(c.to_lowercase().next().unwrap_or(c)));
+fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
+    use nuntio_config::NamedKey as N;
+    match key {
+        N::Enter => NamedKey::Enter,
+        N::Tab => NamedKey::Tab,
+        N::Escape => NamedKey::Escape,
+        N::Space => NamedKey::Space,
+        N::Backspace => NamedKey::Backspace,
+        N::Delete => NamedKey::Delete,
+        N::Insert => NamedKey::Insert,
+        N::Home => NamedKey::Home,
+        N::End => NamedKey::End,
+        N::PageUp => NamedKey::PageUp,
+        N::PageDown => NamedKey::PageDown,
+        N::Up => NamedKey::ArrowUp,
+        N::Down => NamedKey::ArrowDown,
+        N::Left => NamedKey::ArrowLeft,
+        N::Right => NamedKey::ArrowRight,
+        N::F(n) => [
+            NamedKey::F1,
+            NamedKey::F2,
+            NamedKey::F3,
+            NamedKey::F4,
+            NamedKey::F5,
+            NamedKey::F6,
+            NamedKey::F7,
+            NamedKey::F8,
+            NamedKey::F9,
+            NamedKey::F10,
+            NamedKey::F11,
+            NamedKey::F12,
+        ][usize::from(n.clamp(1, 12)) - 1],
     }
-    let named = match key.to_lowercase().as_str() {
-        "plus" => return Ok(BindKey::Char('+')),
-        "minus" => return Ok(BindKey::Char('-')),
-        "enter" | "return" => NamedKey::Enter,
-        "tab" => NamedKey::Tab,
-        "escape" | "esc" => NamedKey::Escape,
-        "space" => NamedKey::Space,
-        "backspace" => NamedKey::Backspace,
-        "delete" | "del" => NamedKey::Delete,
-        "insert" | "ins" => NamedKey::Insert,
-        "home" => NamedKey::Home,
-        "end" => NamedKey::End,
-        "pageup" | "pgup" => NamedKey::PageUp,
-        "pagedown" | "pgdn" => NamedKey::PageDown,
-        "up" => NamedKey::ArrowUp,
-        "down" => NamedKey::ArrowDown,
-        "left" => NamedKey::ArrowLeft,
-        "right" => NamedKey::ArrowRight,
-        "f1" => NamedKey::F1,
-        "f2" => NamedKey::F2,
-        "f3" => NamedKey::F3,
-        "f4" => NamedKey::F4,
-        "f5" => NamedKey::F5,
-        "f6" => NamedKey::F6,
-        "f7" => NamedKey::F7,
-        "f8" => NamedKey::F8,
-        "f9" => NamedKey::F9,
-        "f10" => NamedKey::F10,
-        "f11" => NamedKey::F11,
-        "f12" => NamedKey::F12,
-        _ => return Err(format!("unknown key `{key}`")),
-    };
-    Ok(BindKey::Named(named))
 }
 
 fn relevant_mods() -> ModifiersState {
@@ -346,6 +347,9 @@ mod tests {
             Ok(Some(Action::FocusPane(Direction::Up)))
         );
         assert!(Action::from_name("select_tab_0").is_err());
+        for action in nuntio_config::ACTIONS {
+            assert!(Action::from_name(action.value).is_ok(), "{}", action.value);
+        }
         assert!(Action::from_name("split_sideways").is_err());
     }
 
