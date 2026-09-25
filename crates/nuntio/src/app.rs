@@ -1042,17 +1042,22 @@ impl App {
             return;
         }
         if pressed {
-            let kind = match state
-                .mouse
-                .clicks
-                .click(Instant::now(), point.column, point.line)
-            {
-                2 => SelectionKind::Semantic,
-                3 => SelectionKind::Lines,
-                _ if state.modifiers.state().alt_key() => SelectionKind::Block,
-                _ => SelectionKind::Simple,
-            };
-            state.term().start_selection(kind, point);
+            if state.modifiers.state().shift_key() && state.term().has_selection() {
+                // Shift+click extends the selection, keeping its kind.
+                state.term().update_selection(point);
+            } else {
+                let kind = match state
+                    .mouse
+                    .clicks
+                    .click(Instant::now(), point.column, point.line)
+                {
+                    2 => SelectionKind::Semantic,
+                    3 => SelectionKind::Lines,
+                    _ if state.modifiers.state().alt_key() => SelectionKind::Block,
+                    _ => SelectionKind::Simple,
+                };
+                state.term().start_selection(kind, point);
+            }
             state.mouse.selecting = true;
             state.window.request_redraw();
         } else if state.mouse.selecting {
