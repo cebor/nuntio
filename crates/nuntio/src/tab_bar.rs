@@ -133,6 +133,14 @@ impl TabBar {
         self.width - 3.0 * self.control_width
     }
 
+    /// Narrow tabs have no close button, so clicks on them select the tab.
+    /// There must be room for the button, the indicator and two cells of
+    /// title.
+    fn has_close(&self, slot: Slot) -> bool {
+        let side = self.cell.height as f32;
+        slot.width >= 2.0 * (self.padding + side) + 2.0 * self.cell.width as f32
+    }
+
     /// Square area of the close button inside a tab.
     fn close_rect(&self, slot: Slot) -> (f32, f32, f32) {
         let size = self.cell.height as f32;
@@ -154,19 +162,30 @@ impl TabBar {
         let Some(index) = self.slot_at(x) else {
             return Some(BarHit::Empty);
         };
-        let (cx, cy, size) = self.close_rect(self.slots[index]);
-        if x >= cx && x < cx + size && y >= cy && y < cy + size {
+        let slot = self.slots[index];
+        let (cx, cy, size) = self.close_rect(slot);
+        if self.has_close(slot) && x >= cx && x < cx + size && y >= cy && y < cy + size {
             Some(BarHit::Close(index))
         } else {
             Some(BarHit::Tab(index))
         }
     }
 
-    /// Tab under a horizontal position, for clicks and drag-reordering.
-    pub fn slot_at(&self, x: f32) -> Option<usize> {
+    /// Tab under a horizontal position, for clicks.
+    fn slot_at(&self, x: f32) -> Option<usize> {
         self.slots
             .iter()
             .position(|s| x >= s.x && x < s.x + s.width)
+    }
+
+    /// Where a dragged tab goes when the pointer is at `x`: the tab under
+    /// it, or the first or last position beyond the row's ends.
+    pub fn drop_index(&self, x: f32) -> Option<usize> {
+        let first = self.slots.first()?;
+        Some(
+            self.slot_at(x)
+                .unwrap_or(if x < first.x { 0 } else { self.slots.len() - 1 }),
+        )
     }
 
     pub fn draw(
@@ -182,7 +201,7 @@ impl TabBar {
             _ => None,
         };
         // Darker than the terminal, with the active tab as a lighter pill.
-        let bar_bg = mix(background, BLACK, 0.18);
+        let bar_bg = bar_background(background);
         let active_bg = mix(background, foreground, 0.08);
         let hover_bg = mix(bar_bg, foreground, 0.08);
         let inactive_text = mix(foreground, background, 0.45);
@@ -249,7 +268,7 @@ impl TabBar {
                 });
             }
 
-            if label.active || hovered_tab == Some(i) {
+            if (label.active || hovered_tab == Some(i)) && self.has_close(*slot) {
                 let (cx, cy, size) = self.close_rect(*slot);
                 let close_hovered = hovered == Some(BarHit::Close(i));
                 if close_hovered {
@@ -395,6 +414,11 @@ fn truncate(text: &str, cells: usize) -> String {
     out
 }
 
+/// Background of the tab and status bars: darker than the terminal.
+pub fn bar_background(background: Rgb) -> Rgb {
+    mix(background, BLACK, 0.18)
+}
+
 pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Rgb {
@@ -440,6 +464,28 @@ mod tests {
         assert_eq!(bar.hit(2.0, 10.0), Some(BarHit::Empty), "left margin");
         assert_eq!(bar.hit(800.0, 10.0), Some(BarHit::Empty));
         assert_eq!(bar.hit(10.0, 34.0), None, "below the bar");
+    }
+
+    #[test]
+    fn narrow_tabs_have_no_close_button() {
+        // 30 tabs leave 33px each: too narrow for the close button.
+        let bar = TabBar::new(1000.0, 30, CELL, 1.0, 0.0, false);
+        let slot = bar.slots[0];
+        let (cx, cy, _) = bar.close_rect(slot);
+        assert_eq!(bar.hit(cx + 1.0, cy + 1.0), Some(BarHit::Tab(0)));
+    }
+
+    #[test]
+    fn drops_beyond_the_row_go_to_its_ends() {
+        let bar = TabBar::new(1000.0, 3, CELL, 1.0, 80.0, false);
+        assert_eq!(bar.drop_index(10.0), Some(0));
+        assert_eq!(bar.drop_index(90.0), Some(0));
+        assert_eq!(bar.drop_index(400.0), Some(1));
+        assert_eq!(bar.drop_index(990.0), Some(2));
+        assert_eq!(
+            TabBar::new(1000.0, 0, CELL, 1.0, 0.0, false).drop_index(5.0),
+            None
+        );
     }
 
     #[test]

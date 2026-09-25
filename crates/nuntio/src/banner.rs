@@ -3,7 +3,10 @@
 
 use nuntio_render::{CellMetrics, UiRect, UiText};
 use nuntio_term::Rgb;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+const CONFIG_ERROR: &str = "Config error, not applied";
+const CONFIG_WARNING: &str = "Config warning";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -31,10 +34,15 @@ impl Banner {
     /// Problems with the config; an error means it was not applied.
     pub fn config(severity: Severity, messages: Vec<String>) -> Option<Self> {
         let title = match severity {
-            Severity::Error => "Config error, not applied",
-            Severity::Warning => "Config warning",
+            Severity::Error => CONFIG_ERROR,
+            Severity::Warning => CONFIG_WARNING,
         };
         Self::new(severity, title, messages)
+    }
+
+    /// About the config, so a reload replaces it.
+    pub fn is_config(&self) -> bool {
+        self.title == CONFIG_ERROR || self.title == CONFIG_WARNING
     }
 
     fn text(&self) -> String {
@@ -45,26 +53,26 @@ impl Banner {
         format!("{}: {}{more}", self.title, self.messages[0])
     }
 
-    /// Top edge and height of the banner in a window of `height` pixels.
-    fn bounds(&self, window_height: f32, cell: CellMetrics, scale: f64) -> (f32, f32) {
+    /// Top edge and height of the banner, which ends at `bottom`.
+    fn bounds(&self, bottom: f32, cell: CellMetrics, scale: f64) -> (f32, f32) {
         let padding = (4.0 * scale).round() as f32;
         let height = cell.height as f32 + 2.0 * padding;
-        (window_height - height, height)
+        (bottom - height, height)
     }
 
-    pub fn contains(&self, y: f32, window_height: f32, cell: CellMetrics, scale: f64) -> bool {
-        let (top, height) = self.bounds(window_height, cell, scale);
+    pub fn contains(&self, y: f32, bottom: f32, cell: CellMetrics, scale: f64) -> bool {
+        let (top, height) = self.bounds(bottom, cell, scale);
         y >= top && y < top + height
     }
 
     pub fn draw(
         &self,
         window_width: f32,
-        window_height: f32,
+        bottom: f32,
         cell: CellMetrics,
         scale: f64,
     ) -> (UiRect, UiText) {
-        let (top, height) = self.bounds(window_height, cell, scale);
+        let (top, height) = self.bounds(bottom, cell, scale);
         let (background, foreground) = match self.severity {
             Severity::Error => (rgb(0xb3261e), rgb(0xffffff)),
             Severity::Warning => (rgb(0x7a5c00), rgb(0xffffff)),
@@ -73,7 +81,9 @@ impl Banner {
         // Leave room for the closing "×" at the right.
         let columns = ((window_width - 2.0 * padding) / cell.width as f32) as usize;
         let text = fit(&self.text(), columns.saturating_sub(2));
-        let text = format!("{text:<width$} ×", width = columns.saturating_sub(2));
+        // Pad by display width, so the × stays at the edge after wide text.
+        let pad = columns.saturating_sub(2).saturating_sub(text.width());
+        let text = format!("{text}{} ×", " ".repeat(pad));
         (
             UiRect {
                 x: 0.0,
@@ -149,6 +159,14 @@ mod tests {
         assert!(!banner.contains(560.0, 600.0, CELL, 1.0));
         // 400px minus padding fit 39 columns.
         assert_eq!(text.text.chars().count(), 39);
+        assert!(text.text.ends_with(" ×"));
+    }
+
+    #[test]
+    fn wide_text_keeps_the_close_button_at_the_edge() {
+        let banner = Banner::config(Severity::Warning, vec!["日本".into()]).unwrap();
+        let (_, text) = banner.draw(400.0, 600.0, CELL, 1.0);
+        assert_eq!(text.text.width(), 39);
         assert!(text.text.ends_with(" ×"));
     }
 }

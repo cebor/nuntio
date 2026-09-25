@@ -84,12 +84,18 @@ fn load_config(path: Option<&Path>, mut warnings: Vec<String>) -> (Config, Optio
     }
 }
 
-/// Log file for runs without a terminal, replaced on every start:
-/// `~/.cache/nuntio/nuntio.log` (the platform's cache directory).
+/// Log file for runs without a terminal: `~/.cache/nuntio/nuntio.log` (the
+/// platform's cache directory). The previous run's log is kept as
+/// `nuntio.old.log`, so starting a second window doesn't wipe the first
+/// one's log.
 fn log_file() -> Option<std::fs::File> {
     let dir = dirs::cache_dir()?.join("nuntio");
     std::fs::create_dir_all(&dir).ok()?;
-    std::fs::File::create(dir.join("nuntio.log")).ok()
+    let path = dir.join("nuntio.log");
+    // Fails on Windows while another instance has it open; then it's
+    // truncated like before.
+    let _ = std::fs::rename(&path, dir.join("nuntio.old.log"));
+    std::fs::File::create(path).ok()
 }
 
 fn main() -> Result<()> {

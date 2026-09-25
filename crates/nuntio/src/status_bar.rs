@@ -8,9 +8,8 @@ use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
 use crate::sysmon::Sample;
-use crate::tab_bar::mix;
+use crate::tab_bar::{bar_background, mix};
 
-const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 /// Samples kept per graph: one minute at one sample per second.
 const HISTORY: usize = 60;
 /// Space above and below the text, in logical pixels.
@@ -144,7 +143,7 @@ impl StatusBar {
         background: Rgb,
         foreground: Rgb,
     ) -> (Vec<UiRect>, Vec<UiText>) {
-        let bar_bg = mix(background, BLACK, 0.18);
+        let bar_bg = bar_background(background);
         let colors = Colors {
             background: bar_bg,
             label: mix(foreground, background, 0.45),
@@ -249,14 +248,10 @@ impl StatusBar {
         (top, self.cell.height as f32 - 2.0 * inset)
     }
 
-    fn bar_width(&self) -> f32 {
-        self.scale.round().max(1.0)
-    }
-
     /// Samples that fit into a graph.
     fn graph_samples(&self) -> usize {
         let width = GRAPH_CELLS as f32 * self.cell.width as f32;
-        ((width / self.bar_width()) as usize).min(HISTORY)
+        ((width / self.stroke()) as usize).min(HISTORY)
     }
 
     fn track(&self, out: &mut Output, x: f32, colors: &Colors) {
@@ -276,7 +271,7 @@ impl StatusBar {
             let h = (value / max).clamp(0.0, 1.0) * height;
             if h > 0.0 {
                 out.rects
-                    .push(rect(bx, bottom - h, self.bar_width(), h, colors.graph));
+                    .push(rect(bx, bottom - h, self.stroke(), h, colors.graph));
             }
         }
     }
@@ -293,14 +288,14 @@ impl StatusBar {
             let h = (value / max).clamp(0.0, 1.0) * half;
             if h > 0.0 {
                 out.rects
-                    .push(rect(bx, middle - h, self.bar_width(), h, colors.graph));
+                    .push(rect(bx, middle - h, self.stroke(), h, colors.graph));
             }
         }
         for (bx, value) in self.graph_bars(x, &stats.up) {
             let h = (value / max).clamp(0.0, 1.0) * half;
             if h > 0.0 {
                 out.rects
-                    .push(rect(bx, middle, self.bar_width(), h, colors.graph_alt));
+                    .push(rect(bx, middle, self.stroke(), h, colors.graph_alt));
             }
         }
     }
@@ -313,7 +308,7 @@ impl StatusBar {
     ) -> impl Iterator<Item = (f32, f32)> + 'a {
         let n = self.graph_samples();
         let count = history.recent(n).count();
-        let bar = self.bar_width();
+        let bar = self.stroke();
         let right = x + GRAPH_CELLS as f32 * self.cell.width as f32;
         history
             .recent(n)
@@ -445,7 +440,7 @@ impl StatusBar {
 
     /// An outlined battery with a knob on the right, filled to `level`.
     fn battery_icon(&self, out: &mut Output, x: f32, level: f32, colors: &Colors) {
-        let stroke = self.scale.round().max(1.0);
+        let stroke = self.stroke();
         let cw = self.cell.width as f32;
         let (top, height) = self.graph_box();
         let knob = (2.0 * self.scale).round().max(1.0);
@@ -460,8 +455,8 @@ impl StatusBar {
             knob_height,
             color,
         ));
-        // One pixel of air between outline and fill.
-        let inner = stroke + self.scale.round().max(1.0);
+        // One (device-independent) pixel of air between outline and fill.
+        let inner = 2.0 * stroke;
         let fill = ((body - 2.0 * inner) * level / 100.0).round();
         if fill > 0.0 {
             out.rects.push(rect(
@@ -683,7 +678,7 @@ mod tests {
         let bar = StatusBar::new(1200.0, 500.0, &items, &stats, "12:34", CELL, 1.0);
         assert_eq!(bar.height, 28.0);
         let (bg, fg) = (
-            BLACK,
+            Rgb { r: 0, g: 0, b: 0 },
             Rgb {
                 r: 255,
                 g: 255,

@@ -99,6 +99,14 @@ impl Node {
         }
     }
 
+    fn count(&self) -> usize {
+        match self {
+            Node::Leaf(_) => 1,
+            Node::Split { first, second, .. } => first.count() + second.count(),
+        }
+    }
+
+    #[cfg(test)]
     fn leaves(&self, out: &mut Vec<PaneId>) {
         match self {
             Node::Leaf(id) => out.push(*id),
@@ -175,6 +183,7 @@ impl PaneTree {
         }
     }
 
+    #[cfg(test)]
     pub fn leaves(&self) -> Vec<PaneId> {
         let mut out = Vec::new();
         self.root.leaves(&mut out);
@@ -182,7 +191,11 @@ impl PaneTree {
     }
 
     pub fn len(&self) -> usize {
-        self.leaves().len()
+        self.root.count()
+    }
+
+    pub fn is_zoomed(&self) -> bool {
+        self.zoomed.is_some()
     }
 
     /// Show `id` alone, or return to the split layout.
@@ -296,10 +309,15 @@ impl PaneTree {
     pub fn drag_divider(&mut self, divider: &Divider, pos: f32) {
         // Inverse of `Rect::split`: the gap isn't part of either child.
         let (area, gap) = (divider.split_area, divider.rect);
-        let ratio = match divider.axis {
-            Axis::Vertical => (pos - area.x) / (area.width - gap.width),
-            Axis::Horizontal => (pos - area.y) / (area.height - gap.height),
+        let (offset, span) = match divider.axis {
+            Axis::Vertical => (pos - area.x, area.width - gap.width),
+            Axis::Horizontal => (pos - area.y, area.height - gap.height),
         };
+        // No room to split (tiny window): a ratio would be NaN or infinite.
+        let ratio = offset / span;
+        if span <= 0.0 || !ratio.is_finite() {
+            return;
+        }
         let mut node = &mut self.root;
         for &second in &divider.path {
             let Node::Split {
@@ -518,6 +536,26 @@ mod tests {
         let l = t.layout(AREA, 1.0);
         assert_eq!(l.rect(p(0)).unwrap().width, 10.0, "5% minimum");
         assert!(l.divider_at(10.5, 50.0, 3.0).is_some());
+    }
+
+    #[test]
+    fn dragging_in_a_collapsed_area_keeps_the_ratio() {
+        let mut t = three();
+        let tiny = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        let divider = t.layout(tiny, 1.0).dividers[0].clone();
+        t.drag_divider(&divider, 0.5);
+        let l = t.layout(AREA, 1.0);
+        assert!(
+            l.panes
+                .iter()
+                .all(|(_, r)| r.width.is_finite() && r.width > 0.0)
+        );
+        assert_eq!(l.rect(p(0)).unwrap().width, 100.0);
     }
 
     #[test]

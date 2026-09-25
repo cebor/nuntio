@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use nuntio_term::TermMode;
 
 /// Clicks closer together than this count as double/triple clicks.
-const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(400);
+pub const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {

@@ -33,7 +33,7 @@ pub struct Memory {
     pub total: u64,
 }
 
-/// Bytes per second over all interfaces except loopback.
+/// Bytes per second over all physical interfaces.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Throughput {
     pub down: f64,
@@ -156,7 +156,7 @@ impl Sampler {
             *last = now;
             let (down, up) = networks
                 .iter()
-                .filter(|(name, _)| !is_loopback(name))
+                .filter(|(name, _)| !is_virtual(name))
                 .fold((0, 0), |(down, up), (_, data)| {
                     (down + data.received(), up + data.transmitted())
                 });
@@ -185,6 +185,28 @@ fn read_battery(manager: &starship_battery::Manager) -> Option<Battery> {
     })
 }
 
-fn is_loopback(name: &str) -> bool {
-    name == "lo" || name.starts_with("lo0") || name.contains("Loopback")
+/// Loopback and virtual interfaces (containers, bridges, VMs), whose
+/// traffic also passes a physical interface and would be counted twice.
+fn is_virtual(name: &str) -> bool {
+    const PREFIXES: [&str; 6] = ["docker", "veth", "br-", "virbr", "vEthernet", "lo0"];
+    name == "lo"
+        || name.contains("Loopback")
+        || PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn virtual_interfaces_are_not_counted() {
+        for name in ["lo", "lo0", "docker0", "veth12ab", "br-3f2a", "virbr0"] {
+            assert!(is_virtual(name), "{name}");
+        }
+        assert!(is_virtual("vEthernet (WSL)"));
+        assert!(is_virtual("Loopback Pseudo-Interface 1"));
+        for name in ["eth0", "wlan0", "en0", "enp3s0", "Wi-Fi", "local"] {
+            assert!(!is_virtual(name), "{name}");
+        }
+    }
 }

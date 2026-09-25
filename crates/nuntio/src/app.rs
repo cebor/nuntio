@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use nuntio_config::{
@@ -26,7 +26,7 @@ use crate::actions::{Action, Bindings};
 use crate::banner::{Banner, Severity};
 use crate::event::{PaneId, UserEvent};
 use crate::input;
-use crate::mouse::{Button, MouseAction};
+use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
 use crate::pane_tree::{Axis, Direction, PaneTree};
 use crate::search_bar::SearchBar;
 use crate::status_bar::Stats;
@@ -40,10 +40,16 @@ const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
 /// Lines scrolled per wheel notch.
 const WHEEL_LINES: f64 = 3.0;
-/// Two clicks on the tab bar within this time maximize the window.
-const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Pointer travel before a pressed tab starts moving.
 const TAB_DRAG_THRESHOLD: f64 = 4.0;
+/// Room for macOS's traffic-light buttons, in logical pixels.
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
+/// Cells a pane grows or shrinks per resize shortcut, so each press is
+/// clearly visible.
+const RESIZE_STEP_CELLS: u32 = 2;
+/// Immediate retries of a skipped frame before waiting for the next event.
+const MAX_FRAME_RETRIES: u32 = 3;
 
 /// WSLg's Weston (9.0, RDP backend) segfaults on pointer motion over windows
 /// with winit's client-side decorations, taking every Wayland client down with
@@ -80,13 +86,14 @@ fn chrome(
         let _ = event_loop;
         match config.window.effective_macos_titlebar() {
             MacosTitlebar::Native => (attrs, Chrome::System),
-            // Room for the traffic-light buttons, in logical pixels.
             MacosTitlebar::Transparent => (
                 attrs
                     .with_titlebar_transparent(true)
                     .with_fullsize_content_view(true)
                     .with_title_hidden(true),
-                Chrome::TitlebarInset { left: 78.0 },
+                Chrome::TitlebarInset {
+                    left: TRAFFIC_LIGHTS_WIDTH,
+                },
             ),
             MacosTitlebar::None => (
                 attrs
@@ -220,6 +227,8 @@ pub struct App {
     bindings: Bindings,
     /// Samples for the status bar while it is shown.
     system_monitor: Option<SystemMonitor>,
+    /// The window is hidden (minimized or covered); sampling pauses.
+    occluded: bool,
     stats: Stats,
     clipboard: Option<arboard::Clipboard>,
     /// Current font size in points; changed by zoom shortcuts.
@@ -266,6 +275,7 @@ impl App {
             proxy,
             bindings,
             system_monitor: None,
+            occluded: false,
             stats: Stats::default(),
             clipboard,
             next_pane_id: 0,
@@ -348,7 +358,7 @@ impl App {
     /// Start, restart or stop sampling to match the status bar config.
     fn sync_system_monitor(&mut self) {
         let bar = &self.config.status_bar;
-        let wanted = bar.visible().then_some(bar.items.as_slice());
+        let wanted = (bar.visible() && !self.occluded).then_some(bar.items.as_slice());
         let running = self.system_monitor.as_ref().map(SystemMonitor::items);
         if wanted == running {
             return;
@@ -371,7 +381,7 @@ impl App {
         let loaded = match nuntio_config::load(&path) {
             Ok(loaded) => loaded,
             Err(err) => {
-                self.banner = None;
+                self.clear_config_banner();
                 self.notify(Banner::config(Severity::Error, vec![err.to_string()]));
                 return;
             }
@@ -388,6 +398,15 @@ impl App {
         self.bindings = bindings;
         warnings.extend(self.update_palette());
         self.sync_system_monitor();
+
+        let chrome_changed = if cfg!(target_os = "macos") {
+            old.window.effective_macos_titlebar() != self.config.window.effective_macos_titlebar()
+        } else {
+            old.window.decorations != self.config.window.decorations
+        };
+        if chrome_changed {
+            warnings.push("window decorations change when nuntio is restarted".into());
+        }
 
         if let Some(state) = self.state.as_mut() {
             if old.font.family != self.config.font.family {
@@ -406,8 +425,16 @@ impl App {
             state.resize_terms(&self.config);
             state.window.request_redraw();
         }
-        self.banner = None;
+        self.clear_config_banner();
         self.notify(Banner::config(Severity::Warning, warnings));
+    }
+
+    /// Drop a banner about the previous config; others (e.g. a failed
+    /// link) stay until dismissed.
+    fn clear_config_banner(&mut self) {
+        if self.banner.as_ref().is_some_and(Banner::is_config) {
+            self.banner = None;
+        }
     }
 
     pub fn into_result(self) -> Result<()> {
@@ -544,17 +571,27 @@ impl App {
         }
     }
 
-    fn new_tab(&mut self) {
+    /// Start a shell in the focused pane's directory for a new tab or
+    /// split. Failures are shown in a banner.
+    fn spawn_in_focused_cwd(&mut self) -> Option<Pane> {
         let cwd = self
             .state
             .as_ref()
             .and_then(|s| s.term().working_directory());
-        let pane = match self.spawn_pane(cwd) {
-            Ok(pane) => pane,
-            Err(err) => {
-                tracing::error!("failed to open tab: {err:#}");
-                return;
-            }
+        self.spawn_pane(cwd)
+            .inspect_err(|err| {
+                self.notify(Banner::new(
+                    Severity::Error,
+                    "Shell",
+                    vec![format!("failed to start: {err:#}")],
+                ));
+            })
+            .ok()
+    }
+
+    fn new_tab(&mut self) {
+        let Some(pane) = self.spawn_in_focused_cwd() else {
+            return;
         };
         let Some(state) = self.state.as_mut() else {
             return;
@@ -569,16 +606,8 @@ impl App {
 
     /// Split the focused pane; the new pane starts in the same directory.
     fn split(&mut self, axis: Axis) {
-        let cwd = self
-            .state
-            .as_ref()
-            .and_then(|s| s.term().working_directory());
-        let pane = match self.spawn_pane(cwd) {
-            Ok(pane) => pane,
-            Err(err) => {
-                tracing::error!("failed to split pane: {err:#}");
-                return;
-            }
+        let Some(pane) = self.spawn_in_focused_cwd() else {
+            return;
         };
         let Some(state) = self.state.as_mut() else {
             return;
@@ -586,7 +615,11 @@ impl App {
         let new = pane.id;
         let content = state.content_mut();
         let target = content.focused;
-        content.tree.split(target, new, axis);
+        if !content.tree.split(target, new, axis) {
+            // Dropping the pane ends its shell.
+            tracing::error!("focused pane {target:?} is not in the split tree");
+            return;
+        }
         content.panes.push(pane);
         state.focus_pane(new);
         state.resize_terms(&self.config);
@@ -630,10 +663,9 @@ impl App {
         };
         let layout = state.layout(&self.config);
         let cell = state.renderer.cell_metrics();
-        // Move by two cells, so each press is clearly visible.
         let step = match direction {
-            Direction::Left | Direction::Right => 2 * cell.width,
-            Direction::Up | Direction::Down => 2 * cell.height,
+            Direction::Left | Direction::Right => RESIZE_STEP_CELLS * cell.width,
+            Direction::Up | Direction::Down => RESIZE_STEP_CELLS * cell.height,
         } as f32;
         let content = state.content_mut();
         let focused = content.focused;
@@ -673,11 +705,11 @@ impl App {
                 if let Some(text) = self.clipboard_text()
                     && let Some(state) = self.state.as_mut()
                 {
-                    match state.search.as_mut() {
+                    match state.search_and_term() {
                         // Pasting into the find bar extends the query.
-                        Some(bar) => {
+                        Some((bar, term)) => {
                             bar.query.push_str(text.lines().next().unwrap_or(""));
-                            bar.update(&state.tabs.active().content.focused_pane().term);
+                            bar.update(term);
                         }
                         None => state.term().paste(&text),
                     }
@@ -713,10 +745,23 @@ impl App {
             Action::SplitVertical => self.split(Axis::Vertical),
             Action::SplitHorizontal => self.split(Axis::Horizontal),
             Action::FocusPane(direction) => {
-                let layout = state.layout(&self.config);
                 let focused = state.content().focused;
-                if let Some(id) = PaneTree::neighbor(focused, direction, &layout) {
-                    state.focus_pane(id);
+                // A zoomed pane has no visible neighbors: find them in the
+                // split layout and leave zoom only if there is one.
+                let zoomed = state.content().tree.is_zoomed();
+                if zoomed {
+                    state.content_mut().tree.toggle_zoom(focused);
+                }
+                let layout = state.layout(&self.config);
+                match PaneTree::neighbor(focused, direction, &layout) {
+                    Some(id) => {
+                        state.focus_pane(id);
+                        if zoomed {
+                            state.resize_terms(&self.config);
+                        }
+                    }
+                    None if zoomed => state.content_mut().tree.toggle_zoom(focused),
+                    None => {}
                 }
             }
             Action::ResizePane(direction) => self.resize_pane(direction),
@@ -769,12 +814,10 @@ impl App {
             ctrl: mods.control_key(),
             meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
         };
-        if let Some(bytes) = input::encode_key(&key_input, state.term().mode()) {
-            state.term().clear_selection();
-            state.term().write(bytes);
-            if let Some(state) = self.state.as_mut() {
-                state.blink.reset();
-            }
+        if let Some(bytes) = input::encode_key(&key_input, state.term().mode())
+            && let Some(state) = self.state.as_mut()
+        {
+            state.type_bytes(bytes);
         }
     }
 
@@ -792,6 +835,8 @@ impl App {
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => state.search = None,
             Key::Named(NamedKey::Enter) => bar.next(term, !mods.shift_key()),
+            Key::Named(NamedKey::ArrowUp) => bar.next(term, true),
+            Key::Named(NamedKey::ArrowDown) => bar.next(term, false),
             Key::Named(NamedKey::Backspace) => {
                 bar.query.pop();
                 bar.update(term);
@@ -804,8 +849,14 @@ impl App {
             _ => {
                 let text = event.text.as_deref().unwrap_or("");
                 let typed = !text.is_empty() && !text.chars().any(char::is_control);
-                if !typed || mods.control_key() || mods.super_key() || mods.alt_key() {
+                if mods.control_key() || mods.super_key() || mods.alt_key() {
                     return false;
+                }
+                if !typed {
+                    // Shortcuts still work; other keys (Tab, Home, F1, …)
+                    // must not reach the shell behind the bar.
+                    let unmodified = event.key_without_modifiers();
+                    return self.bindings.lookup(&unmodified, mods).is_none();
                 }
                 bar.query.push_str(text);
                 bar.update(term);
@@ -862,7 +913,7 @@ impl App {
         // A click on the banner dismisses it.
         if pressed
             && let Some(banner) = &self.banner
-            && state.banner_contains(banner, pos)
+            && state.banner_contains(&self.config, banner, pos)
         {
             self.banner = None;
             state.window.request_redraw();
@@ -894,7 +945,7 @@ impl App {
                         let double = state
                             .mouse
                             .last_bar_click
-                            .is_some_and(|t| now.duration_since(t) < DOUBLE_CLICK);
+                            .is_some_and(|t| now.duration_since(t) < MULTI_CLICK_INTERVAL);
                         if double {
                             state.mouse.last_bar_click = None;
                             let maximized = state.window.is_maximized();
@@ -1051,14 +1102,12 @@ impl App {
                 drag.moved = true;
             }
             if drag.moved
-                && let Some(bar) = &bar
+                && let Some(target) = bar.as_ref().and_then(|b| b.drop_index(pos.x as f32))
+                && target != drag.index
             {
-                let target = bar.slot_at(pos.x as f32).unwrap_or(state.tabs.len() - 1);
-                if target != drag.index {
-                    state.tabs.move_tab(drag.index, target);
-                    drag.index = target;
-                    state.window.request_redraw();
-                }
+                state.tabs.move_tab(drag.index, target);
+                drag.index = target;
+                state.window.request_redraw();
             }
             state.mouse.tab_drag = Some(drag);
             return;
@@ -1093,8 +1142,16 @@ impl App {
         // Positive = scroll up (content moves down, towards older lines).
         let lines = match delta {
             MouseScrollDelta::LineDelta(_, y) => {
-                state.mouse.scroll_pixels = 0.0;
-                (y as f64 * WHEEL_LINES).round() as i32
+                // High-resolution wheels send fractions of a notch; keep
+                // the remainder so they add up instead of rounding to 0.
+                let y = y as f64 * WHEEL_LINES;
+                if state.mouse.scroll_pixels * y < 0.0 {
+                    state.mouse.scroll_pixels = 0.0;
+                }
+                state.mouse.scroll_pixels += y * cell_height;
+                let lines = (state.mouse.scroll_pixels / cell_height).trunc();
+                state.mouse.scroll_pixels -= lines * cell_height;
+                lines as i32
             }
             MouseScrollDelta::PixelDelta(p) => {
                 // A leftover from the other direction must not eat this scroll.
@@ -1170,10 +1227,15 @@ impl App {
         let active = index == state.tabs.active_index();
         match event {
             TermEvent::Wakeup => {
-                if !active && let Some(tab) = state.tabs.get_mut(index) {
+                if active {
+                    state.window.request_redraw();
+                } else if let Some(tab) = state.tabs.get_mut(index)
+                    && !tab.activity
+                {
+                    // Hidden output only changes the tab's activity mark.
                     tab.activity = true;
+                    state.window.request_redraw();
                 }
-                state.window.request_redraw();
             }
             TermEvent::Title(_) | TermEvent::ResetTitle => {
                 let title = match event {
@@ -1261,6 +1323,8 @@ impl ApplicationHandler<UserEvent> for App {
         };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // Minimized on Windows: keep the grids, don't reflow to 1x1.
+            WindowEvent::Resized(size) if size.width == 0 || size.height == 0 => {}
             WindowEvent::Resized(size) => {
                 state.renderer.resize(size.width, size.height);
                 state.resize_terms(&self.config);
@@ -1268,6 +1332,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 state.renderer.set_font_size(self.font_size, scale_factor);
+                state.invalidate_ime_area();
                 state.resize_terms(&self.config);
                 state.window.request_redraw();
             }
@@ -1293,19 +1358,26 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 state.preedit = None;
-                match state.search.as_mut() {
-                    Some(bar) => {
+                match state.search_and_term() {
+                    Some((bar, term)) => {
                         bar.query.push_str(&text);
-                        bar.update(&state.tabs.active().content.focused_pane().term);
+                        bar.update(term);
                         state.window.request_redraw();
                     }
-                    None => state.term().write(text.into_bytes()),
+                    None => state.type_bytes(text.into_bytes()),
+                }
+            }
+            WindowEvent::Ime(Ime::Disabled) => {
+                if state.preedit.take().is_some() {
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
             WindowEvent::CursorLeft { .. } => {
                 state.mouse.position = None;
-                if state.mouse.hovered_bar.take().is_some() {
+                let hovered = state.mouse.hovered_bar.take().is_some();
+                let link = state.mouse.hover_link.take().is_some();
+                if hovered || link {
                     state.window.request_redraw();
                 }
             }
@@ -1315,8 +1387,14 @@ impl ApplicationHandler<UserEvent> for App {
                 ..
             } => self.mouse_input(button, button_state == ElementState::Pressed),
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
-            // Frames are paused while occluded; catch up once visible.
-            WindowEvent::Occluded(false) => state.window.request_redraw(),
+            WindowEvent::Occluded(occluded) => {
+                // Frames are paused while occluded; catch up once visible.
+                if !occluded {
+                    state.window.request_redraw();
+                }
+                self.occluded = occluded;
+                self.sync_system_monitor();
+            }
             WindowEvent::ThemeChanged(theme) => {
                 self.os_dark = theme == WindowTheme::Dark;
                 if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
@@ -1328,9 +1406,22 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                match state.redraw(&self.config, &self.stats, self.banner.as_ref()) {
+                let status = state.redraw(&self.config, &self.stats, self.banner.as_ref());
+                if status == FrameStatus::Skipped {
+                    state.skipped_frames += 1;
+                } else {
+                    state.skipped_frames = 0;
+                }
+                match status {
                     FrameStatus::Presented | FrameStatus::Paused => {}
-                    FrameStatus::Skipped => state.window.request_redraw(),
+                    // Retry a few times; a surface that keeps timing out
+                    // must not spin. The next event redraws anyway.
+                    FrameStatus::Skipped if state.skipped_frames <= MAX_FRAME_RETRIES => {
+                        state.window.request_redraw();
+                    }
+                    FrameStatus::Skipped => {
+                        tracing::debug!("giving up on this frame after repeated skips");
+                    }
                     FrameStatus::Lost => {
                         tracing::warn!("surface lost, recreating renderer");
                         let (window, chrome) = (state.window.clone(), state.chrome);
@@ -1348,5 +1439,22 @@ impl ApplicationHandler<UserEvent> for App {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use winit::keyboard::ModifiersState;
+
+    use super::*;
+
+    #[test]
+    fn alt_is_meta_outside_macos() {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let alt = Modifiers::from(ModifiersState::ALT);
+        assert!(alt_is_meta(&alt, OptionAsMeta::None));
+        assert!(!alt_is_meta(&Modifiers::default(), OptionAsMeta::Both));
     }
 }

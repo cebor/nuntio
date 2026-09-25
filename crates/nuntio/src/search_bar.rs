@@ -10,6 +10,16 @@ use crate::tab_bar::mix;
 
 /// Widest the bar gets, in cells.
 const MAX_CELLS: f32 = 44.0;
+/// Distance from the pane's top-right corner, in logical pixels.
+const MARGIN: f64 = 6.0;
+/// Space between the border and the text, in logical pixels.
+const PADDING: f64 = 4.0;
+/// Tint of the status text for errors and "no match".
+const ERROR_RED: Rgb = Rgb {
+    r: 0xff,
+    g: 0x55,
+    b: 0x55,
+};
 
 pub struct SearchBar {
     pub query: String,
@@ -51,7 +61,7 @@ impl SearchBar {
                 self.search = Some(search);
             }
             Err(err) => {
-                self.error = Some(err);
+                self.error = Some(err.to_string());
                 self.search = None;
             }
         }
@@ -76,8 +86,8 @@ impl SearchBar {
 
     /// Area of the bar: the top-right corner of the pane.
     fn bounds(&self, pane: Rect, cell: CellMetrics, scale: f64) -> Rect {
-        let margin = (6.0 * scale).round() as f32;
-        let padding = (4.0 * scale).round() as f32;
+        let margin = (MARGIN * scale).round() as f32;
+        let padding = (PADDING * scale).round() as f32;
         let width = (MAX_CELLS * cell.width as f32 + 2.0 * padding).min(pane.width - 2.0 * margin);
         Rect {
             x: pane.x + pane.width - margin - width,
@@ -135,22 +145,14 @@ impl SearchBar {
             }
             right.push_str(status);
         }
-        let right_width = right.width().min(columns.saturating_sub(4));
-        let right: String = right.chars().take(right_width).collect();
+        let right = head(&right, columns.saturating_sub(4));
+        let right_width = right.width();
         let query = tail(&self.query, columns.saturating_sub(right_width + 2));
 
         let right_color = if status.is_empty() {
             mix(foreground, background, 0.4)
         } else {
-            mix(
-                foreground,
-                Rgb {
-                    r: 0xff,
-                    g: 0x55,
-                    b: 0x55,
-                },
-                0.6,
-            )
+            mix(foreground, ERROR_RED, 0.6)
         };
         let (x, y) = (bounds.x + padding, bounds.y + padding);
         let cw = cell.width as f32;
@@ -163,7 +165,7 @@ impl SearchBar {
                 bold: false,
             },
             UiText {
-                x: x + (columns - right.width()) as f32 * cw,
+                x: x + columns.saturating_sub(right_width) as f32 * cw,
                 y,
                 text: right,
                 color: right_color,
@@ -172,6 +174,17 @@ impl SearchBar {
         ];
         (rects, texts)
     }
+}
+
+/// The first `columns` display columns of `text`.
+fn head(text: &str, columns: usize) -> String {
+    let mut width = 0;
+    text.chars()
+        .take_while(|c| {
+            width += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+            width <= columns
+        })
+        .collect()
 }
 
 /// The last `columns` display columns of `text` (keeps the typed end visible).
@@ -239,5 +252,19 @@ mod tests {
     fn long_queries_keep_their_end_visible() {
         assert_eq!(tail("abcdef", 3), "def");
         assert_eq!(tail("ab", 3), "ab");
+    }
+
+    #[test]
+    fn status_is_cut_by_display_width() {
+        assert_eq!(head("日本語", 4), "日本");
+        let mut bar = SearchBar::new();
+        bar.error = Some("日本語のエラー".repeat(10));
+        let narrow = Rect {
+            width: 120.0,
+            ..PANE
+        };
+        let (_, texts) = bar.draw(narrow, CELL, 1.0, Rgb::default(), Rgb::default());
+        assert!(texts[1].text.width() <= 10);
+        assert!(texts[1].x >= narrow.x);
     }
 }
