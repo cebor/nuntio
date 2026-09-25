@@ -308,7 +308,7 @@ pub static SETTINGS: &[Setting] = &[
             max: OPACITY.1,
             step: 0.05,
         },
-        "Accepted and validated, but not applied yet.",
+        "Opacity of the terminal background, 0.0 (clear) to 1.0 (opaque). Text, colored backgrounds and the bars stay opaque. Going below 1.0 needs a restart unless the window already is transparent.",
     ),
     setting(
         "tabs.hide_when_single",

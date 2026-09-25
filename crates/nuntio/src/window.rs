@@ -182,6 +182,8 @@ pub struct WindowState {
     pub renderer: Renderer,
     pub tabs: Tabs<TabContent>,
     pub chrome: Chrome,
+    /// The window was created transparent, so `window.opacity` can apply.
+    pub transparent: bool,
     pub modifiers: Modifiers,
     pub mouse: MouseState,
     pub focused: bool,
@@ -198,12 +200,19 @@ pub struct WindowState {
 }
 
 impl WindowState {
-    pub fn new(window: Arc<Window>, renderer: Renderer, first: Pane, chrome: Chrome) -> Self {
+    pub fn new(
+        window: Arc<Window>,
+        renderer: Renderer,
+        first: Pane,
+        chrome: Chrome,
+        transparent: bool,
+    ) -> Self {
         Self {
             window,
             renderer,
             tabs: Tabs::new(TabContent::new(first)),
             chrome,
+            transparent,
             modifiers: Modifiers::default(),
             mouse: MouseState::default(),
             focused: true,
@@ -519,6 +528,7 @@ impl WindowState {
         };
         self.renderer.render(&Frame {
             background,
+            background_opacity: config.window.opacity,
             panes: &panes,
             rects: &rects,
             texts: &texts,

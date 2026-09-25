@@ -124,6 +124,11 @@ impl GpuContext {
         self.transparent
     }
 
+    /// The compositor expects color premultiplied by alpha.
+    pub fn premultiplied(&self) -> bool {
+        self.config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied
+    }
+
     pub fn format(&self) -> wgpu::TextureFormat {
         self.config.format
     }

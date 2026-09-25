@@ -116,14 +116,18 @@ fn chrome(
                 use winit::platform::windows::WindowAttributesExtWindows;
                 attrs.with_undecorated_shadow(true)
             };
-            // Transparent, so that the rounded corners we cut out show the
-            // desktop behind them.
-            let attrs = attrs.with_transparent(Chrome::Undecorated.draws_corners());
             (attrs.with_decorations(false), Chrome::Undecorated)
         } else {
             (attrs, Chrome::System)
         }
     }
+}
+
+/// Whether to create the window transparent: for rounded corners cut out
+/// by nuntio, or a translucent background. Transparent windows may cost
+/// compositing performance, so only then.
+fn wants_transparency(chrome: Chrome, config: &Config) -> bool {
+    chrome.draws_corners() || config.window.opacity < 1.0
 }
 
 /// Ask Windows 11 to round the corners of our undecorated window, as it
@@ -407,6 +411,11 @@ impl App {
         if chrome_changed {
             warnings.push("window decorations change when nuntio is restarted".into());
         }
+        // A window created opaque can't become transparent.
+        let opaque = self.state.as_ref().is_some_and(|s| !s.transparent);
+        if opaque && self.config.window.opacity < 1.0 && old.window.opacity >= 1.0 {
+            warnings.push("window opacity takes effect when nuntio is restarted".into());
+        }
 
         if let Some(state) = self.state.as_mut() {
             if old.font.family != self.config.font.family {
@@ -441,7 +450,9 @@ impl App {
         self.error.map_or(Ok(()), Err)
     }
 
-    fn create_renderer(&self, window: &Arc<Window>, chrome: Chrome) -> Result<Renderer> {
+    /// `transparent`: the window was created transparent (see
+    /// `wants_transparency`).
+    fn create_renderer(&self, window: &Arc<Window>, transparent: bool) -> Result<Renderer> {
         let size = window.inner_size();
         Ok(Renderer::new(
             window.clone(),
@@ -450,7 +461,7 @@ impl App {
             window.scale_factor(),
             self.config.font.family.clone(),
             self.font_size,
-            chrome.draws_corners(),
+            transparent,
         )?)
     }
 
@@ -501,6 +512,8 @@ impl App {
             attrs, "nuntio", "nuntio",
         );
         let (attrs, chrome) = chrome(event_loop, &self.config, attrs);
+        let transparent = wants_transparency(chrome, &self.config);
+        let attrs = attrs.with_transparent(transparent);
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
@@ -511,7 +524,7 @@ impl App {
         if chrome == Chrome::Undecorated {
             round_corners(&window);
         }
-        let mut renderer = self.create_renderer(&window, chrome)?;
+        let mut renderer = self.create_renderer(&window, transparent)?;
         if let Some(warning) = renderer.take_font_warning() {
             self.notify(Banner::config(Severity::Warning, vec![warning]));
         }
@@ -528,7 +541,7 @@ impl App {
             }
         }
         let pane = self.spawn_pane(None)?;
-        let mut state = WindowState::new(window, renderer, pane, chrome);
+        let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
         state.resize_terms(&self.config);
         Ok(state)
     }
@@ -1424,8 +1437,8 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     FrameStatus::Lost => {
                         tracing::warn!("surface lost, recreating renderer");
-                        let (window, chrome) = (state.window.clone(), state.chrome);
-                        match self.create_renderer(&window, chrome) {
+                        let (window, transparent) = (state.window.clone(), state.transparent);
+                        match self.create_renderer(&window, transparent) {
                             Ok(renderer) => {
                                 if let Some(state) = self.state.as_mut() {
                                     state.renderer = renderer;

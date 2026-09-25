@@ -358,7 +358,18 @@ impl Renderer {
             label: Some("frame"),
         });
         {
-            let [r, g, b, a] = rgba(background).map(f64::from);
+            let [r, g, b, _] = rgba(background).map(f64::from);
+            let a = if self.gpu.transparent() {
+                f64::from(frame.background_opacity.clamp(0.0, 1.0))
+            } else {
+                1.0
+            };
+            // Blending keeps the target premultiplied, so start that way.
+            let (r, g, b) = if self.gpu.premultiplied() {
+                (r * a, g * a, b * a)
+            } else {
+                (r, g, b)
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("terminal"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

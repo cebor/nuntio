@@ -6,6 +6,9 @@ use nuntio_term::{Rgb, Snapshot};
 pub struct Frame<'a> {
     /// Clear color for areas nothing else covers.
     pub background: Rgb,
+    /// Opacity of `background`, and so of cells with the default
+    /// background, from 0.0 to 1.0. Needs a transparent surface.
+    pub background_opacity: f32,
     pub panes: &'a [PaneView<'a>],
     pub rects: &'a [UiRect],
     pub texts: &'a [UiText],
