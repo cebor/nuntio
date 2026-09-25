@@ -118,10 +118,21 @@ impl Default for Padding {
     }
 }
 
+/// Who draws the window frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum MacosTitlebar {
+pub enum Decorations {
+    /// nuntio's own header: the tab bar with window buttons (on macOS, the
+    /// native traffic lights in a transparent title bar).
     #[default]
+    Custom,
+    /// The system's title bar and frame.
+    System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MacosTitlebar {
     Native,
     Transparent,
     None,
@@ -132,7 +143,20 @@ pub enum MacosTitlebar {
 pub struct Window {
     pub padding: Padding,
     pub opacity: f32,
-    pub macos_titlebar: MacosTitlebar,
+    pub decorations: Decorations,
+    /// Overrides `decorations` on macOS when set.
+    pub macos_titlebar: Option<MacosTitlebar>,
+}
+
+impl Window {
+    /// The macOS title bar style: `macos_titlebar` if set, otherwise derived
+    /// from `decorations`.
+    pub fn effective_macos_titlebar(&self) -> MacosTitlebar {
+        self.macos_titlebar.unwrap_or(match self.decorations {
+            Decorations::Custom => MacosTitlebar::Transparent,
+            Decorations::System => MacosTitlebar::Native,
+        })
+    }
 }
 
 impl Default for Window {
@@ -140,7 +164,8 @@ impl Default for Window {
         Self {
             padding: Padding::default(),
             opacity: 1.0,
-            macos_titlebar: MacosTitlebar::default(),
+            decorations: Decorations::default(),
+            macos_titlebar: None,
         }
     }
 }
@@ -245,7 +270,8 @@ size = 13.0
 [window]
 padding = { x = 8, y = 6 }
 opacity = 1.0
-macos_titlebar = "transparent"
+decorations = "system"
+macos_titlebar = "none"
 
 [tabs]
 hide_when_single = true
@@ -275,7 +301,8 @@ action = "split_horizontal"
         assert_eq!(shell.program.as_deref(), Some("/bin/zsh"));
         assert_eq!(shell.args, ["-l"]);
         assert_eq!(cfg.font.family.as_deref(), Some("JetBrains Mono"));
-        assert_eq!(cfg.window.macos_titlebar, MacosTitlebar::Transparent);
+        assert_eq!(cfg.window.decorations, Decorations::System);
+        assert_eq!(cfg.window.effective_macos_titlebar(), MacosTitlebar::None);
         assert_eq!(
             cfg.theme,
             ThemeSelection::Auto {
@@ -285,6 +312,23 @@ action = "split_horizontal"
         );
         assert_eq!(cfg.macos.option_as_meta, OptionAsMeta::Left);
         assert_eq!(cfg.keybindings.len(), 1);
+    }
+
+    #[test]
+    fn macos_titlebar_follows_decorations_unless_set() {
+        let window = |toml: &str| Config::from_toml(toml).unwrap().window;
+        assert_eq!(
+            window("").effective_macos_titlebar(),
+            MacosTitlebar::Transparent
+        );
+        assert_eq!(
+            window("[window]\ndecorations = \"system\"").effective_macos_titlebar(),
+            MacosTitlebar::Native
+        );
+        assert_eq!(
+            window("[window]\nmacos_titlebar = \"native\"").effective_macos_titlebar(),
+            MacosTitlebar::Native
+        );
     }
 
     fn shell(toml: &str) -> Shell {

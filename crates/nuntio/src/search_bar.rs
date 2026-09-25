@@ -110,6 +110,7 @@ impl SearchBar {
             width: r.width,
             height: r.height,
             color,
+            radius: 0.0,
         };
         let inner = Rect {
             x: bounds.x + border,

@@ -16,6 +16,7 @@ use crate::gpu::{FrameStatus, GpuContext, GpuError};
 const KIND_SOLID: u32 = 0;
 const KIND_MASK: u32 = 1;
 const KIND_COLOR: u32 = 2;
+const KIND_ROUNDED: u32 = 3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -344,8 +345,12 @@ impl Renderer {
             }
         }
         for r in frame.rects {
-            self.instances
-                .push(Instance::solid(r.x, r.y, r.width, r.height, r.color));
+            let mut instance = Instance::solid(r.x, r.y, r.width, r.height, r.color);
+            if r.radius > 0.0 {
+                instance.kind = KIND_ROUNDED;
+                instance.uv[0] = r.radius;
+            }
+            self.instances.push(instance);
         }
         for text in frame.texts {
             self.push_text(text)?;

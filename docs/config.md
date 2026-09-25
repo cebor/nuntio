@@ -59,7 +59,7 @@ size = 13.0
 
 [window]
 padding = { x = 8, y = 6 }
-macos_titlebar = "native"
+decorations = "custom"
 
 [tabs]
 hide_when_single = true
@@ -104,14 +104,15 @@ option_as_meta = "none"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `padding` | table | `{ x = 8, y = 6 }` | Space in pixels between the window edge and the text. |
-| `macos_titlebar` | string | `"native"` | macOS only. `"native"`: normal title bar. `"transparent"`: the tab bar moves into the title bar, next to the traffic-light buttons. `"none"`: no title bar. |
+| `decorations` | string | `"custom"` | `"custom"`: nuntio draws its own header. The tab bar holds the window buttons: on the right on Linux and Windows, and the native traffic lights on the left on macOS. Drag the bar to move the window, double-click it to maximize. `"system"`: the system's title bar and frame. Takes effect on the next start. |
+| `macos_titlebar` | string | from `decorations` | macOS only, overrides `decorations`. `"native"`: normal title bar. `"transparent"`: the tab bar moves into the title bar, next to the traffic-light buttons (what `"custom"` uses). `"none"`: no title bar and no buttons. |
 | `opacity` | float | `1.0` | `0.0` to `1.0`. Accepted and validated, but not applied yet. |
 
 ### `[tabs]`
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `hide_when_single` | bool | `true` | Hide the tab bar while only one tab is open. It is always shown when nuntio draws its own window controls (macOS `transparent`/`none` title bar, WSLg). |
+| `hide_when_single` | bool | `true` | Hide the tab bar while only one tab is open. It is always shown when nuntio draws its own header (`decorations = "custom"`, macOS `transparent`/`none` title bar, WSLg). |
 | `position` | string | `"top"` | Only `"top"` for now. |
 
 ### `[panes]`

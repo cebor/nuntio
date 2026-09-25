@@ -1,4 +1,5 @@
-// Instanced quads: solid rectangles, coverage-mask glyphs and color glyphs.
+// Instanced quads: solid and rounded rectangles, coverage-mask glyphs and
+// color glyphs.
 
 struct Uniforms {
     screen_size: vec2<f32>,
@@ -13,11 +14,13 @@ struct Uniforms {
 const KIND_SOLID: u32 = 0u;
 const KIND_MASK: u32 = 1u;
 const KIND_COLOR: u32 = 2u;
+const KIND_ROUNDED: u32 = 3u;
 
 struct Instance {
     @location(0) pos: vec2<f32>,
     @location(1) size: vec2<f32>,
-    // Atlas region in texels: x, y, width, height.
+    // Atlas region in texels: x, y, width, height. Rounded rectangles keep
+    // their corner radius in x.
     @location(2) uv: vec4<f32>,
     @location(3) color: vec4<f32>,
     @location(4) kind: u32,
@@ -28,6 +31,10 @@ struct VertexOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) kind: u32,
+    // Rounded rectangles: position inside the quad in pixels, and the quad's
+    // half size and corner radius.
+    @location(3) local: vec2<f32>,
+    @location(4) @interpolate(flat) shape: vec3<f32>,
 }
 
 @vertex
@@ -46,6 +53,8 @@ fn vs_main(@builtin(vertex_index) vertex: u32, inst: Instance) -> VertexOut {
     out.uv = (inst.uv.xy + corner * inst.uv.zw) / u.atlas_size;
     out.color = inst.color;
     out.kind = inst.kind;
+    out.local = corner * inst.size;
+    out.shape = vec3<f32>(inst.size * 0.5, inst.uv.x);
     return out;
 }
 
@@ -59,6 +68,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         }
         case KIND_COLOR: {
             return color;
+        }
+        case KIND_ROUNDED: {
+            // Signed distance to a rounded box, antialiased over one pixel.
+            let half = in.shape.xy;
+            let radius = min(in.shape.z, min(half.x, half.y));
+            let q = abs(in.local - half) - half + vec2<f32>(radius);
+            let dist = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+            let alpha = clamp(0.5 - dist, 0.0, 1.0);
+            return vec4<f32>(in.color.rgb, in.color.a * alpha);
         }
         default: {
             return in.color;

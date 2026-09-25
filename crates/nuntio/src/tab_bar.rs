@@ -22,6 +22,14 @@ const WHITE: Rgb = Rgb {
     g: 0xff,
     b: 0xff,
 };
+const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
+/// Space above and below the text, in logical pixels.
+const BAR_PADDING: f64 = 7.0;
+/// Space between the bar's edges and the tab pills, in logical pixels.
+const PILL_INSET: f64 = 4.0;
+/// Horizontal gap between two tab pills, in logical pixels.
+const PILL_GAP: f64 = 4.0;
+const PILL_RADIUS: f64 = 6.0;
 /// Window control button size in logical pixels (Windows' caption buttons).
 const CONTROL_WIDTH: f64 = 46.0;
 const CONTROL_ICON: f64 = 10.0;
@@ -59,6 +67,10 @@ pub struct TabBar {
     pub height: f32,
     width: f32,
     padding: f32,
+    /// Vertical inset of the pills, and horizontal margin of the tab row.
+    inset: f32,
+    gap: f32,
+    radius: f32,
     scale: f32,
     cell: CellMetrics,
     slots: Vec<Slot>,
@@ -78,20 +90,23 @@ impl TabBar {
         left_inset: f32,
         window_controls: bool,
     ) -> Self {
-        let padding = (5.0 * scale).round() as f32;
+        let logical = |px: f64| (px * scale).round() as f32;
+        let padding = logical(BAR_PADDING);
+        let inset = logical(PILL_INSET);
         let height = cell.height as f32 + 2.0 * padding;
         let control_width = if window_controls {
-            (CONTROL_WIDTH * scale).round() as f32
+            logical(CONTROL_WIDTH)
         } else {
             0.0
         };
-        let available = (width - left_inset - 3.0 * control_width).max(0.0);
+        let start = left_inset + inset;
+        let available = (width - start - inset - 3.0 * control_width).max(0.0);
         let tab_width = (available / count.max(1) as f32)
             .min(MAX_TAB_CELLS * cell.width as f32)
             .floor();
         let slots = (0..count)
             .map(|i| Slot {
-                x: left_inset + i as f32 * tab_width,
+                x: start + i as f32 * tab_width,
                 width: tab_width,
             })
             .collect();
@@ -99,6 +114,9 @@ impl TabBar {
             height,
             width,
             padding,
+            inset,
+            gap: logical(PILL_GAP),
+            radius: logical(PILL_RADIUS),
             scale: scale as f32,
             cell,
             slots,
@@ -159,9 +177,11 @@ impl TabBar {
             Some(BarHit::Tab(i) | BarHit::Close(i)) => Some(i),
             _ => None,
         };
-        let bar_bg = mix(background, foreground, 0.10);
-        let separator = mix(background, foreground, 0.22);
-        let inactive_text = mix(foreground, background, 0.40);
+        // Darker than the terminal, with the active tab as a lighter pill.
+        let bar_bg = mix(background, BLACK, 0.18);
+        let active_bg = mix(background, foreground, 0.08);
+        let hover_bg = mix(bar_bg, foreground, 0.08);
+        let inactive_text = mix(foreground, background, 0.45);
         let (cw, ch) = (self.cell.width as f32, self.cell.height as f32);
 
         let mut rects = vec![UiRect {
@@ -170,27 +190,21 @@ impl TabBar {
             width: self.width,
             height: self.height,
             color: bar_bg,
+            radius: 0.0,
         }];
         let mut texts = Vec::new();
 
         for (i, (slot, label)) in self.slots.iter().zip(labels).enumerate() {
-            if label.active {
-                rects.push(UiRect {
-                    x: slot.x,
-                    y: 0.0,
-                    width: slot.width,
-                    height: self.height,
-                    color: background,
-                });
+            let pill = if label.active {
+                Some(active_bg)
+            } else if hovered_tab == Some(i) {
+                Some(hover_bg)
+            } else {
+                None
+            };
+            if let Some(color) = pill {
+                rects.push(self.pill(slot.x + self.gap / 2.0, slot.width - self.gap, color));
             }
-            // Separator on the right edge.
-            rects.push(UiRect {
-                x: slot.x + slot.width - 1.0,
-                y: self.padding,
-                width: 1.0,
-                height: ch,
-                color: separator,
-            });
 
             // Layout: [pad][indicator][title, centered][close][pad]
             let side = ch;
@@ -209,7 +223,7 @@ impl TabBar {
                 y: self.padding,
                 text: title,
                 color,
-                bold: label.active,
+                bold: false,
             });
 
             let indicator_x = slot.x + self.padding + ((side - cw) / 2.0).floor();
@@ -248,6 +262,18 @@ impl TabBar {
         (rects, texts)
     }
 
+    /// A rounded background spanning the bar's height minus the inset.
+    fn pill(&self, x: f32, width: f32, color: Rgb) -> UiRect {
+        UiRect {
+            x,
+            y: self.inset,
+            width,
+            height: self.height - 2.0 * self.inset,
+            color,
+            radius: self.radius,
+        }
+    }
+
     /// Minimize, maximize/restore and close, drawn from rectangles so the
     /// icons stay crisp at any scale.
     fn draw_controls(
@@ -260,6 +286,16 @@ impl TabBar {
     ) {
         let stroke = self.scale.round().max(1.0);
         let icon = (CONTROL_ICON as f32 * self.scale).round();
+        if let Some(i) = CONTROLS.iter().position(|&c| hovered == Some(c)) {
+            let hover_bg = if CONTROLS[i] == BarHit::CloseWindow {
+                CLOSE_HOVER
+            } else {
+                mix(bar_bg, foreground, 0.12)
+            };
+            let bx = self.controls_x() + i as f32 * self.control_width;
+            let gap = self.gap / 2.0;
+            rects.push(self.pill(bx + gap, self.control_width - 2.0 * gap, hover_bg));
+        }
         let mut rect = |x: f32, y: f32, width: f32, height: f32, color: Rgb| {
             rects.push(UiRect {
                 x,
@@ -267,6 +303,7 @@ impl TabBar {
                 width,
                 height,
                 color,
+                radius: 0.0,
             });
         };
         // An outlined square.
@@ -279,17 +316,11 @@ impl TabBar {
 
         for (i, control) in CONTROLS.into_iter().enumerate() {
             let bx = self.controls_x() + i as f32 * self.control_width;
-            let is_hovered = hovered == Some(control);
-            let mut color = foreground;
-            if is_hovered {
-                let hover_bg = if control == BarHit::CloseWindow {
-                    color = WHITE;
-                    CLOSE_HOVER
-                } else {
-                    mix(bar_bg, foreground, 0.12)
-                };
-                rect(bx, 0.0, self.control_width, self.height, hover_bg);
-            }
+            let color = if control == BarHit::CloseWindow && hovered == Some(control) {
+                WHITE
+            } else {
+                foreground
+            };
 
             // Icon box, centered in the button.
             let x0 = (bx + (self.control_width - icon) / 2.0).floor();
@@ -368,12 +399,14 @@ mod tests {
     #[test]
     fn tabs_share_the_width_up_to_a_maximum() {
         let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
+        assert_eq!(bar.slots[0].x, 4.0, "margin at the left edge");
         assert_eq!(bar.slots[0].width, 280.0, "capped at 28 cells");
-        assert_eq!(bar.slots[1].x, 280.0);
+        assert_eq!(bar.slots[1].x, 284.0);
 
+        // 4px margin on both sides leave 992px for 8 tabs.
         let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, false);
-        assert_eq!(bar.slots[0].width, 125.0);
-        assert_eq!(bar.height, 30.0);
+        assert_eq!(bar.slots[0].width, 124.0);
+        assert_eq!(bar.height, 34.0);
     }
 
     #[test]
@@ -381,10 +414,11 @@ mod tests {
         let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
         assert_eq!(bar.hit(10.0, 10.0), Some(BarHit::Tab(0)));
         assert_eq!(bar.hit(290.0, 10.0), Some(BarHit::Tab(1)));
-        // Close button: 20px square, 5px from the tab's right edge.
+        // Close button: 20px square, 7px from the tab's right edge.
         assert_eq!(bar.hit(270.0, 10.0), Some(BarHit::Close(0)));
+        assert_eq!(bar.hit(2.0, 10.0), Some(BarHit::Empty), "left margin");
         assert_eq!(bar.hit(800.0, 10.0), Some(BarHit::Empty));
-        assert_eq!(bar.hit(10.0, 40.0), None, "below the bar");
+        assert_eq!(bar.hit(10.0, 34.0), None, "below the bar");
     }
 
     #[test]
@@ -397,8 +431,8 @@ mod tests {
     #[test]
     fn window_controls_take_the_right_edge() {
         let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, true);
-        // 3 × 46px of controls leave 862px for 8 tabs.
-        assert_eq!(bar.slots[0].width, 107.0);
+        // 3 × 46px of controls and the margins leave 854px for 8 tabs.
+        assert_eq!(bar.slots[0].width, 106.0);
         assert_eq!(bar.hit(870.0, 10.0), Some(BarHit::Minimize));
         assert_eq!(bar.hit(930.0, 10.0), Some(BarHit::Maximize));
         assert_eq!(bar.hit(999.0, 10.0), Some(BarHit::CloseWindow));

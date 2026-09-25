@@ -76,7 +76,7 @@ fn chrome(
         use winit::platform::macos::WindowAttributesExtMacOS;
 
         let _ = event_loop;
-        match config.window.macos_titlebar {
+        match config.window.effective_macos_titlebar() {
             MacosTitlebar::Native => (attrs, Chrome::System),
             // Room for the traffic-light buttons, in logical pixels.
             MacosTitlebar::Transparent => (
@@ -98,8 +98,15 @@ fn chrome(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = config;
-        if is_wslg_wayland(event_loop) {
+        use nuntio_config::Decorations;
+
+        if config.window.decorations == Decorations::Custom || is_wslg_wayland(event_loop) {
+            // Keep the drop shadow a decorated window would have.
+            #[cfg(windows)]
+            let attrs = {
+                use winit::platform::windows::WindowAttributesExtWindows;
+                attrs.with_undecorated_shadow(true)
+            };
             (attrs.with_decorations(false), Chrome::Undecorated)
         } else {
             (attrs, Chrome::System)

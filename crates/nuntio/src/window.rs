@@ -146,7 +146,8 @@ impl Blink {
 pub enum Chrome {
     /// Normal system decorations.
     System,
-    /// No decorations (WSLg): the tab bar moves the window, edges resize it.
+    /// No decorations (our own header, or WSLg): the tab bar moves the
+    /// window, edges resize it.
     Undecorated,
     /// macOS transparent title bar: tab bar sits in it, right of the buttons.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -377,6 +378,7 @@ impl WindowState {
                 width: r.width,
                 height: r.height,
                 color: divider_color,
+                radius: 0.0,
             });
         }
 

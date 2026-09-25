@@ -30,6 +30,8 @@ pub struct UiRect {
     pub width: f32,
     pub height: f32,
     pub color: Rgb,
+    /// Corner radius in physical pixels; 0 for a sharp rectangle.
+    pub radius: f32,
 }
 
 /// A line of UI text in the terminal font. Characters advance by the cell

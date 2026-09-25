@@ -81,6 +81,7 @@ impl Banner {
                 width: window_width,
                 height,
                 color: background,
+                radius: 0.0,
             },
             UiText {
                 x: padding,
