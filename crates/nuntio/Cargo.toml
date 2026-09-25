@@ -45,6 +45,8 @@ recommends = "libvulkan1 | libegl1"
 extended-description = "Terminal emulator with tabs, split panes, GPU rendering and a hot-reloaded TOML config."
 assets = [
     ["target/release/nuntio", "usr/bin/", "755"],
+    # Only on the PATH inside nuntio's panes.
+    ["target/release/nuntio-config", "usr/lib/nuntio/", "755"],
     ["../../assets/nuntio.desktop", "usr/share/applications/", "644"],
     ["../../assets/icons/png/16.png", "usr/share/icons/hicolor/16x16/apps/nuntio.png", "644"],
     ["../../assets/icons/png/32.png", "usr/share/icons/hicolor/32x32/apps/nuntio.png", "644"],

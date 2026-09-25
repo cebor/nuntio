@@ -3,6 +3,7 @@
 nuntio is configured with a single TOML file. Every setting is optional, so an empty or missing file gives you the defaults.
 
 - [Location](#location)
+- [Editing in the terminal](#editing-in-the-terminal)
 - [Reloading](#reloading)
 - [Full example](#full-example)
 - [Options](#options)
@@ -21,6 +22,35 @@ If neither exists, nuntio runs with the defaults. A `config.toml` you then creat
 The paths are the same on Linux, macOS and Windows (on Windows, `~` is your user profile folder, e.g. `C:\Users\<name>`), so one dotfiles setup works everywhere. Symlinked config files are supported.
 
 Custom themes go in a `themes/` directory next to the config file, for example `~/.config/nuntio/themes/`. With `~/.nuntio.toml`, they still go in `~/.config/nuntio/themes/`.
+
+## Editing in the terminal
+
+Run `nuntio-config` in a nuntio tab to change settings without editing TOML by hand. The command exists only inside nuntio, and it edits the config file this nuntio uses, including one given with `--config`.
+
+- Settings are grouped by section. Choices offer only valid values: the variants of an option, your installed themes (with a color preview) and monospace fonts, and the keybinding actions. Numbers stay within their range.
+- Every change is written right away and applied by hot reload, so you see it in the window as you go. A change that would make the file invalid is refused with the reason.
+- Comments and the layout of your file are kept. Resetting a setting to its default removes it from the file.
+- A `●` marks settings that are set in the file.
+
+| Key | Action |
+|---|---|
+| <kbd>↑</kbd> <kbd>↓</kbd> | Move |
+| <kbd>←</kbd> <kbd>→</kbd> | Step a number, cycle a choice, toggle a switch |
+| <kbd>Enter</kbd> | Edit: open the list of choices, the text input or the checklist |
+| <kbd>Space</kbd> | Toggle a switch |
+| <kbd>Tab</kbd> | Switch between sections and settings |
+| <kbd>d</kbd> | Reset to the default (in keybindings: delete the entry) |
+| <kbd>a</kbd> | Add a keybinding |
+| <kbd>/</kbd> | Search all settings |
+| <kbd>u</kbd> | Undo |
+| <kbd>R</kbd> | Restore the file as it was when `nuntio-config` started |
+| <kbd>q</kbd> | Quit |
+
+In a list of choices, typing filters it; moving through themes or fonts previews each one, <kbd>Enter</kbd> keeps it and <kbd>Esc</kbd> goes back. The font list also accepts any name you type. In the status bar items, <kbd>Space</kbd> shows or hides an item and <kbd>Shift</kbd><kbd>↑</kbd>/<kbd>↓</kbd> moves it.
+
+A key combination for a keybinding is typed as text, like `Ctrl+Shift+Enter` (see [Key syntax](#key-syntax)), because a terminal can't report every combination reliably. The editor checks it as you type and warns when the combination is already bound.
+
+If you edit the file in another editor while `nuntio-config` is open, it reloads the file before the next change. Shells started in WSL (`shell = { wsl = … }`) don't get the command.
 
 ## Reloading
 

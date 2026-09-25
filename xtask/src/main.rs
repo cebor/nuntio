@@ -17,6 +17,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail, ensure};
 
 const NAME: &str = "nuntio";
+/// The config editor, built from the same package. It must not land on
+/// the global PATH: nuntio adds it only inside its panes.
+const HELPER: &str = "nuntio-config";
 const PNG_SIZES: [u32; 9] = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
 const ICO_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 const ICNS_SIZES: [u32; 7] = [16, 32, 64, 128, 256, 512, 1024];
@@ -240,6 +243,12 @@ fn icons() -> Result<()> {
 
 // -------------------------------------------------------------- package
 
+/// `nuntio-config` next to the built `nuntio`.
+fn helper_of(binary: &Path) -> PathBuf {
+    binary.with_file_name(format!("{HELPER}{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Builds both binaries of the package; returns the path of `nuntio`.
 fn cargo_build(target: Option<&str>) -> Result<PathBuf> {
     let mut command = Command::new(env!("CARGO"));
     command
@@ -301,10 +310,15 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
     let stage = root().join("target/package");
     let base = format!("{NAME}-{version}-{arch}-linux");
 
-    // tar.gz with an FHS-like layout: bin/, share/applications, share/icons.
+    // tar.gz with an FHS-like layout: bin/, lib/nuntio/, share/applications,
+    // share/icons.
     let tree = stage.join(&base);
     fresh_dir(&tree)?;
     copy(&binary, &tree.join("bin").join(NAME))?;
+    copy(
+        &helper_of(&binary),
+        &tree.join("lib").join(NAME).join(HELPER),
+    )?;
     install_desktop_files(&assets, &tree.join("share"))?;
     copy_docs(&tree)?;
     let tarball = dist.join(format!("{base}.tar.gz"));
@@ -331,6 +345,10 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
         let appdir = stage.join("AppDir");
         fresh_dir(&appdir)?;
         copy(&binary, &appdir.join("usr/bin").join(NAME))?;
+        copy(
+            &helper_of(&binary),
+            &appdir.join("usr/lib").join(NAME).join(HELPER),
+        )?;
         install_desktop_files(&assets, &appdir.join("usr/share"))?;
         copy(
             &assets.join("nuntio.desktop"),
@@ -392,12 +410,17 @@ fn package_macos(dist: &Path, version: &str) -> Result<()> {
 
     let app = stage.join("nuntio.app/Contents");
     fs::create_dir_all(app.join("MacOS"))?;
-    run(Command::new("lipo")
-        .arg("-create")
-        .arg(&intel)
-        .arg(&arm)
-        .arg("-output")
-        .arg(app.join("MacOS").join(NAME)))?;
+    for (intel, arm, name) in [
+        (intel.clone(), arm.clone(), NAME),
+        (helper_of(&intel), helper_of(&arm), HELPER),
+    ] {
+        run(Command::new("lipo")
+            .arg("-create")
+            .arg(&intel)
+            .arg(&arm)
+            .arg("-output")
+            .arg(app.join("MacOS").join(name)))?;
+    }
     copy(
         &root().join("assets/icons/nuntio.icns"),
         &app.join("Resources/nuntio.icns"),
@@ -433,6 +456,7 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
         .join(format!("{NAME}-{version}"));
     fresh_dir(&stage)?;
     copy(&binary, &stage.join(format!("{NAME}.exe")))?;
+    copy(&helper_of(&binary), &stage.join(format!("{HELPER}.exe")))?;
     copy_docs(&stage)?;
     let zip = dist.join(format!(
         "{NAME}-{version}-{}-windows.zip",

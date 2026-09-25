@@ -39,6 +39,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Clickable URLs**: hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on macOS) and click.
 - **Themes**: five built in, your own as TOML or iTerm2 `.itermcolors`, and a light/dark pair that follows the OS appearance.
 - **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.
+- **Config editor**: run `nuntio-config` in a nuntio tab to change settings in a terminal UI that only offers valid values and previews every change live.
 - **Hot reload**: saving the config applies it right away. Mistakes show up as a banner in the window, and the previous settings stay active.
 - **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.
@@ -121,7 +122,7 @@ key = "Ctrl+Shift+Enter"
 action = "split_vertical"
 ```
 
-Changes apply as soon as you save the file. The **[configuration reference](docs/config.md)** covers every option with its default, custom themes, and all keybinding actions.
+Changes apply as soon as you save the file. Or run `nuntio-config` in a nuntio tab and change settings in a terminal UI instead of editing TOML. The **[configuration reference](docs/config.md)** covers every option with its default, custom themes, and all keybinding actions.
 
 ## Keyboard shortcuts
 
@@ -159,7 +160,8 @@ In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>
 | [`crates/nuntio`](crates/nuntio) | The binary: winit event loop, window and layout, tabs, split tree, key and mouse encoding, shortcuts, tab bar, find bar and banners |
 | [`crates/nuntio-term`](crates/nuntio-term) | Wrapper around `alacritty_terminal`: a PTY and IO thread per pane, snapshots of the visible screen, palette, search, URL detection, foreground process info |
 | [`crates/nuntio-render`](crates/nuntio-render) | wgpu renderer: instanced quads for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases) and UI; procedural box drawing |
-| [`crates/nuntio-config`](crates/nuntio-config) | Config schema, loading and validation, themes (built-in TOML and `.itermcolors`), file watcher |
+| [`crates/nuntio-config`](crates/nuntio-config) | Config schema, loading and validation, editing in place, themes (built-in TOML and `.itermcolors`), file watcher |
+| [`crates/nuntio-config-tui`](crates/nuntio-config-tui) | The `nuntio-config` editor: a ratatui terminal UI built on the schema |
 | [`xtask`](xtask) | Icons, packaging, changelog |
 
 PTY threads send events through the winit event loop proxy. The main thread takes a snapshot of each visible pane, holding the terminal lock only for the copy, and hands one frame to the renderer. It redraws only when something changed.
