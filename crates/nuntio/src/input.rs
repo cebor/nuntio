@@ -4,7 +4,7 @@
 //! ESC prefix.
 
 use nuntio_term::TermMode;
-use winit::keyboard::{Key, KeyLocation, NamedKey};
+use winit::keyboard::{Key, KeyCode, KeyLocation, NamedKey, PhysicalKey};
 
 /// The parts of a key press the encoder needs.
 #[derive(Debug, Clone)]
@@ -181,6 +181,65 @@ fn encode_app_keypad(input: &KeyInput) -> Option<Vec<u8>> {
         _ => return None,
     };
     Some(vec![0x1b, b'O', f])
+}
+
+/// The key as it is labeled on a US layout, for layouts without Latin
+/// letters: on a Russian layout the key C gives "с", yet Ctrl+С must work
+/// as Ctrl+C, for shortcuts and for the shell. `None` on Latin layouts,
+/// whose own letters count (German QWERTZ's Z stays Z, and Ctrl+Ü is not
+/// Ctrl+[), and for keys without a US character.
+pub fn latin_key(unmodified: &Key, physical: PhysicalKey) -> Option<Key> {
+    let Key::Character(text) = unmodified else {
+        return None;
+    };
+    if text.is_empty() || text.chars().any(is_latin) {
+        return None;
+    }
+    let PhysicalKey::Code(code) = physical else {
+        return None;
+    };
+    let c = us_char(code)?;
+    Some(Key::Character(c.to_string().into()))
+}
+
+/// ASCII and the Latin blocks of Unicode: letters of Latin layouts.
+fn is_latin(c: char) -> bool {
+    matches!(
+        c as u32,
+        0..0x0250 | 0x1E00..0x1F00 | 0x2C60..0x2C80 | 0xA720..0xA800 | 0xAB30..0xAB70
+    )
+}
+
+/// The unshifted character of a key on a US layout.
+fn us_char(code: KeyCode) -> Option<char> {
+    use KeyCode::*;
+    let letters = [
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
+        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+    ];
+    let digits = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
+    if let Some(i) = letters.iter().position(|&k| k == code) {
+        return Some((b'a' + i as u8) as char);
+    }
+    if let Some(i) = digits.iter().position(|&k| k == code) {
+        return Some((b'0' + i as u8) as char);
+    }
+    Some(match code {
+        Minus => '-',
+        Equal => '=',
+        BracketLeft => '[',
+        BracketRight => ']',
+        Backslash => '\\',
+        Semicolon => ';',
+        Quote => '\'',
+        Backquote => '`',
+        Comma => ',',
+        Period => '.',
+        Slash => '/',
+        _ => return None,
+    })
 }
 
 /// `Ctrl+<key>` as a C0 control character.
@@ -362,6 +421,35 @@ mod tests {
             TermMode::empty(),
         );
         assert_eq!(out.unwrap(), b"\x1bf");
+    }
+
+    #[test]
+    fn latin_keys_for_other_scripts() {
+        let latin = |text: &str, code| latin_key(&ch(text), PhysicalKey::Code(code));
+        // Russian: the keys C, Ю (period) and 1.
+        assert_eq!(latin("с", KeyCode::KeyC), Some(ch("c")));
+        assert_eq!(latin("ю", KeyCode::Period), Some(ch(".")));
+        // Greek.
+        assert_eq!(latin("ψ", KeyCode::KeyC), Some(ch("c")));
+        // Latin layouts keep their own letters: QWERTZ's Z is where Y is.
+        assert_eq!(latin("z", KeyCode::KeyY), None);
+        assert_eq!(latin("1", KeyCode::Digit1), None);
+        assert_eq!(latin("ü", KeyCode::BracketLeft), None);
+        assert_eq!(latin("ß", KeyCode::Minus), None);
+        // Hebrew.
+        assert_eq!(latin("ב", KeyCode::KeyC), Some(ch("c")));
+        assert_eq!(latin("с", KeyCode::F1), None);
+        assert_eq!(
+            latin_key(
+                &Key::Named(NamedKey::Enter),
+                PhysicalKey::Code(KeyCode::Enter)
+            ),
+            None
+        );
+    }
+
+    fn ch(s: &str) -> Key {
+        Key::Character(s.into())
     }
 
     #[test]

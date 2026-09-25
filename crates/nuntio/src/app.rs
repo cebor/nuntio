@@ -17,7 +17,7 @@ use winit::event::{
     ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::keyboard::{Key, ModifiersKeyState, NamedKey};
+use winit::keyboard::{Key, ModifiersKeyState, ModifiersState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{
     CursorIcon, ResizeDirection, Theme as WindowTheme, Window, WindowAttributes, WindowId,
@@ -899,7 +899,8 @@ impl App {
             return;
         };
         let unmodified = event.key_without_modifiers();
-        if let Some(action) = self.bindings.lookup(&unmodified, mods) {
+        let latin = input::latin_key(&unmodified, event.physical_key);
+        if let Some(action) = self.lookup_binding(&unmodified, latin.as_ref(), mods) {
             self.run_action(action);
             return;
         }
@@ -907,6 +908,11 @@ impl App {
         if mods.super_key() {
             return;
         }
+        // Ctrl+С on a Cyrillic layout is Ctrl+C for the shell too.
+        let unmodified = match latin {
+            Some(latin) if mods.control_key() => latin,
+            _ => unmodified,
+        };
         let key_input = input::KeyInput {
             key: &event.logical_key,
             unmodified: &unmodified,
@@ -923,6 +929,19 @@ impl App {
         }
     }
 
+    /// The shortcut for a key; on layouts without Latin letters, also
+    /// looked up by the key's US character (see `input::latin_key`).
+    fn lookup_binding(
+        &self,
+        unmodified: &Key,
+        latin: Option<&Key>,
+        mods: ModifiersState,
+    ) -> Option<Action> {
+        self.bindings
+            .lookup(unmodified, mods)
+            .or_else(|| self.bindings.lookup(latin?, mods))
+    }
+
     /// Keys for the open find bar. Returns whether the key was used;
     /// shortcuts not handled here still work while searching.
     fn search_key(&mut self, event: &KeyEvent) -> bool {
@@ -934,9 +953,11 @@ impl App {
         let Some(bar) = state.search.as_mut() else {
             return false;
         };
-        // On macOS, Option+R arrives as "®"; the toggle must see the "r".
+        // On macOS, Option+R arrives as "®"; the toggle must see the "r",
+        // also where the key gives a non-Latin letter.
         let unmodified = event.key_without_modifiers();
-        let is_r = matches!(&unmodified, Key::Character(c) if c.eq_ignore_ascii_case("r"));
+        let latin = input::latin_key(&unmodified, event.physical_key);
+        let is_r = matches!(latin.as_ref().unwrap_or(&unmodified), Key::Character(c) if c.eq_ignore_ascii_case("r"));
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => state.search = None,
             Key::Named(NamedKey::Enter) => bar.next(term, !mods.shift_key()),
@@ -960,7 +981,9 @@ impl App {
                 if !typed {
                     // Shortcuts still work; other keys (Tab, Home, F1, …)
                     // must not reach the shell behind the bar.
-                    return self.bindings.lookup(&unmodified, mods).is_none();
+                    return self
+                        .lookup_binding(&unmodified, latin.as_ref(), mods)
+                        .is_none();
                 }
                 bar.query.push_str(text);
                 bar.update(term);
