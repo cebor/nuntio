@@ -973,18 +973,22 @@ impl App {
                 bar.update(term);
             }
             _ => {
-                let text = event.text.as_deref().unwrap_or("");
-                let typed = !text.is_empty() && !text.chars().any(char::is_control);
-                if mods.control_key() || mods.super_key() || mods.alt_key() {
-                    return false;
-                }
-                if !typed {
-                    // Shortcuts still work; other keys (Tab, Home, F1, …)
+                let key_input = input::KeyInput {
+                    key: &event.logical_key,
+                    unmodified: &unmodified,
+                    text: event.text.as_deref(),
+                    location: event.location,
+                    shift: mods.shift_key(),
+                    ctrl: mods.control_key(),
+                    meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
+                };
+                let Some(text) = input::field_text(&key_input, mods.super_key()) else {
+                    // Shortcuts still work; other keys (Tab, F1, Ctrl+W, …)
                     // must not reach the shell behind the bar.
                     return self
                         .lookup_binding(&unmodified, latin.as_ref(), mods)
                         .is_none();
-                }
+                };
                 bar.query.push_str(text);
                 bar.update(term);
             }

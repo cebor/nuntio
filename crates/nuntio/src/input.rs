@@ -42,16 +42,7 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
         return Some(bytes);
     }
 
-    // Windows reports AltGr as Ctrl+Alt: AltGr+Q on a German layout must type
-    // "@", not Ctrl+Meta+Q. A real Ctrl+Alt combination yields no other
-    // printable text than the key itself.
-    if input.ctrl
-        && input.meta
-        && let Some(text) = input.text
-        && !text.is_empty()
-        && !text.chars().any(char::is_control)
-        && !matches!(input.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text))
-    {
+    if let Some(text) = altgr_text(input) {
         return Some(text.as_bytes().to_vec());
     }
 
@@ -74,6 +65,36 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
 
     let text = input.text.filter(|t| !t.is_empty())?;
     Some(text.as_bytes().to_vec())
+}
+
+/// Printable text the key produces, if any.
+fn printable<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
+    input
+        .text
+        .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
+}
+
+/// Windows reports AltGr as Ctrl+Alt: AltGr+Q on a German layout must type
+/// "@", not Ctrl+Meta+Q. A real Ctrl+Alt combination yields no other
+/// printable text than the key itself.
+fn altgr_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
+    let text = printable(input).filter(|_| input.ctrl && input.meta)?;
+    let same_key = matches!(input.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text));
+    (!same_key).then_some(text)
+}
+
+/// The text a key types into one of nuntio's own input fields (the find
+/// bar), or `None` for a shortcut or a key without text. Option on macOS
+/// composes characters like "@" unless it acts as Meta, and AltGr types
+/// them on Windows; Ctrl, Meta and Cmd/Super combinations are shortcuts.
+pub fn field_text<'a>(input: &KeyInput<'a>, super_key: bool) -> Option<&'a str> {
+    if super_key {
+        return None;
+    }
+    if let Some(text) = altgr_text(input) {
+        return Some(text);
+    }
+    printable(input).filter(|_| !input.ctrl && !input.meta)
 }
 
 fn with_meta(mut bytes: Vec<u8>, meta: bool) -> Vec<u8> {
@@ -421,6 +442,53 @@ mod tests {
             TermMode::empty(),
         );
         assert_eq!(out.unwrap(), b"\x1bf");
+    }
+
+    #[test]
+    fn text_for_input_fields() {
+        let field = |c: &str, unmodified: &str, text: Option<&str>, mods: Mods, super_key| {
+            let (key, unmodified) = (ch(c), ch(unmodified));
+            let input = KeyInput {
+                key: &key,
+                unmodified: &unmodified,
+                text,
+                location: KeyLocation::Standard,
+                shift: mods.shift,
+                ctrl: mods.ctrl,
+                meta: mods.meta,
+            };
+            field_text(&input, super_key).map(str::to_owned)
+        };
+        let ctrl_alt = Mods {
+            ctrl: true,
+            meta: true,
+            shift: false,
+        };
+        assert_eq!(
+            field("a", "a", Some("a"), NONE, false).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            field("A", "a", Some("A"), SHIFT, false).as_deref(),
+            Some("A")
+        );
+        // Option composes "@" on a German Mac keyboard when it isn't Meta.
+        assert_eq!(
+            field("@", "l", Some("@"), NONE, false).as_deref(),
+            Some("@")
+        );
+        // AltGr+Q on Windows.
+        assert_eq!(
+            field("@", "q", Some("@"), ctrl_alt, false).as_deref(),
+            Some("@")
+        );
+        // Shortcuts and control characters type nothing.
+        assert_eq!(field("w", "w", Some("\u{17}"), CTRL, false), None);
+        assert_eq!(field("w", "w", Some("w"), CTRL, false), None);
+        assert_eq!(field("b", "b", Some("b"), META, false), None);
+        assert_eq!(field("a", "a", Some("a"), ctrl_alt, false), None);
+        assert_eq!(field("v", "v", Some("v"), NONE, true), None);
+        assert_eq!(field("a", "a", None, NONE, false), None);
     }
 
     #[test]
