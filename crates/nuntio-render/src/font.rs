@@ -128,6 +128,35 @@ pub fn resolve_family<'a>(
     FamilyMatch::NotFound { suggestions }
 }
 
+/// Monospace families to use when no family is configured, in order of
+/// preference. cosmic-text defaults to "Noto Sans Mono", and when that isn't
+/// installed it takes whichever monospace face comes first, which on macOS is
+/// an italic one.
+const DEFAULT_MONOSPACE: &[&str] = if cfg!(target_os = "macos") {
+    &["Menlo", "SF Mono", "Monaco"]
+} else if cfg!(windows) {
+    &["Cascadia Mono", "Consolas", "Courier New"]
+} else {
+    &[
+        "Noto Sans Mono",
+        "DejaVu Sans Mono",
+        "Liberation Mono",
+        "Ubuntu Mono",
+    ]
+};
+
+/// The first of `candidates` that is installed.
+fn default_monospace<'a>(
+    installed: impl IntoIterator<Item = &'a str>,
+    candidates: &[&'static str],
+) -> Option<&'static str> {
+    let installed: Vec<&str> = installed.into_iter().collect();
+    candidates
+        .iter()
+        .find(|c| installed.iter().any(|f| f.eq_ignore_ascii_case(c)))
+        .copied()
+}
+
 impl Fonts {
     /// Load fonts. Returns a warning if the requested family isn't installed.
     pub fn new(
@@ -136,6 +165,13 @@ impl Fonts {
         scale_factor: f64,
     ) -> (Self, Option<String>) {
         let mut system = FontSystem::new();
+        let installed = system
+            .db()
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()));
+        if let Some(name) = default_monospace(installed, DEFAULT_MONOSPACE) {
+            system.db_mut().set_monospace_family(name);
+        }
         let px_size = points_to_pixels(size_points, scale_factor);
         let buffer = new_buffer(&mut system, px_size);
         let small_buffer = new_buffer(&mut system, px_size * SMALL_TEXT_SCALE);
@@ -386,6 +422,16 @@ mod tests {
         "Hack Nerd Font Propo",
         "Liberation Mono",
     ];
+
+    #[test]
+    fn default_monospace_takes_the_first_installed_candidate() {
+        let candidates = ["Menlo", "DejaVu Sans Mono", "Liberation Mono"];
+        assert_eq!(
+            default_monospace(INSTALLED, &candidates),
+            Some("DejaVu Sans Mono")
+        );
+        assert_eq!(default_monospace(INSTALLED, &["Menlo"]), None);
+    }
 
     #[test]
     fn exact_ignores_case_and_spacing() {
