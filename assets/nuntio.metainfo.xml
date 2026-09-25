@@ -23,6 +23,12 @@
       <li>Optional status bar with CPU, memory, network and battery graphs</li>
     </ul>
   </description>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Tabs, a split pane and the nuntio-config editor</caption>
+      <image>https://raw.githubusercontent.com/cebor/nuntio/main/assets/screenshot.png</image>
+    </screenshot>
+  </screenshots>
   <launchable type="desktop-id">nuntio.desktop</launchable>
   <url type="homepage">https://cebor.github.io/nuntio/</url>
   <url type="bugtracker">https://github.com/cebor/nuntio/issues</url>
