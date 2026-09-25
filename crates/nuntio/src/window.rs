@@ -31,6 +31,8 @@ const RESIZE_BORDER: f64 = 5.0;
 const WINDOW_RADIUS: f64 = 12.0;
 /// Extra grab area around pane dividers, in logical pixels.
 const DIVIDER_SLOP: f64 = 3.0;
+/// How long a tab title is reused before the process info is read again.
+const TITLE_REFRESH: Duration = Duration::from_millis(250);
 
 pub struct Pane {
     pub id: PaneId,
@@ -39,6 +41,26 @@ pub struct Pane {
     pub title: Option<String>,
     /// Current grid size, to skip redundant resizes.
     size: Option<TermSize>,
+    /// The last computed title: reading the process info on every frame
+    /// would cost several syscalls per tab under heavy output.
+    title_cache: Option<CachedTitle>,
+}
+
+struct CachedTitle {
+    mode: TabTitle,
+    title: String,
+    computed: Instant,
+}
+
+impl CachedTitle {
+    /// The title, if it is recent enough and for this mode.
+    fn get(&self, mode: TabTitle, now: Instant) -> Option<&str> {
+        (self.mode == mode && now < self.expiry()).then_some(self.title.as_str())
+    }
+
+    fn expiry(&self) -> Instant {
+        self.computed + TITLE_REFRESH
+    }
 }
 
 impl Pane {
@@ -48,7 +70,31 @@ impl Pane {
             term,
             title: None,
             size: None,
+            title_cache: None,
         }
+    }
+
+    /// Set the application's title (OSC 0/2); `None` resets it.
+    pub fn set_title(&mut self, title: Option<String>) {
+        self.title = title;
+        self.title_cache = None;
+    }
+
+    /// The tab title, and when it expires if it came from the cache (it
+    /// may be stale then, so it should be looked at again).
+    fn cached_title(&mut self, mode: TabTitle, now: Instant) -> (String, Option<Instant>) {
+        if let Some(cache) = &self.title_cache
+            && let Some(title) = cache.get(mode, now)
+        {
+            return (title.to_owned(), Some(cache.expiry()));
+        }
+        let title = self.title(mode);
+        self.title_cache = Some(CachedTitle {
+            mode,
+            title: title.clone(),
+            computed: now,
+        });
+        (title, None)
     }
 
     fn title(&self, mode: TabTitle) -> String {
@@ -194,6 +240,9 @@ pub struct WindowState {
     pub blink: Blink,
     /// Frames skipped in a row, to stop retrying a stuck surface.
     pub skipped_frames: u32,
+    /// A frame showed cached tab titles; redraw once they expire so they
+    /// catch up with the processes.
+    pub title_refresh: Option<Instant>,
     /// Cell the IME candidate window was last anchored to.
     ime_cell: Option<(u32, u32)>,
     title: String,
@@ -224,6 +273,7 @@ impl WindowState {
                 next_toggle: Instant::now(),
             },
             skipped_frames: 0,
+            title_refresh: None,
             ime_cell: None,
             title: String::new(),
         }
@@ -422,18 +472,31 @@ impl WindowState {
         let bar = self.tab_bar(config);
         // Titles look up the foreground process, so only compute the ones
         // that are shown.
+        let now = Instant::now();
+        let mut refresh: Option<Instant> = None;
         let labels: Vec<TabLabel> = self
             .tabs
-            .iter()
+            .iter_mut()
             .enumerate()
             .filter(|&(i, _)| bar.is_some() || i == active)
-            .map(|(i, tab)| TabLabel {
-                title: tab.content.focused_pane().title(config.tabs.title),
-                active: i == active,
-                activity: tab.activity,
-                bell: tab.bell,
+            .map(|(i, tab)| {
+                let focused = tab.content.focused;
+                let (title, expiry) = match tab.content.pane_mut(focused) {
+                    Some(pane) => pane.cached_title(config.tabs.title, now),
+                    None => (String::new(), None),
+                };
+                if let Some(expiry) = expiry {
+                    refresh = Some(refresh.map_or(expiry, |r| r.min(expiry)));
+                }
+                TabLabel {
+                    title,
+                    active: i == active,
+                    activity: tab.activity,
+                    bell: tab.bell,
+                }
             })
             .collect();
+        self.title_refresh = refresh;
         if let Some(label) = labels.iter().find(|l| l.active)
             && label.title != self.title
         {
@@ -816,6 +879,23 @@ mod tests {
         stroke: 1,
         strikeout_y: 10,
     };
+
+    #[test]
+    fn cached_titles_expire_and_follow_the_mode() {
+        let now = Instant::now();
+        let cache = CachedTitle {
+            mode: TabTitle::Auto,
+            title: "~/code".into(),
+            computed: now,
+        };
+        assert_eq!(cache.get(TabTitle::Auto, now), Some("~/code"));
+        assert_eq!(cache.get(TabTitle::Process, now), None, "other mode");
+        assert_eq!(
+            cache.get(TabTitle::Auto, now + TITLE_REFRESH),
+            None,
+            "expired"
+        );
+    }
 
     #[test]
     fn edges_and_corners() {

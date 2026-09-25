@@ -1259,7 +1259,7 @@ impl App {
                 if let Some(tab) = state.tabs.get_mut(index)
                     && let Some(p) = tab.content.pane_mut(pane)
                 {
-                    p.title = title;
+                    p.set_title(title);
                 }
                 state.window.request_redraw();
             }
@@ -1287,16 +1287,26 @@ impl ApplicationHandler<UserEvent> for App {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        if !state.blink.active {
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
-        }
-        if Instant::now() >= state.blink.next_toggle {
+        let now = Instant::now();
+        if state.blink.active && now >= state.blink.next_toggle {
             state.blink.visible = !state.blink.visible;
-            state.blink.next_toggle = Instant::now() + BLINK_INTERVAL;
+            state.blink.next_toggle = now + BLINK_INTERVAL;
             state.window.request_redraw();
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(state.blink.next_toggle));
+        if state.title_refresh.is_some_and(|t| now >= t) {
+            // The redraw computes fresh titles and schedules no further one.
+            state.title_refresh = None;
+            state.window.request_redraw();
+        }
+        // Sleep until the next timer, or until an event if there is none.
+        let deadline = [
+            state.blink.active.then_some(state.blink.next_toggle),
+            state.title_refresh,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
