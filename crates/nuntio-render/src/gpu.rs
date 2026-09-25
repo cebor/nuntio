@@ -33,13 +33,17 @@ pub struct GpuContext {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// The surface blends with what is behind the window.
+    transparent: bool,
     /// The last frame was suboptimal; reconfigure once it has been presented.
     reconfigure: bool,
 }
 
 impl GpuContext {
     /// Create a context for `window`. `width`/`height` are in physical pixels.
-    pub fn new<W>(window: W, width: u32, height: u32) -> Result<Self, GpuError>
+    /// With `transparent`, the surface keeps the alpha channel if the
+    /// platform supports it (the window must be created transparent too).
+    pub fn new<W>(window: W, width: u32, height: u32, transparent: bool) -> Result<Self, GpuError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
@@ -71,6 +75,18 @@ impl GpuContext {
         if let Some(format) = caps.formats.iter().copied().find(|f| !f.is_srgb()) {
             config.format = format;
         }
+        let alpha_mode = [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+        ]
+        .into_iter()
+        .find(|mode| caps.alpha_modes.contains(mode));
+        let transparent = transparent && alpha_mode.is_some();
+        if transparent {
+            config.alpha_mode = alpha_mode.expect("checked above");
+        } else if alpha_mode.is_none() {
+            tracing::debug!(modes = ?caps.alpha_modes, "no transparent surface available");
+        }
         config.present_mode = wgpu::PresentMode::AutoVsync;
         config.desired_maximum_frame_latency = 1;
         surface.configure(&device, &config);
@@ -80,6 +96,7 @@ impl GpuContext {
             device,
             queue,
             config,
+            transparent,
             reconfigure: false,
         })
     }
@@ -95,6 +112,10 @@ impl GpuContext {
 
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
+    }
+
+    pub fn transparent(&self) -> bool {
+        self.transparent
     }
 
     pub fn format(&self) -> wgpu::TextureFormat {

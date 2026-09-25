@@ -25,6 +25,9 @@ pub const DEFAULT_TITLE: &str = "nuntio";
 pub const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 /// Width of the edge that resizes an undecorated window, in logical pixels.
 const RESIZE_BORDER: f64 = 5.0;
+/// Radius of the window's corners where nuntio rounds them itself (Linux),
+/// in logical pixels, as GNOME's.
+const WINDOW_RADIUS: f64 = 12.0;
 /// Extra grab area around pane dividers, in logical pixels.
 const DIVIDER_SLOP: f64 = 3.0;
 
@@ -162,6 +165,14 @@ pub enum Chrome {
     /// macOS transparent title bar: tab bar sits in it, right of the buttons.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     TitlebarInset { left: f64 },
+}
+
+impl Chrome {
+    /// Whether nuntio cuts the window's rounded corners itself. Windows 11
+    /// (via DWM) and macOS round their windows on their own.
+    pub fn draws_corners(self) -> bool {
+        cfg!(target_os = "linux") && self == Chrome::Undecorated
+    }
 }
 
 pub struct WindowState {
@@ -435,11 +446,18 @@ impl WindowState {
                 }
             })
             .collect();
+        // Maximized windows sit flush with the screen edges: square corners.
+        let corner_radius = if self.chrome.draws_corners() && !self.window.is_maximized() {
+            (WINDOW_RADIUS * self.scale()) as f32
+        } else {
+            0.0
+        };
         self.renderer.render(&Frame {
             background,
             panes: &panes,
             rects: &rects,
             texts: &texts,
+            corner_radius,
         })
     }
 

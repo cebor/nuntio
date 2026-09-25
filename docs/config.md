@@ -105,7 +105,7 @@ option_as_meta = "none"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `padding` | table | `{ x = 8, y = 6 }` | Space in pixels between the window edge and the text. |
-| `decorations` | string | `"custom"` | `"custom"`: nuntio draws its own header. The tab bar holds the window buttons: on the right on Linux and Windows, and the native traffic lights on the left on macOS. Drag the bar to move the window, double-click it to maximize. `"system"`: the system's title bar and frame. Takes effect on the next start. |
+| `decorations` | string | `"custom"` | `"custom"`: nuntio draws its own header. The tab bar holds the window buttons: on the right on Linux and Windows, and the native traffic lights on the left on macOS. Drag the bar to move the window, double-click it to maximize. The corners are rounded as usual on the OS: by Windows 11 itself, by nuntio on Linux (square when maximized, or if the graphics driver offers no transparent windows). `"system"`: the system's title bar and frame. Takes effect on the next start. |
 | `macos_titlebar` | string | from `decorations` | macOS only, overrides `decorations`. `"native"`: normal title bar. `"transparent"`: the tab bar moves into the title bar, next to the traffic-light buttons (what `"custom"` uses). `"none"`: no title bar and no buttons. |
 | `opacity` | float | `1.0` | `0.0` to `1.0`. Accepted and validated, but not applied yet. |
 

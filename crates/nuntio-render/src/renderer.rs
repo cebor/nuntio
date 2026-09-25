@@ -84,11 +84,16 @@ pub struct Renderer {
     color_atlas: Atlas,
     glyphs: HashMap<GlyphKey, Rc<[Sprite]>>,
     pipeline: wgpu::RenderPipeline,
+    /// Cuts the window's rounded corners out of the finished frame.
+    cutout_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniforms: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instances: Vec<Instance>,
+    /// Instances from here on are corner cutouts, drawn with their own
+    /// pipeline.
+    cutout_start: usize,
     /// Problem with the configured font, reported once.
     font_warning: Option<String>,
 }
@@ -101,11 +106,12 @@ impl Renderer {
         scale_factor: f64,
         font_family: Option<String>,
         font_size: f32,
+        transparent: bool,
     ) -> Result<Self, GpuError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
-        let gpu = GpuContext::new(window, width, height)?;
+        let gpu = GpuContext::new(window, width, height, transparent)?;
         let (fonts, font_warning) = Fonts::new(font_family, font_size, scale_factor);
         let device = &gpu.device;
 
@@ -139,7 +145,7 @@ impl Renderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -164,44 +170,61 @@ impl Renderer {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("quad"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Instance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2,
-                        1 => Float32x2,
-                        2 => Float32x4,
-                        3 => Float32x4,
-                        4 => Uint32,
-                    ],
-                })],
+        let create_pipeline = |label, entry_point, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<Instance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2,
+                            1 => Float32x2,
+                            2 => Float32x4,
+                            3 => Float32x4,
+                            4 => Uint32,
+                        ],
+                    })],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry_point),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: gpu.format(),
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = create_pipeline("quad", "fs_main", wgpu::BlendState::ALPHA_BLENDING);
+        // Scales what is already drawn by the fragment's alpha.
+        let scale_by_alpha = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::SrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let cutout_pipeline = create_pipeline(
+            "corner cutout",
+            "fs_cutout",
+            wgpu::BlendState {
+                color: scale_by_alpha,
+                alpha: scale_by_alpha,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: gpu.format(),
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
 
         let instance_capacity = 4096;
         let instance_buffer = create_instance_buffer(device, instance_capacity);
@@ -221,11 +244,13 @@ impl Renderer {
             color_atlas,
             glyphs: HashMap::new(),
             pipeline,
+            cutout_pipeline,
             bind_group,
             uniforms,
             instance_buffer,
             instance_capacity,
             instances: Vec::new(),
+            cutout_start: 0,
             font_warning,
         })
     }
@@ -322,10 +347,15 @@ impl Renderer {
                 ..Default::default()
             });
             if !self.instances.is_empty() {
+                let (cutout, total) = (self.cutout_start as u32, self.instances.len() as u32);
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-                pass.draw(0..4, 0..self.instances.len() as u32);
+                pass.draw(0..4, 0..cutout);
+                if total > cutout {
+                    pass.set_pipeline(&self.cutout_pipeline);
+                    pass.draw(0..4, cutout..total);
+                }
             }
         }
         queue.submit([encoder.finish()]);
@@ -354,6 +384,17 @@ impl Renderer {
         }
         for text in frame.texts {
             self.push_text(text)?;
+        }
+        self.cutout_start = self.instances.len();
+        let radius = frame.corner_radius.round();
+        if radius > 0.0 && self.gpu.transparent() {
+            let (width, height) = self.gpu.size();
+            let (right, bottom) = (width as f32 - radius, height as f32 - radius);
+            for (x, y) in [(0.0, 0.0), (right, 0.0), (0.0, bottom), (right, bottom)] {
+                let mut corner = Instance::solid(x, y, radius, radius, Rgb { r: 0, g: 0, b: 0 });
+                corner.uv[0] = radius;
+                self.instances.push(corner);
+            }
         }
         Ok(())
     }

@@ -1,5 +1,5 @@
 // Instanced quads: solid and rounded rectangles, coverage-mask glyphs and
-// color glyphs.
+// color glyphs. A second pipeline (fs_cutout) rounds the window's corners.
 
 struct Uniforms {
     screen_size: vec2<f32>,
@@ -58,6 +58,15 @@ fn vs_main(@builtin(vertex_index) vertex: u32, inst: Instance) -> VertexOut {
     return out;
 }
 
+/// Coverage of a pixel at `p` by a box from 0 to 2 * `half` with rounded
+/// corners, antialiased over one pixel.
+fn rounded_box(p: vec2<f32>, half: vec2<f32>, corner_radius: f32) -> f32 {
+    let radius = min(corner_radius, min(half.x, half.y));
+    let q = abs(p - half) - half + vec2<f32>(radius);
+    let dist = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    return clamp(0.5 - dist, 0.0, 1.0);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let coverage = textureSampleLevel(mask_atlas, atlas_sampler, in.uv, 0.0).r;
@@ -70,16 +79,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             return color;
         }
         case KIND_ROUNDED: {
-            // Signed distance to a rounded box, antialiased over one pixel.
-            let half = in.shape.xy;
-            let radius = min(in.shape.z, min(half.x, half.y));
-            let q = abs(in.local - half) - half + vec2<f32>(radius);
-            let dist = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
-            let alpha = clamp(0.5 - dist, 0.0, 1.0);
+            let alpha = rounded_box(in.local, in.shape.xy, in.shape.z);
             return vec4<f32>(in.color.rgb, in.color.a * alpha);
         }
         default: {
             return in.color;
         }
     }
+}
+
+// Window corners: the blend state multiplies what is already drawn by the
+// returned alpha, so pixels outside the rounded window become transparent.
+@fragment
+fn fs_cutout(in: VertexOut) -> @location(0) vec4<f32> {
+    let coverage = rounded_box(in.position.xy, u.screen_size * 0.5, in.shape.z);
+    return vec4<f32>(0.0, 0.0, 0.0, coverage);
 }

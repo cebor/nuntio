@@ -19,6 +19,9 @@ unicode-width.workspace = true
 open.workspace = true
 dirs.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
 [build-dependencies]
 winresource = "0.1"
 

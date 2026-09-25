@@ -9,6 +9,9 @@ pub struct Frame<'a> {
     pub panes: &'a [PaneView<'a>],
     pub rects: &'a [UiRect],
     pub texts: &'a [UiText],
+    /// Radius of the window's outer corners in physical pixels, cut out to
+    /// transparent; 0 keeps them square. Needs a transparent surface.
+    pub corner_radius: f32,
 }
 
 /// A terminal snapshot and where its grid starts, in physical pixels.

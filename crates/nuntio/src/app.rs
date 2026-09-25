@@ -107,10 +107,45 @@ fn chrome(
                 use winit::platform::windows::WindowAttributesExtWindows;
                 attrs.with_undecorated_shadow(true)
             };
+            // Transparent, so that the rounded corners we cut out show the
+            // desktop behind them.
+            let attrs = attrs.with_transparent(Chrome::Undecorated.draws_corners());
             (attrs.with_decorations(false), Chrome::Undecorated)
         } else {
             (attrs, Chrome::System)
         }
+    }
+}
+
+/// Ask Windows 11 to round the corners of our undecorated window, as it
+/// does for decorated ones. Windows 10 doesn't know the attribute and keeps
+/// them square, like all its windows.
+#[cfg(windows)]
+fn round_corners(window: &Window) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
+    };
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let preference = DWMWCP_ROUND;
+    // SAFETY: `hwnd` is our live window, and the pointer and size describe
+    // `preference`, which outlives the call.
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            handle.hwnd.get() as _,
+            DWMWA_WINDOW_CORNER_PREFERENCE as _,
+            (&raw const preference).cast(),
+            size_of_val(&preference) as u32,
+        )
+    };
+    if result != 0 {
+        tracing::debug!(result, "Windows did not round the window corners");
     }
 }
 
@@ -353,7 +388,7 @@ impl App {
         self.error.map_or(Ok(()), Err)
     }
 
-    fn create_renderer(&self, window: &Arc<Window>) -> Result<Renderer> {
+    fn create_renderer(&self, window: &Arc<Window>, chrome: Chrome) -> Result<Renderer> {
         let size = window.inner_size();
         Ok(Renderer::new(
             window.clone(),
@@ -362,6 +397,7 @@ impl App {
             window.scale_factor(),
             self.config.font.family.clone(),
             self.font_size,
+            chrome.draws_corners(),
         )?)
     }
 
@@ -414,7 +450,11 @@ impl App {
                 .context("failed to create window")?,
         );
         window.set_ime_allowed(true);
-        let mut renderer = self.create_renderer(&window)?;
+        #[cfg(windows)]
+        if chrome == Chrome::Undecorated {
+            round_corners(&window);
+        }
+        let mut renderer = self.create_renderer(&window, chrome)?;
         if let Some(warning) = renderer.take_font_warning() {
             self.notify(Banner::config(Severity::Warning, vec![warning]));
         }
@@ -1250,8 +1290,8 @@ impl ApplicationHandler<UserEvent> for App {
                     FrameStatus::Skipped => state.window.request_redraw(),
                     FrameStatus::Lost => {
                         tracing::warn!("surface lost, recreating renderer");
-                        let window = state.window.clone();
-                        match self.create_renderer(&window) {
+                        let (window, chrome) = (state.window.clone(), state.chrome);
+                        match self.create_renderer(&window, chrome) {
                             Ok(renderer) => {
                                 if let Some(state) = self.state.as_mut() {
                                     state.renderer = renderer;
