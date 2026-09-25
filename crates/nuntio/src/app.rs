@@ -443,6 +443,11 @@ impl App {
                         .set_font_family(self.config.font.family.clone()),
                 );
             }
+            if old.scrollback != self.config.scrollback {
+                for pane in state.tabs.iter().flat_map(|t| &t.content.panes) {
+                    pane.term.set_scrollback(self.config.scrollback);
+                }
+            }
             if old.font.size != self.config.font.size {
                 self.font_size = self.config.font.size;
                 let scale = state.window.scale_factor();

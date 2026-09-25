@@ -194,10 +194,7 @@ impl TermHandle {
             }),
         };
 
-        let config = term::Config {
-            scrolling_history: options.scrollback,
-            ..Default::default()
-        };
+        let config = term_config(options.scrollback);
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
 
         let shell_program = options
@@ -345,6 +342,12 @@ impl TermHandle {
         self.shell_pid.and_then(process::working_directory)
     }
 
+    /// Change how many lines of scrollback are kept. Fewer drops the
+    /// oldest lines.
+    pub fn set_scrollback(&self, lines: usize) {
+        self.term.lock().set_options(term_config(lines));
+    }
+
     /// Change the colors, e.g. after a theme switch.
     pub fn set_palette(&self, palette: Palette) {
         *self
@@ -456,6 +459,14 @@ impl GridPoint {
             Side::Left
         };
         (point, side)
+    }
+}
+
+/// alacritty's terminal options; only the scrollback is configurable.
+fn term_config(scrollback: usize) -> term::Config {
+    term::Config {
+        scrolling_history: scrollback,
+        ..Default::default()
     }
 }
 

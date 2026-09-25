@@ -64,7 +64,7 @@ nuntio watches the config file and the `themes/` directory and applies changes a
 - If the config is invalid at **startup**, nuntio starts with the defaults and shows the error.
 - With several problems, the banner shows how many (`(1/3)`). Click it for the next one, or click the × to close it.
 
-Most settings apply to open panes right away. `shell` and `scrollback` apply to panes opened after the change.
+Most settings apply to open panes right away; `scrollback` too, and a smaller value drops the oldest lines. `shell` applies to panes opened after the change.
 
 ## Full example
 

@@ -299,3 +299,16 @@ fn every_visible_match_is_highlighted() {
     assert_eq!(marked(0), "##.##");
     assert_eq!(marked(1), "..##.");
 }
+
+#[test]
+fn scrollback_can_shrink() {
+    let (handle, rx) = spawn("i=1; while [ $i -le 50 ]; do echo line$i; i=$((i+1)); done");
+    wait_for_exit(&rx);
+    // line47 to line50 and an empty line are on screen, the rest is history.
+    handle.scroll(1000);
+    assert_eq!(line_text(&handle, 0), "line1");
+
+    handle.set_scrollback(10);
+    handle.scroll(1000);
+    assert_eq!(line_text(&handle, 0), "line37");
+}
