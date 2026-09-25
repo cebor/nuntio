@@ -136,6 +136,28 @@ fn log_file() -> Option<std::fs::File> {
     std::fs::File::create(path).ok()
 }
 
+/// Load DLLs only from our own directory and System32, not from `PATH`.
+///
+/// alacritty_terminal prefers a `conpty.dll` over the ConPTY built into
+/// Windows and looks it up by name, so by default it takes whatever copy
+/// some other program put on `PATH` (WezTerm ships one). With the 1.22 copy
+/// every shell waited 3 seconds for its first prompt. A `conpty.dll` next to
+/// nuntio.exe is still found.
+#[cfg(windows)]
+fn restrict_dll_search() {
+    use windows_sys::Win32::System::LibraryLoader::{
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, SetDefaultDllDirectories,
+    };
+
+    // SAFETY: only changes the search path for later LoadLibrary calls.
+    if unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) } == 0 {
+        tracing::warn!(
+            error = %std::io::Error::last_os_error(),
+            "failed to restrict the DLL search path"
+        );
+    }
+}
+
 fn main() -> Result<()> {
     let args = parse_args()?;
 
@@ -152,6 +174,8 @@ fn main() -> Result<()> {
             .init(),
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
     }
+    #[cfg(windows)]
+    restrict_dll_search();
 
     let mut warnings = Vec::new();
     let config_path = args.config.or_else(|| {
