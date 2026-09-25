@@ -152,6 +152,8 @@ impl Bindings {
             let cmd = ModifiersState::SUPER;
             bindings.push(char(']', cmd | shift, NextTab));
             bindings.push(char('[', cmd | shift, PreviousTab));
+            bindings.push(named(NamedKey::ArrowRight, cmd, NextTab));
+            bindings.push(named(NamedKey::ArrowLeft, cmd, PreviousTab));
             bindings.push(char('d', cmd, SplitVertical));
             bindings.push(char('d', cmd | shift, SplitHorizontal));
             bindings.push(named(NamedKey::Enter, cmd | shift, ZoomPane));
@@ -420,5 +422,17 @@ mod tests {
         assert_eq!(b.lookup(&ch("c"), ModifiersState::CONTROL), None);
         assert_eq!(b.lookup(&ch("t"), cmd), Some(Action::NewTab));
         assert_eq!(b.lookup(&ch("1"), cmd), Some(Action::SelectTab(0)));
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::ArrowRight), cmd),
+            Some(Action::NextTab)
+        );
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::ArrowLeft), cmd),
+            Some(Action::PreviousTab)
+        );
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::ArrowLeft), cmd | ModifiersState::ALT),
+            Some(Action::FocusPane(Direction::Left))
+        );
     }
 }
