@@ -84,18 +84,25 @@ impl ConfigWatcher {
             .name("config watcher".into())
             .spawn(move || {
                 while let Ok(first) = rx.recv() {
-                    let mut rescan = matches!(first, Signal::Rescan);
+                    let mut changed = matches!(first, Signal::Changed);
+                    let mut rescan = !changed;
                     while let Ok(signal) = rx.recv_timeout(DEBOUNCE) {
-                        rescan |= matches!(signal, Signal::Rescan);
+                        match signal {
+                            Signal::Changed => changed = true,
+                            Signal::Rescan => rescan = true,
+                        }
                     }
                     if rescan {
                         let mut watcher = thread_watcher.lock().unwrap();
-                        if let Err(err) = watch_existing(&mut watcher, &wanted, &mut watched) {
-                            tracing::warn!("config watcher: {err}");
+                        match watch_existing(&mut watcher, &wanted, &mut watched) {
+                            // A new directory may already contain the config.
+                            Ok(added) => changed |= added,
+                            Err(err) => tracing::warn!("config watcher: {err}"),
                         }
                     }
-                    // A new directory may already contain the config.
-                    on_change();
+                    if changed {
+                        on_change();
+                    }
                 }
             })?;
         Ok(Self { _watcher: watcher })
@@ -103,12 +110,14 @@ impl ConfigWatcher {
 }
 
 /// Watch each wanted directory, or its closest existing ancestor while it
-/// doesn't exist, skipping what is already watched.
+/// doesn't exist, skipping what is already watched. Returns whether a
+/// directory was added.
 fn watch_existing(
     watcher: &mut RecommendedWatcher,
     wanted: &[PathBuf],
     watched: &mut Vec<PathBuf>,
-) -> notify::Result<()> {
+) -> notify::Result<bool> {
+    let mut added = false;
     for dir in wanted {
         let Some(existing) = dir.ancestors().find(|d| d.is_dir()) else {
             continue;
@@ -119,8 +128,9 @@ fn watch_existing(
         watcher.watch(existing, RecursiveMode::NonRecursive)?;
         tracing::debug!(dir = %existing.display(), "watching for config changes");
         watched.push(existing.to_owned());
+        added = true;
     }
-    Ok(())
+    Ok(added)
 }
 
 /// A path as given, with its closest existing ancestor resolved (the rest may
@@ -165,6 +175,15 @@ mod tests {
         std::fs::write(dir.join("other.txt"), "x").unwrap();
         std::fs::read_to_string(&path).unwrap();
         assert!(quiet(&rx), "reported an irrelevant event");
+
+        // So are changes to the watched directory itself.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::Permissions::from_mode(0o700);
+            std::fs::set_permissions(&dir, mode).unwrap();
+            assert!(quiet(&rx), "reported a change to the directory");
+        }
 
         // Several writes in a burst are reported once.
         std::fs::write(&path, "scrollback = 5").unwrap();
