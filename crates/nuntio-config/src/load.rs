@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::{Config, Shell};
+use crate::{Config, Shell, StatusBar};
 
 /// `$XDG_CONFIG_HOME/nuntio`, else `~/.config/nuntio` — on every platform,
 /// so dotfiles work the same on Linux, macOS and Windows.
@@ -163,6 +163,7 @@ impl Config {
         if let Some(shell) = &self.shell {
             shell.validate()?;
         }
+        self.status_bar.validate()?;
         Ok(())
     }
 }
@@ -184,6 +185,26 @@ impl Shell {
         }
         if !self.args.is_empty() && self.program.is_none() {
             return Err("`shell.args` needs `shell.program`".into());
+        }
+        Ok(())
+    }
+}
+
+impl StatusBar {
+    fn validate(&self) -> Result<(), String> {
+        for (i, item) in self.items.iter().enumerate() {
+            if self.items[..i].contains(item) {
+                let name = format!("{item:?}").to_lowercase();
+                return Err(format!("`status_bar.items` lists \"{name}\" twice"));
+            }
+        }
+        let invalid = chrono::format::StrftimeItems::new(&self.datetime_format)
+            .any(|item| item == chrono::format::Item::Error);
+        if invalid {
+            return Err(format!(
+                "`status_bar.datetime_format` is not a valid strftime format: \"{}\"",
+                self.datetime_format
+            ));
         }
         Ok(())
     }
@@ -258,6 +279,17 @@ mod tests {
         }
         assert!(parse("shell = { wsl = \"Ubuntu\", wsl_user = \"root\" }").is_ok());
         assert!(parse("shell = { wsl = \"Ubuntu\", program = \"fish\" }").is_ok());
+    }
+
+    #[test]
+    fn invalid_status_bars_are_errors() {
+        let err = parse("[status_bar]\nitems = [\"cpu\", \"gpu\"]").unwrap_err();
+        assert!(err.starts_with("line 2:"), "{err}");
+        let err = parse("[status_bar]\nitems = [\"cpu\", \"datetime\", \"cpu\"]").unwrap_err();
+        assert!(err.contains("\"cpu\" twice"), "{err}");
+        let err = parse("[status_bar]\ndatetime_format = \"%H:%\"").unwrap_err();
+        assert!(err.contains("status_bar.datetime_format"), "{err}");
+        assert!(parse("[status_bar]\ndatetime_format = \"%a %d.%m. %H:%M\"").is_ok());
     }
 
     #[test]

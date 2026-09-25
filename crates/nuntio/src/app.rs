@@ -29,6 +29,8 @@ use crate::input;
 use crate::mouse::{Button, MouseAction};
 use crate::pane_tree::{Axis, Direction, PaneTree};
 use crate::search_bar::SearchBar;
+use crate::status_bar::Stats;
+use crate::sysmon::SystemMonitor;
 use crate::tab_bar::BarHit;
 use crate::window::{
     BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent, TabDrag, WindowState,
@@ -216,6 +218,9 @@ pub struct App {
     banner: Option<Banner>,
     proxy: EventLoopProxy<UserEvent>,
     bindings: Bindings,
+    /// Samples for the status bar while it is shown.
+    system_monitor: Option<SystemMonitor>,
+    stats: Stats,
     clipboard: Option<arboard::Clipboard>,
     /// Current font size in points; changed by zoom shortcuts.
     font_size: f32,
@@ -260,6 +265,8 @@ impl App {
             banner,
             proxy,
             bindings,
+            system_monitor: None,
+            stats: Stats::default(),
             clipboard,
             next_pane_id: 0,
             state: None,
@@ -267,6 +274,7 @@ impl App {
             error: None,
         };
         let theme_warning = app.update_palette();
+        app.sync_system_monitor();
         app.notify(Banner::config(
             Severity::Warning,
             theme_warnings
@@ -337,6 +345,23 @@ impl App {
         warning
     }
 
+    /// Start, restart or stop sampling to match the status bar config.
+    fn sync_system_monitor(&mut self) {
+        let bar = &self.config.status_bar;
+        let wanted = bar.visible().then_some(bar.items.as_slice());
+        let running = self.system_monitor.as_ref().map(SystemMonitor::items);
+        if wanted == running {
+            return;
+        }
+        // Dropping the old monitor stops its thread.
+        self.system_monitor = None;
+        self.stats.clear();
+        if let Some(items) = wanted {
+            tracing::debug!("starting system monitor");
+            self.system_monitor = Some(SystemMonitor::start(items, self.proxy.clone()));
+        }
+    }
+
     /// Re-read the config file and apply what changed. An invalid file
     /// leaves the current settings untouched.
     fn reload_config(&mut self) {
@@ -362,6 +387,7 @@ impl App {
         self.themes = themes;
         self.bindings = bindings;
         warnings.extend(self.update_palette());
+        self.sync_system_monitor();
 
         if let Some(state) = self.state.as_mut() {
             if old.font.family != self.config.font.family {
@@ -895,7 +921,10 @@ impl App {
             return;
         }
 
-        if pressed && state.search_bar_contains(&self.config, pos) {
+        if pressed
+            && (state.search_bar_contains(&self.config, pos)
+                || state.status_bar_contains(&self.config, pos))
+        {
             return;
         }
         if pressed
@@ -1209,6 +1238,16 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Term(pane, event) => self.term_event(pane, event),
             UserEvent::ConfigChanged => self.reload_config(),
+            UserEvent::SystemStats(sample) => {
+                // Late samples from a monitor that was just stopped.
+                if self.system_monitor.is_none() {
+                    return;
+                }
+                self.stats.push(sample);
+                if let Some(state) = self.state.as_ref() {
+                    state.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -1285,7 +1324,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                match state.redraw(&self.config, self.banner.as_ref()) {
+                match state.redraw(&self.config, &self.stats, self.banner.as_ref()) {
                     FrameStatus::Presented | FrameStatus::Paused => {}
                     FrameStatus::Skipped => state.window.request_redraw(),
                     FrameStatus::Lost => {

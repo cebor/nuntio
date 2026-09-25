@@ -18,6 +18,9 @@ arboard.workspace = true
 unicode-width.workspace = true
 open.workspace = true
 dirs.workspace = true
+chrono.workspace = true
+sysinfo.workspace = true
+starship-battery.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

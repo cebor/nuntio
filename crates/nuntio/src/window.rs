@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use nuntio_config::{Config, TabTitle};
+use nuntio_config::{Config, StatusBarPosition, TabTitle};
 use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect};
 use nuntio_term::{CursorStyle, GridPoint, Link, Snapshot, TermHandle, TermMode, TermSize};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -17,6 +17,7 @@ use crate::ime;
 use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
 use crate::pane_tree::{Divider, Layout, PaneTree, Rect};
 use crate::search_bar::SearchBar;
+use crate::status_bar::{Stats, StatusBar};
 use crate::tab_bar::{BarHit, TabBar, TabLabel, mix};
 use crate::tab_title::{self, TitleInfo};
 use crate::tabs::Tabs;
@@ -265,15 +266,53 @@ impl WindowState {
         ))
     }
 
-    /// Area below the tab bar that the panes share.
+    /// Top edge and height of the status bar, if shown.
+    fn status_bar_bounds(&self, config: &Config) -> Option<(f32, f32)> {
+        if !config.status_bar.visible() {
+            return None;
+        }
+        let height = StatusBar::height(self.renderer.cell_metrics(), self.scale());
+        let top = match config.status_bar.position {
+            StatusBarPosition::Top => self.tab_bar(config).map_or(0.0, |bar| bar.height),
+            StatusBarPosition::Bottom => self.window.inner_size().height as f32 - height,
+        };
+        Some((top, height))
+    }
+
+    /// The status bar, if shown.
+    fn status_bar(&self, config: &Config, stats: &Stats, datetime: &str) -> Option<StatusBar> {
+        let (top, _) = self.status_bar_bounds(config)?;
+        Some(StatusBar::new(
+            self.window.inner_size().width as f32,
+            top,
+            &config.status_bar.items,
+            stats,
+            datetime,
+            self.renderer.cell_metrics(),
+            self.scale(),
+        ))
+    }
+
+    /// The pointer is over the status bar.
+    pub fn status_bar_contains(&self, config: &Config, pos: PhysicalPosition<f64>) -> bool {
+        self.status_bar_bounds(config)
+            .is_some_and(|(top, height)| pos.y as f32 >= top && (pos.y as f32) < top + height)
+    }
+
+    /// Area between the tab bar and the status bar that the panes share.
     fn terminal_area(&self, config: &Config) -> Rect {
         let size = self.window.inner_size();
         let bar = self.tab_bar(config).map_or(0.0, |bar| bar.height);
+        let status = self.status_bar_bounds(config).map_or(0.0, |(_, h)| h);
+        let y = match config.status_bar.position {
+            StatusBarPosition::Top => bar + status,
+            StatusBarPosition::Bottom => bar,
+        };
         Rect {
             x: 0.0,
-            y: bar,
+            y,
             width: size.width as f32,
-            height: (size.height as f32 - bar).max(0.0),
+            height: (size.height as f32 - bar - status).max(0.0),
         }
     }
 
@@ -327,7 +366,12 @@ impl WindowState {
         tab.content.focused_pane().title(config.tabs.title)
     }
 
-    pub fn redraw(&mut self, config: &Config, banner: Option<&Banner>) -> FrameStatus {
+    pub fn redraw(
+        &mut self,
+        config: &Config,
+        stats: &Stats,
+        banner: Option<&Banner>,
+    ) -> FrameStatus {
         let layout = self.layout(config);
         let focused_id = self.content().focused;
         let split = layout.panes.len() > 1;
@@ -401,6 +445,18 @@ impl WindowState {
                 color: divider_color,
                 radius: 0.0,
             });
+        }
+
+        if config.status_bar.visible() {
+            // Validated when the config was loaded, so formatting can't fail.
+            let datetime = chrono::Local::now()
+                .format(&config.status_bar.datetime_format)
+                .to_string();
+            if let Some(bar) = self.status_bar(config, stats, &datetime) {
+                let (bar_rects, bar_texts) = bar.draw(stats, &datetime, background, foreground);
+                rects.extend(bar_rects);
+                texts.extend(bar_texts);
+            }
         }
 
         if let Some(bar) = &self.search

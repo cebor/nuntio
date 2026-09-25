@@ -23,6 +23,7 @@ pub struct Config {
     pub window: Window,
     pub tabs: Tabs,
     pub panes: Panes,
+    pub status_bar: StatusBar,
     pub theme: ThemeSelection,
     pub mouse: Mouse,
     pub macos: MacOs,
@@ -38,6 +39,7 @@ impl Default for Config {
             window: Window::default(),
             tabs: Tabs::default(),
             panes: Panes::default(),
+            status_bar: StatusBar::default(),
             theme: ThemeSelection::default(),
             mouse: Mouse::default(),
             macos: MacOs::default(),
@@ -223,6 +225,61 @@ impl Default for Panes {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusBarPosition {
+    #[default]
+    Bottom,
+    /// Below the tab bar.
+    Top,
+}
+
+/// Something the status bar shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusItem {
+    Cpu,
+    Memory,
+    Network,
+    Battery,
+    Datetime,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct StatusBar {
+    pub enabled: bool,
+    pub position: StatusBarPosition,
+    /// Shown in this order; the last one sits at the right edge.
+    pub items: Vec<StatusItem>,
+    /// strftime format of the date and time.
+    pub datetime_format: String,
+}
+
+impl StatusBar {
+    /// Enabled and with something to show.
+    pub fn visible(&self) -> bool {
+        self.enabled && !self.items.is_empty()
+    }
+}
+
+impl Default for StatusBar {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            position: StatusBarPosition::default(),
+            items: vec![
+                StatusItem::Cpu,
+                StatusItem::Memory,
+                StatusItem::Network,
+                StatusItem::Battery,
+                StatusItem::Datetime,
+            ],
+            datetime_format: "%a %d %b %H:%M".into(),
+        }
+    }
+}
+
 /// Either a single theme name or a light/dark pair following the OS theme.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
@@ -299,6 +356,12 @@ title = "process"
 [panes]
 dim_inactive = 0.15
 
+[status_bar]
+enabled = true
+position = "top"
+items = ["datetime", "cpu"]
+datetime_format = "%H:%M:%S"
+
 [theme]
 light = "Solarized Light"
 dark = "Tokyo Night"
@@ -323,6 +386,13 @@ action = "split_horizontal"
         assert_eq!(cfg.window.decorations, Decorations::System);
         assert_eq!(cfg.window.effective_macos_titlebar(), MacosTitlebar::None);
         assert_eq!(cfg.tabs.title, TabTitle::Process);
+        assert!(cfg.status_bar.visible());
+        assert_eq!(cfg.status_bar.position, StatusBarPosition::Top);
+        assert_eq!(
+            cfg.status_bar.items,
+            [StatusItem::Datetime, StatusItem::Cpu]
+        );
+        assert_eq!(cfg.status_bar.datetime_format, "%H:%M:%S");
         assert_eq!(
             cfg.theme,
             ThemeSelection::Auto {
@@ -332,6 +402,20 @@ action = "split_horizontal"
         );
         assert_eq!(cfg.macos.option_as_meta, OptionAsMeta::Left);
         assert_eq!(cfg.keybindings.len(), 1);
+    }
+
+    #[test]
+    fn status_bar_is_off_by_default() {
+        let bar = Config::default().status_bar;
+        assert!(!bar.visible());
+        assert_eq!(bar.position, StatusBarPosition::Bottom);
+        assert_eq!(bar.items.len(), 5);
+        assert_eq!(bar.items.last(), Some(&StatusItem::Datetime));
+
+        let bar = Config::from_toml("[status_bar]\nenabled = true\nitems = []")
+            .unwrap()
+            .status_bar;
+        assert!(!bar.visible(), "nothing to show");
     }
 
     #[test]

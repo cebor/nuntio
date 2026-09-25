@@ -69,6 +69,12 @@ title = "auto"
 [panes]
 dim_inactive = 0.15
 
+[status_bar]
+enabled = false
+position = "bottom"
+items = ["cpu", "memory", "network", "battery", "datetime"]
+datetime_format = "%a %d %b %H:%M"
+
 [mouse]
 copy_on_select = false
 
@@ -122,6 +128,29 @@ option_as_meta = "none"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `dim_inactive` | float | `0.15` | How much to dim panes that don't have focus, `0.0` (off) to `1.0`. |
+
+### `[status_bar]`
+
+A bar with live system graphs and the date and time, as in iTerm2. It is off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Show the status bar. |
+| `position` | string | `"bottom"` | `"bottom"`: at the bottom edge of the window. `"top"`: right below the tab bar. |
+| `items` | list of strings | `["cpu", "memory", "network", "battery", "datetime"]` | What the bar shows, in this order. The last item sits at the right edge, the others fill from the left. Leave an item out to hide it; each may appear only once. |
+| `datetime_format` | string | `"%a %d %b %H:%M"` | Format of the date and time in [strftime syntax](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). The default shows `Fri 25 Sep 10:50`; `"%d.%m.%Y %H:%M"` shows `25.09.2026 10:50`. |
+
+Each item starts with an icon:
+
+- `cpu`: usage of all cores over the last minute, and the current value.
+- `memory`: used memory over the last minute (relative to the total), and the current amount in GiB.
+- `network`: throughput of all interfaces except loopback. Download grows up from the middle of the graph, upload down.
+- `battery`: charge level, with ⚡ while charging. Hidden on machines without a battery.
+- `datetime`: the local date and time.
+
+If the window is too narrow, items before the last one are dropped, starting with the one closest to the right edge.
+
+While the bar is shown, nuntio samples the system and redraws once per second. With the bar off, nothing is sampled.
 
 ### `[mouse]`
 
