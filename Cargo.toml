@@ -13,6 +13,7 @@ license = "MIT OR Apache-2.0"
 nuntio-config = { path = "crates/nuntio-config" }
 nuntio-render = { path = "crates/nuntio-render" }
 nuntio-term = { path = "crates/nuntio-term" }
+nuntio-config-tui = { path = "crates/nuntio-config-tui" }
 
 anyhow = "1"
 thiserror = "2"
@@ -33,6 +34,8 @@ unicode-width = "0.2"
 open = "5"
 alacritty_terminal = "0.26"
 cosmic-text = "0.19"
+fontdb = "0.23"
+ratatui = "0.30"
 etagere = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }

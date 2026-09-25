@@ -43,7 +43,38 @@ impl ConfigDoc {
     /// in the docs). A comment after an old value is kept.
     pub fn set(&mut self, path: &str, value: impl Into<Value>) {
         let keys: Vec<&str> = path.split('.').collect();
+        let was_empty = self.doc.as_table().is_empty();
         set_in(self.doc.as_table_mut(), &keys, value.into(), true);
+        if was_empty {
+            self.keep_comments_on_top();
+        }
+    }
+
+    /// In a file with nothing but comments, the comments are the document's
+    /// trailing text and would end up below the first setting added.
+    fn keep_comments_on_top(&mut self) {
+        let trailing = self.doc.trailing().as_str().unwrap_or_default().to_owned();
+        if trailing.trim().is_empty() {
+            return;
+        }
+        let root = self.doc.as_table_mut();
+        let Some(key) = root.iter().next().map(|(key, _)| key.to_owned()) else {
+            return;
+        };
+        let prefix = format!("{}\n\n", trailing.trim_end());
+        match root.get_mut(&key) {
+            Some(Item::Table(table)) => table.decor_mut().set_prefix(prefix),
+            Some(Item::ArrayOfTables(tables)) => match tables.get_mut(0) {
+                Some(table) => table.decor_mut().set_prefix(prefix),
+                None => return,
+            },
+            Some(Item::Value(_)) => match root.key_mut(&key) {
+                Some(mut key) => key.leaf_decor_mut().set_prefix(prefix),
+                None => return,
+            },
+            _ => return,
+        }
+        self.doc.set_trailing("");
     }
 
     /// Remove the value at `path`, so that the default applies. Tables that
@@ -106,9 +137,13 @@ impl ConfigDoc {
             }
             Some(Item::ArrayOfTables(tables)) => tables.push(binding_table(binding)),
             _ => {
+                let was_empty = self.doc.as_table().is_empty();
                 let mut tables = ArrayOfTables::new();
                 tables.push(binding_table(binding));
                 self.doc.insert("keybindings", Item::ArrayOfTables(tables));
+                if was_empty {
+                    self.keep_comments_on_top();
+                }
             }
         }
     }
@@ -175,11 +210,21 @@ fn set_in(table: &mut dyn TableLike, keys: &[&str], value: Value, top: bool) {
         };
         table.insert(key, new);
     }
-    let child = table
-        .get_mut(key)
-        .and_then(Item::as_table_like_mut)
+    let item = table.get_mut(key).expect("just inserted");
+    let child = item
+        .as_table_like_mut()
         .expect("just made sure it's a table");
     set_in(child, rest, value, false);
+    tidy(item);
+}
+
+/// Normalize the spacing of an inline table after keys were added or
+/// removed, which would otherwise give `{ x = 8 , y = 6 }`. Inline tables
+/// can't hold comments, so nothing is lost.
+fn tidy(item: &mut Item) {
+    if let Some(table) = item.as_inline_table_mut() {
+        table.fmt();
+    }
 }
 
 /// Returns whether something was removed.
@@ -200,6 +245,8 @@ fn remove_in(table: &mut dyn TableLike, keys: &[&str]) -> bool {
     let now_empty = child.is_empty();
     if removed && now_empty && !has_comment(item) {
         table.remove(key);
+    } else if removed {
+        tidy(item);
     }
     removed
 }
@@ -299,7 +346,7 @@ mod tests {
             out.find("theme").unwrap() < out.find("[font]").unwrap(),
             "{out}"
         );
-        assert!(out.contains("shell = {"), "{out}");
+        assert!(out.contains("shell = { program = \"fish\" }"), "{out}");
     }
 
     #[test]
@@ -348,6 +395,11 @@ mod tests {
             d.unset("shell.program")
         });
         assert_eq!(out, "");
+
+        let out = edited("[window]\npadding = { x = 8, y = 6 }\n", |d| {
+            d.unset("window.padding.y")
+        });
+        assert_eq!(out, "[window]\npadding = { x = 8 }\n");
 
         let out = edited("[font]\nsize = 12.0\n", |d| d.unset("font.family"));
         assert_eq!(out, "[font]\nsize = 12.0\n");
@@ -407,6 +459,29 @@ mod tests {
         let loaded = crate::parse(&d.to_string()).unwrap();
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.config.keybindings, [kb("F1", "copy")]);
+    }
+
+    #[test]
+    fn comments_in_an_otherwise_empty_file_stay_on_top() {
+        for (edit, expected) in [
+            (
+                (|d: &mut ConfigDoc| d.set("scrollback", 1i64)) as fn(&mut ConfigDoc),
+                "# mine\n\nscrollback = 1\n",
+            ),
+            (
+                |d: &mut ConfigDoc| d.set("font.size", 12.0),
+                "# mine\n\n[font]\nsize = 12.0\n",
+            ),
+            (
+                |d: &mut ConfigDoc| d.push_keybinding(&kb("F1", "copy")),
+                "# mine\n\n[[keybindings]]\nkey = \"F1\"\naction = \"copy\"\n",
+            ),
+        ] {
+            assert_eq!(edited("# mine\n\n", edit), expected);
+        }
+        // Comments after existing settings stay where they are.
+        let out = edited("a = 1\n# end\n", |d| d.set("font.size", 12.0));
+        assert!(out.ends_with("# end\n"), "{out}");
     }
 
     #[test]

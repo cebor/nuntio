@@ -4,11 +4,14 @@ description = "A simple, fast terminal emulator"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# `nuntio-config` is the second binary.
+default-run = "nuntio"
 
 [dependencies]
 nuntio-config.workspace = true
 nuntio-render.workspace = true
 nuntio-term.workspace = true
+nuntio-config-tui.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
