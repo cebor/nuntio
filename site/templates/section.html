@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap prose">
+  <h1>{{ section.title }}</h1>
+  <ul>{% for p in section.pages %}<li><a href="{{ p.permalink }}">{{ p.title }}</a></li>{% endfor %}</ul>
+</div>
+{% endblock %}

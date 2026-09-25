@@ -1,0 +1,14 @@
+base_url = "https://cebor.github.io/nuntio"
+title = "nuntio"
+description = "A fast, GPU-rendered terminal emulator for Linux, macOS and Windows, modeled on iTerm2."
+compile_sass = false
+build_search_index = false
+
+[markdown]
+smart_punctuation = false
+
+[link_checker]
+internal_level = "error"
+
+[extra]
+repo = "https://github.com/cebor/nuntio"

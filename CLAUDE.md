@@ -13,6 +13,7 @@ cargo test --workspace
 cargo xtask package      # release build + packages for the host OS into dist/
 cargo xtask icons        # re-render assets/icons/ from assets/icon.svg
 cargo xtask changelog <from>..HEAD
+cargo xtask site [serve] # build the website in site/ with Zola (needs `zola` on PATH)
 ```
 
 Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates. CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on all three OSes; `release.yml` builds packages when a `v*` tag is pushed.
@@ -26,6 +27,7 @@ Always pass `--workspace` to clippy and tests: `default-members` contains only `
 | `crates/nuntio-render` | wgpu renderer: one instanced-quad pipeline for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases) and UI; box-drawing characters are drawn procedurally |
 | `crates/nuntio-config` | Config schema, loading/validation, themes (built-in TOML + `.itermcolors`), file watcher |
 | `xtask` | Icons, packaging, changelog |
+| `site` | Zola website on GitHub Pages (`pages.yml`, also run by `release.yml`). The download section reads the latest release from the GitHub API at build time; `docs/config.md` is copied in by `cargo xtask site`. Zola 0.23 uses Tera 2: components instead of macros |
 
 Data flow: PTY threads send `UserEvent::Term(PaneId, TermEvent)` via the winit proxy. The main thread takes a `Snapshot` per visible pane (the term lock is only held for the copy) and hands a `Frame` (panes + `UiRect`s + `UiText`s) to the renderer. It only redraws on damage: idle CPU must stay at ~0 (`ControlFlow::Wait`; cursor blinking uses `WaitUntil`).
 

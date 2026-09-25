@@ -7,6 +7,8 @@
 //!   on macOS, a .zip on Windows.
 //! - `changelog [<range>]`: release notes in Markdown from the `Changelog:`
 //!   commit trailers (see CONTRIBUTING.md), e.g. `v0.1.0..HEAD`.
+//! - `site [serve]`: generate the website's derived files and build it with
+//!   Zola into `site/public/`, or serve it locally with live reload.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,12 +27,13 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("icons") => icons(),
         Some("package") => package(),
+        Some("site") => site(args.get(1).is_some_and(|a| a == "serve")),
         Some("changelog") => {
             print!("{}", changelog(args.get(1).map_or("HEAD", String::as_str))?);
             Ok(())
         }
         _ => {
-            eprintln!("usage: cargo xtask <icons|package|changelog [<range>]>");
+            eprintln!("usage: cargo xtask <icons|package|changelog [<range>]|site [serve]>");
             std::process::exit(2);
         }
     }
@@ -141,6 +144,50 @@ fn format_changelog(log: &str) -> String {
         );
     }
     out
+}
+
+// ----------------------------------------------------------------- site
+
+fn site(serve: bool) -> Result<()> {
+    let root = root();
+    let site = root.join("site");
+    let config = fs::read_to_string(root.join("docs/config.md"))?;
+    fs::write(
+        site.join("content/docs/config.md"),
+        site_config_page(&config)?,
+    )?;
+    copy(&root.join("assets/icon.svg"), &site.join("static/icon.svg"))?;
+    copy(
+        &root.join("assets/icons/png/32.png"),
+        &site.join("static/favicon.png"),
+    )?;
+
+    ensure!(
+        available("zola"),
+        "zola not found on PATH, see https://www.getzola.org/documentation/getting-started/installation/"
+    );
+    run(Command::new("zola")
+        .current_dir(&site)
+        .arg(if serve { "serve" } else { "build" }))
+}
+
+/// Turn `docs/config.md` into a Zola page: front matter instead of the H1,
+/// and links into the repo pointed at the site's own pages.
+fn site_config_page(markdown: &str) -> Result<String> {
+    let body = markdown
+        .strip_prefix("# Configuration reference\n")
+        .context("docs/config.md must start with `# Configuration reference`")?;
+    let body = body.replace(
+        "](../README.md#keyboard-shortcuts)",
+        "](@/docs/getting-started.md#keyboard-shortcuts)",
+    );
+    ensure!(
+        !body.contains("](../"),
+        "docs/config.md links to a repo file the site doesn't have"
+    );
+    Ok(format!(
+        "+++\ntitle = \"Configuration reference\"\nweight = 2\n+++\n{body}"
+    ))
 }
 
 // ---------------------------------------------------------------- icons
@@ -414,5 +461,23 @@ mod tests {
             format_changelog(log),
             "### Added\n\n- Add tabs\n- Add splits\n\n### Fixed\n\n- Fix crash\n\n"
         );
+    }
+
+    #[test]
+    fn config_page_gets_front_matter_and_site_links() {
+        let page = site_config_page(
+            "# Configuration reference\n\nSee the [defaults](../README.md#keyboard-shortcuts).\n",
+        )
+        .unwrap();
+        assert_eq!(
+            page,
+            "+++\ntitle = \"Configuration reference\"\nweight = 2\n+++\n\n\
+             See the [defaults](@/docs/getting-started.md#keyboard-shortcuts).\n"
+        );
+    }
+
+    #[test]
+    fn config_page_rejects_unknown_repo_links() {
+        assert!(site_config_page("# Configuration reference\n[x](../CONTRIBUTING.md)\n").is_err());
     }
 }

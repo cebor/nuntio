@@ -1,0 +1,9 @@
+{# One download link for the release asset whose name ends with `ext`. #}
+{% component download(assets, ext: string, label: string, primary: bool = false) %}
+{% for asset in assets %}{% if asset.name is ending_with(pat=ext) %}
+<a class="file{% if primary %} primary{% endif %}" href="{{ asset.browser_download_url }}">
+  <span class="file-label">{{ label }}</span>
+  <span class="file-meta">{{ ext }} · {{ asset.size | filesizeformat }}</span>
+</a>
+{% endif %}{% endfor %}
+{% endcomponent download %}

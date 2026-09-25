@@ -1,0 +1,51 @@
+name: Pages
+
+# Build the website in `site/` with Zola and deploy it to GitHub Pages.
+# The download section reads the latest release from the GitHub API at build
+# time, so `release.yml` calls this workflow after publishing a release.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "assets/icon.svg"
+      - "xtask/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: zola@0.23.6
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask site
+        env:
+          CARGO_TERM_COLOR: always
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

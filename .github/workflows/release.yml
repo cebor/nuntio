@@ -82,3 +82,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "nuntio $GITHUB_REF_NAME" --notes-file notes.md
+
+  # A release created with GITHUB_TOKEN doesn't trigger other workflows, so
+  # rebuild the website here to show the new version on its download page.
+  pages:
+    needs: publish
+    permissions:
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

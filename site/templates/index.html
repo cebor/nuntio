@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block content %}
+{# CI passes GITHUB_TOKEN so shared runners don't hit the anonymous rate limit, and
+   a failed request then fails the build. Locally it falls back to a link. #}
+{% set token = get_env(name="GITHUB_TOKEN", default="") %}
+{% set headers = ["Authorization=Bearer " ~ token] if token else [] %}
+{% set release = load_data(url="https://api.github.com/repos/cebor/nuntio/releases/latest", format="json", headers=headers, required=token != "") %}
+{% set releases_url = config.extra.repo ~ "/releases/latest" %}
+<main>
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <h1>A fast terminal with tabs, split panes and a config that reloads while you type.</h1>
+        <p class="lead">nuntio is a GPU-rendered terminal emulator for Linux, macOS and Windows, modeled on iTerm2. One window, one TOML file, close to 0% CPU when idle.</p>
+        <div class="actions">
+          <a class="button" id="hero-download" href="#download">Download{% if release %} {{ release.tag_name }}{% endif %}</a>
+          <a class="button ghost" href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a>
+        </div>
+        <p class="hint" id="hero-hint">Free and open source · MIT or Apache-2.0</p>
+      </div>
+      <div class="term" aria-hidden="true">
+        <div class="term-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="term-tab active">~/code/nuntio</span><span class="term-tab">htop</span>
+        </div>
+        <div class="term-panes">
+          <pre class="pane"><span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ cargo test
+   <span class="c-g">Compiling</span> nuntio v0.1.1
+    <span class="c-g">Finished</span> test profile
+     <span class="c-g">Running</span> unittests
+test result: <span class="c-g">ok</span>.
+
+<span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ <span class="cursor"> </span></pre>
+          <pre class="pane dim"><span class="c-m">[theme]</span>
+light = <span class="c-y">"Solarized Light"</span>
+dark  = <span class="c-y">"Tokyo Night"</span>
+
+<span class="c-m">[panes]</span>
+dim_inactive = <span class="c-o">0.2</span>
+
+<span class="c-c"># saved — applied</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="section">
+    <div class="wrap">
+      <h2>Download</h2>
+      {% if release %}
+      <p class="lead">nuntio {{ release.tag_name }}, released {{ release.published_at | date(format="%B %-d, %Y") }}. <a href="{{ release.html_url }}">Release notes</a></p>
+      <div class="cards">
+        <div class="card" data-os="mac">
+          <h3>macOS</h3>
+          <p class="hint">Universal: Intel and Apple Silicon</p>
+          {{ <download assets={release.assets} ext=".dmg" label="Disk image" primary={true} /> }}
+        </div>
+        <div class="card" data-os="linux">
+          <h3>Linux</h3>
+          <p class="hint">x86_64</p>
+          {{ <download assets={release.assets} ext=".AppImage" label="AppImage" primary={true} /> }}
+          {{ <download assets={release.assets} ext=".deb" label="Debian / Ubuntu" /> }}
+          {{ <download assets={release.assets} ext=".tar.gz" label="Tarball" /> }}
+        </div>
+        <div class="card" data-os="windows">
+          <h3>Windows</h3>
+          <p class="hint">x86_64</p>
+          {{ <download assets={release.assets} ext=".zip" label="Zip archive" primary={true} /> }}
+        </div>
+      </div>
+      {% else %}
+      <p class="lead">Packages for macOS, Linux and Windows are on GitHub.</p>
+      <p><a class="button" href="{{ releases_url }}">Latest release on GitHub</a></p>
+      {% endif %}
+      <p class="note">The packages are not signed yet. On macOS, open nuntio the first time with right-click → <strong>Open</strong>. On Windows, SmartScreen may ask you to confirm with <strong>More info</strong> → <strong>Run anyway</strong>. <a href="{{ get_url(path='@/docs/getting-started.md') }}#install">Installation details</a></p>
+    </div>
+  </section>
+
+  <section class="section alt">
+    <div class="wrap">
+      <h2>Features</h2>
+      <div class="features">
+        <div><h3>GPU rendering</h3><p>One wgpu pipeline draws backgrounds, glyphs and UI. Box-drawing characters are drawn procedurally, so TUI borders line up without gaps.</p></div>
+        <div><h3>Tabs and split panes</h3><p>Drag tabs to reorder, split side by side or top and bottom, resize with keyboard or mouse, zoom a pane to fill the tab.</p></div>
+        <div><h3>Hot reload</h3><p>Save the config and it applies right away. Mistakes show up as a banner, and the previous settings stay active.</p></div>
+        <div><h3>Themes</h3><p>Five built in, your own as TOML or iTerm2 <code>.itermcolors</code>, and a light/dark pair that follows the OS appearance.</p></div>
+        <div><h3>Text done right</h3><p>Shaped with cosmic-text: font fallback, color emoji, CJK and wide characters.</p></div>
+        <div><h3>Find bar</h3><p>Incremental search through the scrollback, with a regex mode.</p></div>
+        <div><h3>WSL on Windows</h3><p><code>shell = { wsl = "Ubuntu" }</code> opens every tab straight in a WSL distribution.</p></div>
+        <div><h3>Idle means idle</h3><p>nuntio only redraws when something changed, so an idle window uses close to 0% CPU.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap narrow">
+      <h2>Configure it in one file</h2>
+      <p>Every setting is optional. Put this in <code>~/.config/nuntio/config.toml</code> on any platform:</p>
+      <pre class="code"><code><span class="c-m">[font]</span>
+family = <span class="c-y">"JetBrains Mono"</span>
+size = <span class="c-o">14.0</span>
+
+<span class="c-c"># Follow the OS appearance</span>
+<span class="c-m">[theme]</span>
+light = <span class="c-y">"Solarized Light"</span>
+dark = <span class="c-y">"Tokyo Night"</span></code></pre>
+      <p><a href="{{ get_url(path='@/docs/config.md') }}">Configuration reference →</a></p>
+    </div>
+  </section>
+</main>
+<script>
+  // Point the hero button at the visitor's platform. Without JS it jumps to #download.
+  (function () {
+    var ua = navigator.userAgent;
+    var os = /Mac/.test(ua) ? "mac" : /Win/.test(ua) ? "windows" : /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : null;
+    if (!os) return;
+    var card = document.querySelector('.card[data-os="' + os + '"]');
+    if (!card) return;
+    card.classList.add("yours");
+    var link = card.querySelector("a.primary");
+    if (!link) return;
+    document.getElementById("hero-download").href = link.href;
+    var names = { mac: "macOS", linux: "Linux", windows: "Windows" };
+    document.getElementById("hero-hint").innerHTML =
+      "For " + names[os] + " · <a href=\"#download\">other platforms</a>";
+  })();
+</script>
+{% endblock %}

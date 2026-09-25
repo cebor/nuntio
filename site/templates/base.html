@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }}{% endblock %}</title>
+  <meta name="description" content="{% block description %}{{ config.description }}{% endblock %}">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="{{ get_url(path='favicon.png') }}" type="image/png">
+  <link rel="icon" href="{{ get_url(path='icon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ get_url(path='style.css', cachebust=true) }}">
+  <meta property="og:title" content="{% block og_title %}{{ config.title }}{% endblock %}">
+  <meta property="og:description" content="{{ config.description }}">
+  <meta property="og:image" content="{{ get_url(path='favicon.png') }}">
+</head>
+<body>
+  <header class="topbar">
+    <nav class="wrap nav">
+      <a class="brand" href="{{ get_url(path='@/_index.md') }}">
+        <img src="{{ get_url(path='icon.svg') }}" alt="" width="28" height="28">
+        <span>nuntio</span>
+      </a>
+      <div class="nav-links">
+        <a href="{{ get_url(path='@/_index.md') }}#download">Download</a>
+        <a href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a>
+        <a href="{{ get_url(path='@/docs/config.md') }}">Configuration</a>
+        <a href="{{ config.extra.repo }}" aria-label="GitHub">GitHub</a>
+      </div>
+    </nav>
+  </header>
+  {% block content %}{% endblock %}
+  <footer class="footer">
+    <div class="wrap">
+      nuntio is free software, licensed under MIT or Apache-2.0.
+      <a href="{{ config.extra.repo }}">Source</a> ·
+      <a href="{{ config.extra.repo }}/issues">Issues</a> ·
+      <a href="{{ config.extra.repo }}/releases">Releases</a>
+    </div>
+  </footer>
+</body>
+</html>
