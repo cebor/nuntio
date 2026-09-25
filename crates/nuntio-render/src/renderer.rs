@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::rc::Rc;
 
 use bytemuck::{Pod, Zeroable};
@@ -97,6 +98,11 @@ pub struct Renderer {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instances: Vec<Instance>,
+    /// The instances of each pane and the area they are clipped to, so
+    /// glyphs wider than their cell don't reach into the next pane.
+    pane_batches: Vec<(Range<u32>, [f32; 4])>,
+    /// Instances from here on are UI (bars, overlays), drawn unclipped.
+    ui_start: usize,
     /// Instances from here on are corner cutouts, drawn with their own
     /// pipeline.
     cutout_start: usize,
@@ -276,6 +282,8 @@ impl Renderer {
             instance_buffer,
             instance_capacity,
             instances: Vec::new(),
+            pane_batches: Vec::new(),
+            ui_start: 0,
             cutout_start: 0,
             font_warning,
             atlas_overflow: false,
@@ -393,11 +401,20 @@ impl Renderer {
                 ..Default::default()
             });
             if !self.instances.is_empty() {
+                let ui = self.ui_start as u32;
                 let (cutout, total) = (self.cutout_start as u32, self.instances.len() as u32);
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-                pass.draw(0..4, 0..cutout);
+                for (range, area) in &self.pane_batches {
+                    // A pane outside the window has nothing to show.
+                    if let Some([x, y, w, h]) = scissor(*area, (width, height)) {
+                        pass.set_scissor_rect(x, y, w, h);
+                        pass.draw(0..4, range.clone());
+                    }
+                }
+                pass.set_scissor_rect(0, 0, width, height);
+                pass.draw(0..4, ui..cutout);
                 if total > cutout {
                     pass.set_pipeline(&self.cutout_pipeline);
                     pass.draw(0..4, cutout..total);
@@ -411,7 +428,9 @@ impl Renderer {
 
     fn build_instances(&mut self, frame: &Frame) -> Result<(), AtlasFull> {
         self.instances.clear();
+        self.pane_batches.clear();
         for pane in frame.panes {
+            let start = self.instances.len() as u32;
             self.push_pane(pane.snapshot, pane.x, pane.y)?;
             if pane.dim > 0.0 {
                 let [x, y, width, height] = pane.area;
@@ -419,7 +438,10 @@ impl Renderer {
                 veil.color[3] = pane.dim.min(1.0);
                 self.instances.push(veil);
             }
+            let end = self.instances.len() as u32;
+            self.pane_batches.push((start..end, pane.area));
         }
+        self.ui_start = self.instances.len();
         for r in frame.rects {
             let mut instance = Instance::solid(r.x, r.y, r.width, r.height, r.color);
             if r.radius > 0.0 {
@@ -725,6 +747,17 @@ impl Renderer {
     }
 }
 
+/// The scissor rectangle (x, y, width, height) for an `area` (x, y, width,
+/// height in pixels) on a target of `size`: whole pixels that cover the
+/// area, inside the target. `None` if nothing of it is visible.
+fn scissor(area: [f32; 4], (width, height): (u32, u32)) -> Option<[u32; 4]> {
+    let [x, y, w, h] = area;
+    let clamp = |v: f32, max: u32| (v.max(0.0) as u32).min(max);
+    let (left, top) = (clamp(x.floor(), width), clamp(y.floor(), height));
+    let (right, bottom) = (clamp((x + w).ceil(), width), clamp((y + h).ceil(), height));
+    (right > left && bottom > top).then(|| [left, top, right - left, bottom - top])
+}
+
 fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("instances"),
@@ -764,4 +797,31 @@ fn create_bind_group(
             },
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scissors_cover_the_area_inside_the_target() {
+        let size = (800, 600);
+        assert_eq!(
+            scissor([10.0, 20.0, 300.0, 200.0], size),
+            Some([10, 20, 300, 200])
+        );
+        // Fractional edges round outwards.
+        assert_eq!(
+            scissor([10.5, 20.5, 100.0, 100.0], size),
+            Some([10, 20, 101, 101])
+        );
+        // Cut to the target.
+        assert_eq!(
+            scissor([-5.0, 500.0, 900.0, 200.0], size),
+            Some([0, 500, 800, 100])
+        );
+        // Nothing visible.
+        assert_eq!(scissor([850.0, 0.0, 100.0, 100.0], size), None);
+        assert_eq!(scissor([0.0, 0.0, 0.0, 100.0], size), None);
+    }
 }
