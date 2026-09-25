@@ -968,11 +968,22 @@ impl App {
         true
     }
 
-    /// The link under the pointer, if the link modifier (Ctrl, Cmd on
-    /// macOS) is held.
+    /// Look up the link under the pointer again and redraw if it changed.
     fn update_hover_link(&mut self) {
+        if self.refresh_hover_link()
+            && let Some(state) = self.state.as_ref()
+        {
+            state.window.request_redraw();
+        }
+    }
+
+    /// The link under the pointer, if the link modifier (Ctrl, Cmd on
+    /// macOS) is held. Output, scrolling or a closed pane move the text
+    /// under a resting pointer, so this also runs before every frame and
+    /// click. Returns whether it changed.
+    fn refresh_hover_link(&mut self) -> bool {
         let Some(state) = self.state.as_mut() else {
-            return;
+            return false;
         };
         let mods = state.modifiers.state();
         let held = if cfg!(target_os = "macos") {
@@ -986,13 +997,19 @@ impl App {
             let link = state.content().pane(id)?.term.link_at(point)?;
             Some((id, link))
         });
-        if link != state.mouse.hover_link {
-            state.mouse.hover_link = link;
-            state.window.request_redraw();
+        if link == state.mouse.hover_link {
+            return false;
         }
+        state.mouse.hover_link = link;
+        true
     }
 
     fn mouse_input(&mut self, button: MouseButton, pressed: bool) {
+        // Open the link that is under the pointer now, not the one that
+        // was there when it last moved.
+        if pressed {
+            self.update_hover_link();
+        }
         let Some(state) = self.state.as_mut() else {
             return;
         };
@@ -1573,6 +1590,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Keep the link underline on the text under the pointer.
+                self.refresh_hover_link();
+                let Some(state) = self.state.as_mut() else {
+                    return;
+                };
                 let status = state.redraw(&self.config, &self.stats, self.banner.as_ref());
                 if status == FrameStatus::Skipped {
                     state.skipped_frames += 1;
