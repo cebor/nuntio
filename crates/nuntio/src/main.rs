@@ -11,6 +11,7 @@ mod mouse;
 mod pane_tree;
 mod search_bar;
 mod tab_bar;
+mod tab_title;
 mod tabs;
 mod window;
 

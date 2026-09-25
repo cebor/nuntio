@@ -309,11 +309,15 @@ impl TermHandle {
     }
 
     /// Name of the foreground process, or the shell's name if unknown.
-    /// Used as the tab title when the application sets none.
     pub fn process_name(&self) -> String {
         self.shell_pid
             .and_then(process::foreground_name)
             .unwrap_or_else(|| self.shell_name.clone())
+    }
+
+    /// Whether the shell waits at its prompt, if it can be determined.
+    pub fn foreground_is_shell(&self) -> Option<bool> {
+        self.shell_pid.and_then(process::foreground_is_shell)
     }
 
     /// Working directory of the foreground process, if it can be determined.

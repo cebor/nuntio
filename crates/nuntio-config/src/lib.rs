@@ -177,11 +177,28 @@ pub enum TabPosition {
     Top,
 }
 
+/// What a tab shows as its title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabTitle {
+    /// The directory while the shell waits at its prompt, otherwise the
+    /// running program.
+    #[default]
+    Auto,
+    /// The working directory.
+    Path,
+    /// The name of the running program.
+    Process,
+    /// The title the application sets (OSC 0/2), unchanged.
+    Application,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Tabs {
     pub hide_when_single: bool,
     pub position: TabPosition,
+    pub title: TabTitle,
 }
 
 impl Default for Tabs {
@@ -189,6 +206,7 @@ impl Default for Tabs {
         Self {
             hide_when_single: true,
             position: TabPosition::Top,
+            title: TabTitle::default(),
         }
     }
 }
@@ -276,6 +294,7 @@ macos_titlebar = "none"
 [tabs]
 hide_when_single = true
 position = "top"
+title = "process"
 
 [panes]
 dim_inactive = 0.15
@@ -303,6 +322,7 @@ action = "split_horizontal"
         assert_eq!(cfg.font.family.as_deref(), Some("JetBrains Mono"));
         assert_eq!(cfg.window.decorations, Decorations::System);
         assert_eq!(cfg.window.effective_macos_titlebar(), MacosTitlebar::None);
+        assert_eq!(cfg.tabs.title, TabTitle::Process);
         assert_eq!(
             cfg.theme,
             ThemeSelection::Auto {

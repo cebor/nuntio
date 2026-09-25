@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use nuntio_config::Config;
+use nuntio_config::{Config, TabTitle};
 use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect};
 use nuntio_term::{CursorStyle, GridPoint, Link, Snapshot, TermHandle, TermMode, TermSize};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -18,6 +18,7 @@ use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
 use crate::pane_tree::{Divider, Layout, PaneTree, Rect};
 use crate::search_bar::SearchBar;
 use crate::tab_bar::{BarHit, TabBar, TabLabel, mix};
+use crate::tab_title::{self, TitleInfo};
 use crate::tabs::Tabs;
 
 pub const DEFAULT_TITLE: &str = "nuntio";
@@ -46,10 +47,19 @@ impl Pane {
         }
     }
 
-    fn title(&self) -> String {
-        self.title
-            .clone()
-            .unwrap_or_else(|| self.term.process_name())
+    fn title(&self, mode: TabTitle) -> String {
+        let wants_directory = matches!(mode, TabTitle::Auto | TabTitle::Path);
+        let info = TitleInfo {
+            application: self.title.clone(),
+            process: self.term.process_name(),
+            directory: wants_directory
+                .then(|| self.term.working_directory())
+                .flatten(),
+            shell_idle: (mode == TabTitle::Auto)
+                .then(|| self.term.foreground_is_shell())
+                .flatten(),
+        };
+        tab_title::title(mode, info, dirs::home_dir().as_deref())
     }
 
     fn resize(&mut self, size: TermSize) {
@@ -301,9 +311,9 @@ impl WindowState {
         }
     }
 
-    pub fn tab_title(&self, index: usize) -> String {
+    pub fn tab_title(&self, index: usize, config: &Config) -> String {
         let tab = self.tabs.iter().nth(index).expect("tab index in range");
-        tab.content.focused_pane().title()
+        tab.content.focused_pane().title(config.tabs.title)
     }
 
     pub fn redraw(&mut self, config: &Config, banner: Option<&Banner>) -> FrameStatus {
@@ -339,7 +349,7 @@ impl WindowState {
         };
         let (background, foreground) = (first.background, first.foreground);
 
-        let title = self.tab_title(self.tabs.active_index());
+        let title = self.tab_title(self.tabs.active_index(), config);
         if title != self.title {
             self.window.set_title(&title);
             self.title = title;
@@ -351,7 +361,7 @@ impl WindowState {
                     .map(|i| {
                         let tab = self.tabs.iter().nth(i).expect("tab index in range");
                         TabLabel {
-                            title: self.tab_title(i),
+                            title: self.tab_title(i, config),
                             active: i == self.tabs.active_index(),
                             activity: tab.activity,
                             bell: tab.bell,

@@ -1,5 +1,5 @@
 //! Information about the process running in a pane: the foreground job's
-//! name (tab title fallback) and working directory (for new tabs).
+//! name and working directory (tab titles, and where new tabs start).
 //!
 //! Implemented via `/proc` on Linux; other platforms return `None` for now,
 //! so callers fall back to the shell name and the default directory.
@@ -23,6 +23,14 @@ pub fn foreground_name(shell_pid: u32) -> Option<String> {
     Some(comm.trim_end().to_owned()).filter(|s| !s.is_empty())
 }
 
+/// Whether the shell itself is in the foreground, i.e. waiting at its
+/// prompt rather than running a program.
+#[cfg(target_os = "linux")]
+pub fn foreground_is_shell(shell_pid: u32) -> Option<bool> {
+    let stat = std::fs::read_to_string(format!("/proc/{shell_pid}/stat")).ok()?;
+    Some(parse_tpgid(&stat).is_none_or(|pid| pid == shell_pid))
+}
+
 #[cfg(target_os = "linux")]
 pub fn working_directory(shell_pid: u32) -> Option<PathBuf> {
     let pid = foreground_pid(shell_pid);
@@ -33,6 +41,11 @@ pub fn working_directory(shell_pid: u32) -> Option<PathBuf> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn foreground_name(_shell_pid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn foreground_is_shell(_shell_pid: u32) -> Option<bool> {
     None
 }
 
