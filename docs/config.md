@@ -50,7 +50,7 @@ In a list of choices, typing filters it; moving through themes or fonts previews
 
 A key combination for a keybinding is typed as text, like `Ctrl+Shift+Enter` (see [Key syntax](#key-syntax)), because a terminal can't report every combination reliably. The editor checks it as you type and warns when the combination is already bound.
 
-If you edit the file in another editor while `nuntio-config` is open, it reloads the file before the next change. Shells started in WSL (`shell = { wsl = … }`) don't get the command.
+If you edit the file in another editor while `nuntio-config` is open, it reloads the file before the next change. On Windows, shells that `shell.wsl` starts in a WSL distribution don't get the command. nuntio running inside WSL itself (WSLg) is not affected.
 
 ## Reloading
 
