@@ -1,11 +1,25 @@
 [package]
 name = "nuntio"
-description = "A simple, fast terminal emulator"
+description = "A fast, GPU-rendered terminal emulator modeled on iTerm2"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["terminal", "terminal-emulator", "gpu", "wgpu", "tabs"]
+categories = ["command-line-utilities"]
+publish = false
 # `nuntio-config` is the second binary.
 default-run = "nuntio"
+
+[[bin]]
+name = "nuntio-config"
+path = "src/bin/nuntio-config.rs"
+# Its docs would overwrite those of the `nuntio-config` library.
+doc = false
 
 [dependencies]
 nuntio-config.workspace = true
@@ -48,6 +62,8 @@ assets = [
     # Only on the PATH inside nuntio's panes.
     ["target/release/nuntio-config", "usr/lib/nuntio/", "755"],
     ["../../assets/nuntio.desktop", "usr/share/applications/", "644"],
+    ["../../assets/nuntio.metainfo.xml", "usr/share/metainfo/io.github.cebor.nuntio.metainfo.xml", "644"],
+    ["../../assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/nuntio.svg", "644"],
     ["../../assets/icons/png/16.png", "usr/share/icons/hicolor/16x16/apps/nuntio.png", "644"],
     ["../../assets/icons/png/32.png", "usr/share/icons/hicolor/32x32/apps/nuntio.png", "644"],
     ["../../assets/icons/png/48.png", "usr/share/icons/hicolor/48x48/apps/nuntio.png", "644"],

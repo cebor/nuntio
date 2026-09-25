@@ -7,7 +7,12 @@ default-members = ["crates/nuntio"]
 [workspace.package]
 version = "0.1.2"
 edition = "2024"
+# Checked in CI; the highest a dependency needs (sysinfo).
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
+authors = ["Felix Itzenplitz <felitzn@gmail.com>"]
+repository = "https://github.com/cebor/nuntio"
+homepage = "https://cebor.github.io/nuntio/"
 
 [workspace.dependencies]
 nuntio-config = { path = "crates/nuntio-config" }
@@ -53,3 +58,10 @@ all = { level = "warn", priority = -1 }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# Symbol names too, not only debug info (the default).
+strip = "symbols"
+
+# Debug builds of nuntio itself, with optimized dependencies: wgpu and
+# cosmic-text are unbearably slow unoptimized.
+[profile.dev.package."*"]
+opt-level = 2

@@ -10,22 +10,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Packages are named after the version in Cargo.toml; a tag pushed before
+  # bumping it would publish files of the previous version.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the Cargo.toml version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml"
+            exit 1
+          fi
+
   linux:
+    needs: version
     # Oldest supported runner, so the binary works with older glibc versions.
     runs-on: ubuntu-22.04
+    env:
+      APPIMAGETOOL_VERSION: "1.9.1"
+      APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install dependencies and packaging tools
+      - name: Install dependencies and appimagetool
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
-          cargo install cargo-deb --locked
-          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          # A fixed release, checked against its published hash.
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
+          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
           chmod +x appimagetool
           echo "APPIMAGETOOL=$PWD/appimagetool" >> "$GITHUB_ENV"
           # No FUSE on the runners.
           echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
+      # Prebuilt, instead of compiling it for every release.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask package
       - uses: actions/upload-artifact@v4
@@ -34,6 +57,7 @@ jobs:
           path: dist/*
 
   macos:
+    needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +72,7 @@ jobs:
           path: dist/*
 
   windows:
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +103,11 @@ jobs:
           previous=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
           cargo xtask changelog "${previous:+$previous..}${GITHUB_REF_NAME}" > notes.md
           cat notes.md
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -2,10 +2,12 @@
 Type=Application
 Name=nuntio
 GenericName=Terminal
-Comment=A simple, fast terminal emulator
+Comment=A fast, GPU-rendered terminal emulator
+TryExec=nuntio
 Exec=nuntio
 Icon=nuntio
 Terminal=false
 Categories=System;TerminalEmulator;
-Keywords=shell;prompt;command;commandline;terminal;
+Keywords=shell;prompt;command;commandline;terminal;tty;pty;console;
 StartupWMClass=nuntio
+StartupNotify=true

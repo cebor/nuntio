@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata, for software centers (GNOME Software, KDE Discover)
+     and appimagetool. -->
+<component type="desktop-application">
+  <id>io.github.cebor.nuntio</id>
+  <name>nuntio</name>
+  <summary>A fast, GPU-rendered terminal emulator</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <developer id="io.github.cebor">
+    <name>Felix Itzenplitz</name>
+  </developer>
+  <description>
+    <p>
+      nuntio is a terminal emulator modeled on iTerm2: one window with tabs
+      and split panes, rendered on the GPU and configured with a single TOML
+      file that reloads while you type.
+    </p>
+    <ul>
+      <li>Tabs and split panes, with keyboard and mouse control</li>
+      <li>Themes, including iTerm2 color presets and light/dark pairs</li>
+      <li>Find bar with regex search, clickable URLs and OSC 8 hyperlinks</li>
+      <li>Optional status bar with CPU, memory, network and battery graphs</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">nuntio.desktop</launchable>
+  <url type="homepage">https://cebor.github.io/nuntio/</url>
+  <url type="bugtracker">https://github.com/cebor/nuntio/issues</url>
+  <url type="vcs-browser">https://github.com/cebor/nuntio</url>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+  </categories>
+  <provides>
+    <binary>nuntio</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

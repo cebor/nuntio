@@ -24,6 +24,8 @@ const PNG_SIZES: [u32; 9] = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
 const ICO_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 const ICNS_SIZES: [u32; 7] = [16, 32, 64, 128, 256, 512, 1024];
 const LINUX_ICON_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
+/// AppStream component id, as in `assets/nuntio.metainfo.xml`.
+const METAINFO_ID: &str = "io.github.cebor.nuntio";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -380,6 +382,14 @@ fn install_desktop_files(assets: &Path, share: &Path) -> Result<()> {
         &assets.join("nuntio.desktop"),
         &share.join("applications/nuntio.desktop"),
     )?;
+    copy(
+        &assets.join("nuntio.metainfo.xml"),
+        &share.join(format!("metainfo/{METAINFO_ID}.metainfo.xml")),
+    )?;
+    copy(
+        &assets.join("icon.svg"),
+        &share.join(format!("icons/hicolor/scalable/apps/{NAME}.svg")),
+    )?;
     for size in LINUX_ICON_SIZES {
         copy(
             &assets.join(format!("icons/png/{size}.png")),
@@ -427,6 +437,16 @@ fn package_macos(dist: &Path, version: &str) -> Result<()> {
     )?;
     let plist = fs::read_to_string(root().join("assets/Info.plist"))?.replace("@VERSION@", version);
     fs::write(app.join("Info.plist"), plist)?;
+    // Ad-hoc signature (no identity): binds Info.plist and resources to the
+    // bundle. Unsigned universal bundles are reported as "damaged" on Apple
+    // Silicon instead of just "from an unidentified developer". The helper
+    // is signed first, as a nested executable.
+    run(Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(app.join("MacOS").join(HELPER)))?;
+    run(Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(stage.join("nuntio.app")))?;
     copy_docs(&stage)?;
 
     // Disk image with the app and a link to /Applications for drag-install.

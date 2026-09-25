@@ -3,7 +3,9 @@ name = "nuntio-config-tui"
 description = "Terminal UI for editing nuntio's config file"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 nuntio-config.workspace = true

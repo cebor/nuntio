@@ -1,8 +1,11 @@
 [package]
 name = "nuntio-term"
+description = "Terminal emulation and PTY handling for nuntio"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 alacritty_terminal.workspace = true

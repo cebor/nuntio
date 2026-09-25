@@ -28,5 +28,29 @@
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>
   <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>© 2026 Felix Itzenplitz. MIT or Apache-2.0.</string>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <!-- Programs run in the terminal ask for these permissions in nuntio's
+       name; without a reason string, macOS denies some requests outright. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>A program running in nuntio wants to control another app.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>A program running in nuntio wants to access the Desktop folder.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>A program running in nuntio wants to access the Documents folder.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>A program running in nuntio wants to access the Downloads folder.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>A program running in nuntio wants to access a removable volume.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>A program running in nuntio wants to access a network volume.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>A program running in nuntio wants to use the camera.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>A program running in nuntio wants to use the microphone.</string>
+  <key>NSLocationUsageDescription</key>
+  <string>A program running in nuntio wants to know your location.</string>
 </dict>
 </plist>
