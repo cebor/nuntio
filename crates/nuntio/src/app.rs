@@ -33,7 +33,8 @@ use crate::status_bar::Stats;
 use crate::sysmon::SystemMonitor;
 use crate::tab_bar::BarHit;
 use crate::window::{
-    BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent, TabDrag, WindowState,
+    AUTOSCROLL_INTERVAL, Autoscroll, BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent,
+    TabDrag, WindowState,
 };
 
 const MIN_FONT_SIZE: f32 = 4.0;
@@ -1056,6 +1057,7 @@ impl App {
             state.window.request_redraw();
         } else if state.mouse.selecting {
             state.mouse.selecting = false;
+            state.mouse.autoscroll = None;
             if self.config.mouse.copy_on_select {
                 self.copy_selection();
             }
@@ -1130,6 +1132,17 @@ impl App {
         if state.mouse.selecting {
             let point = state.cell_at(&self.config, pos);
             state.term().update_selection(point);
+            // Past the top or bottom edge, keep scrolling while the
+            // pointer stays there; `about_to_wait` runs the steps.
+            let lines = state.autoscroll_lines(&self.config, pos);
+            state.mouse.autoscroll = match state.mouse.autoscroll {
+                _ if lines == 0 => None,
+                Some(scroll) => Some(Autoscroll { lines, ..scroll }),
+                None => Some(Autoscroll {
+                    lines,
+                    next: Instant::now() + AUTOSCROLL_INTERVAL,
+                }),
+            };
             state.window.request_redraw();
             return;
         }
@@ -1298,10 +1311,24 @@ impl ApplicationHandler<UserEvent> for App {
             state.title_refresh = None;
             state.window.request_redraw();
         }
+        if let Some(scroll) = state.mouse.autoscroll
+            && now >= scroll.next
+            && let Some(pos) = state.mouse.position
+        {
+            state.term().scroll(scroll.lines);
+            let point = state.cell_at(&self.config, pos);
+            state.term().update_selection(point);
+            state.mouse.autoscroll = Some(Autoscroll {
+                next: now + AUTOSCROLL_INTERVAL,
+                ..scroll
+            });
+            state.window.request_redraw();
+        }
         // Sleep until the next timer, or until an event if there is none.
         let deadline = [
             state.blink.active.then_some(state.blink.next_toggle),
             state.title_refresh,
+            state.mouse.autoscroll.map(|scroll| scroll.next),
         ]
         .into_iter()
         .flatten()
@@ -1398,7 +1425,11 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
             WindowEvent::CursorLeft { .. } => {
-                state.mouse.position = None;
+                // A selection drag goes on outside the window (the button
+                // release still arrives), so keep its last position.
+                if !state.mouse.selecting {
+                    state.mouse.position = None;
+                }
                 let hovered = state.mouse.hovered_bar.take().is_some();
                 let link = state.mouse.hover_link.take().is_some();
                 if hovered || link {

@@ -33,6 +33,10 @@ const RESIZE_BORDER: f64 = 5.0;
 const WINDOW_RADIUS: f64 = 12.0;
 /// Extra grab area around pane dividers, in logical pixels.
 const DIVIDER_SLOP: f64 = 3.0;
+/// Time between steps while a selection drag scrolls the pane.
+pub const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Fastest autoscroll, in lines per step.
+const AUTOSCROLL_MAX_LINES: i32 = 5;
 /// How long a tab title is reused before the process info is read again.
 const TITLE_REFRESH: Duration = Duration::from_millis(250);
 
@@ -179,6 +183,15 @@ pub struct MouseState {
     pub divider_drag: Option<Divider>,
     /// Link under the pointer while the link modifier is held.
     pub hover_link: Option<(PaneId, Link)>,
+    /// A selection drag is past the top or bottom of the pane and scrolls it.
+    pub autoscroll: Option<Autoscroll>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Autoscroll {
+    /// Lines per step; positive scrolls up into the scrollback.
+    pub lines: i32,
+    pub next: Instant,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -745,6 +758,20 @@ impl WindowState {
         }
     }
 
+    /// Lines per autoscroll step for a selection drag at `pos`: positive
+    /// above the focused pane's grid, negative below it, 0 inside.
+    pub fn autoscroll_lines(&self, config: &Config, pos: PhysicalPosition<f64>) -> i32 {
+        let layout = self.layout(config);
+        let Some(rect) = layout.rect(self.content().focused) else {
+            return 0;
+        };
+        let (_, top) = self.grid_origin(config, rect);
+        let cell = self.renderer.cell_metrics();
+        let lines = self.grid().lines as f32;
+        let bottom = top + lines * cell.height as f32;
+        autoscroll_speed(pos.y as f32, top, bottom, cell.height as f32)
+    }
+
     /// Mouse events go to the application unless Shift is held, which
     /// forces local selection like in xterm.
     pub fn reports_mouse(&self, mode: TermMode) -> bool {
@@ -780,6 +807,7 @@ impl WindowState {
         self.search = None;
         self.mouse.hover_link = None;
         self.mouse.selecting = false;
+        self.mouse.autoscroll = None;
         self.mouse.reported_button = None;
         self.mouse.last_reported_cell = None;
         self.ime_cell = None;
@@ -836,6 +864,19 @@ fn edge_at(pos: (f64, f64), size: (f64, f64), border: f64) -> Option<ResizeDirec
         (_, _, _, true) => ResizeDirection::South,
         _ => return None,
     })
+}
+
+/// Autoscroll speed for a pointer at `y` with the grid spanning `top` to
+/// `bottom`: one line per step at the edge, faster with distance.
+fn autoscroll_speed(y: f32, top: f32, bottom: f32, cell_height: f32) -> i32 {
+    let lines = |distance: f32| (1 + (distance / cell_height) as i32).min(AUTOSCROLL_MAX_LINES);
+    if y < top {
+        lines(top - y)
+    } else if y >= bottom {
+        -lines(y - bottom)
+    } else {
+        0
+    }
 }
 
 /// Underline the cells of a link (viewport positions, inclusive).
@@ -897,6 +938,18 @@ mod tests {
             None,
             "expired"
         );
+    }
+
+    #[test]
+    fn autoscroll_speeds_up_with_distance() {
+        let speed = |y| autoscroll_speed(y, 100.0, 500.0, 20.0);
+        assert_eq!(speed(300.0), 0);
+        assert_eq!(speed(100.0), 0);
+        assert_eq!(speed(99.0), 1);
+        assert_eq!(speed(60.0), 3);
+        assert_eq!(speed(-1000.0), AUTOSCROLL_MAX_LINES);
+        assert_eq!(speed(500.0), -1);
+        assert_eq!(speed(545.0), -3);
     }
 
     #[test]
