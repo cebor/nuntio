@@ -47,6 +47,11 @@ body {
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+/* In running text, links aren't told apart by color alone. */
+.prose a { text-decoration: underline; text-underline-offset: 2px; }
+
+.skip { position: absolute; left: 12px; top: -48px; z-index: 100; padding: 8px 14px; border-radius: 6px; background: var(--accent); color: var(--accent-text); }
+.skip:focus { top: 12px; }
 
 code, pre, kbd { font-family: var(--mono); font-size: 0.9em; }
 
@@ -104,7 +109,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.9em; }
 }
 .term-bar { display: flex; align-items: center; gap: 6px; padding: 10px 14px; background: #16161e; font-size: 0.85rem; }
 .dot { width: 11px; height: 11px; border-radius: 50%; background: #414868; }
-.term-tab { margin-left: 8px; padding: 3px 12px; border-radius: 6px; color: #737aa2; font-family: var(--mono); font-size: 0.9rem; white-space: nowrap; }
+.term-tab { margin-left: 8px; padding: 3px 12px; border-radius: 6px; color: #9aa5ce; font-family: var(--mono); font-size: 0.9rem; white-space: nowrap; }
 .pane { margin: 0; padding: 18px 20px; font-size: 0.85rem; line-height: 1.5; overflow: hidden; }
 
 /* Tabs in a mock window are radio buttons, so they switch without JS. */

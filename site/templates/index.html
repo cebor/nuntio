@@ -82,7 +82,7 @@
         <div><h3>Hot reload</h3><p>Save the config, or change it in <code>nuntio-config</code>, and it applies right away. Mistakes show up as a banner, and the previous settings stay active.</p></div>
         <div><h3>Themes</h3><p>Five built in, your own as TOML or iTerm2 <code>.itermcolors</code>, and a light/dark pair that follows the OS appearance.</p></div>
         <div><h3>Text done right</h3><p>Shaped with cosmic-text: font fallback, color emoji, CJK and wide characters.</p></div>
-        <div><h3>Find bar</h3><p>Incremental search through the scrollback, with a regex mode.</p></div>
+        <div><h3>Find bar and status bar</h3><p>Incremental search through the scrollback, with a regex mode. An optional status bar graphs CPU, memory, network and battery, as in iTerm2.</p></div>
         <div><h3>WSL on Windows</h3><p><code>shell = { wsl = "Ubuntu" }</code> opens every tab straight in a WSL distribution.</p></div>
         <div><h3>Idle means idle</h3><p>nuntio only redraws when something changed, so an idle window uses close to 0% CPU.</p></div>
       </div>
@@ -130,8 +130,8 @@ dark = <span class="c-y">"Tokyo Night"</span></code></pre>
             {{ <download assets={release.assets} ext=".dmg" label="Disk image" primary={true} /> }}
             <p class="dl-hint">Universal: Intel and Apple Silicon</p>
           </div>
-          <pre class="pane"><span class="c-c"># Not signed yet. Open nuntio the first time with</span>
-<span class="c-c"># right-click → Open, or clear the quarantine flag:</span>
+          <pre class="pane"><span class="c-c"># Not signed yet. Allow the first start in System Settings →</span>
+<span class="c-c"># Privacy &amp; Security → Open Anyway, or clear the quarantine flag:</span>
 <span class="c-g">❯</span> xattr -dr com.apple.quarantine /Applications/nuntio.app</pre>
         </div>
         <div class="dl-panel" data-os="linux">
@@ -172,7 +172,9 @@ dark = <span class="c-y">"Tokyo Night"</span></code></pre>
   // Point the hero button at the visitor's platform. Without JS it jumps to #download.
   (function () {
     var ua = navigator.userAgent;
-    var os = /Mac/.test(ua) ? "mac" : /Win/.test(ua) ? "windows" : /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : null;
+    // iPhones and iPads (which claim to be a Mac) get no macOS download.
+    var mobile = /iPhone|iPad|iPod/.test(ua) || navigator.maxTouchPoints > 1;
+    var os = /Mac/.test(ua) && !mobile ? "mac" : /Win/.test(ua) ? "windows" : /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : null;
     if (!os) return;
     var tab = document.getElementById("dl-" + os);
     if (!tab) return;

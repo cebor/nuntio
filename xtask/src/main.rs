@@ -191,7 +191,7 @@ fn site_config_page(markdown: &str) -> Result<String> {
         "docs/config.md links to a repo file the site doesn't have"
     );
     Ok(format!(
-        "+++\ntitle = \"Configuration reference\"\nweight = 2\n+++\n{body}"
+        "+++\ntitle = \"Configuration reference\"\ndescription = \"Every nuntio setting with its default, themes, keybindings and the nuntio-config editor.\"\nweight = 2\n+++\n{body}"
     ))
 }
 
@@ -513,10 +513,12 @@ mod tests {
             "# Configuration reference\n\nSee the [defaults](../README.md#keyboard-shortcuts).\n",
         )
         .unwrap();
+        let (front, body) = page.split_once("+++\n\n").unwrap();
+        assert!(front.starts_with("+++\ntitle = \"Configuration reference\"\n"));
+        assert!(front.contains("\ndescription = "));
         assert_eq!(
-            page,
-            "+++\ntitle = \"Configuration reference\"\nweight = 2\n+++\n\n\
-             See the [defaults](@/docs/getting-started.md#keyboard-shortcuts).\n"
+            body,
+            "See the [defaults](@/docs/getting-started.md#keyboard-shortcuts).\n"
         );
     }
 
