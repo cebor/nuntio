@@ -149,6 +149,9 @@ pub enum MacosTitlebar {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Window {
+    /// Grid size of a new window, in cells.
+    pub columns: u16,
+    pub lines: u16,
     pub padding: Padding,
     pub opacity: f32,
     pub decorations: Decorations,
@@ -170,6 +173,8 @@ impl Window {
 impl Default for Window {
     fn default() -> Self {
         Self {
+            columns: 100,
+            lines: 30,
             padding: Padding::default(),
             opacity: 1.0,
             decorations: Decorations::default(),
@@ -424,6 +429,8 @@ family = "JetBrains Mono"
 size = 13.0
 
 [window]
+columns = 120
+lines = 40
 padding = { x = 8, y = 6 }
 opacity = 1.0
 decorations = "system"

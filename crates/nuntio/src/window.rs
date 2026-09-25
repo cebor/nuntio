@@ -428,6 +428,20 @@ impl WindowState {
         (rect.x + pad_x, rect.y + pad_y)
     }
 
+    /// Inner window size for the configured grid (`window.columns` and
+    /// `window.lines`) in a single pane, with the bars around it.
+    pub fn size_for_grid(&self, config: &Config) -> PhysicalSize<u32> {
+        let bars = self.tab_bar(config).map_or(0.0, |bar| bar.height)
+            + self.status_bar_bounds(config).map_or(0.0, |(_, h)| h);
+        let (width, height) = window_size(
+            (config.window.columns, config.window.lines),
+            self.renderer.cell_metrics(),
+            self.padding(config),
+            bars,
+        );
+        PhysicalSize::new(width, height)
+    }
+
     /// Fit every pane's terminal to its area, in all tabs.
     pub fn resize_terms(&mut self, config: &Config) {
         let area = self.terminal_area(config);
@@ -895,6 +909,20 @@ fn underline(snapshot: &mut Snapshot, link: &Link) {
     }
 }
 
+/// Window size for a grid of `columns`×`lines` cells plus padding and
+/// `bars` (the height of the tab and status bars); the inverse of
+/// `grid_size`.
+fn window_size(
+    (columns, lines): (u16, u16),
+    cell: CellMetrics,
+    padding: (f32, f32),
+    bars: f32,
+) -> (u32, u32) {
+    let width = columns as f32 * cell.width as f32 + 2.0 * padding.0;
+    let height = lines as f32 * cell.height as f32 + 2.0 * padding.1 + bars;
+    (width.ceil() as u32, height.ceil() as u32)
+}
+
 /// How many cells fit into a pane, minus padding.
 fn grid_size(rect: Rect, padding: (f32, f32), cell: CellMetrics) -> TermSize {
     let fit = |available: f32, pad: f32, cell: u32| {
@@ -982,6 +1010,20 @@ mod tests {
         let size = grid_size(rect, (2.0, 2.0), CELL);
         assert_eq!((size.columns, size.lines), (10, 3));
         assert_eq!((size.cell_width, size.cell_height), (10, 20));
+    }
+
+    #[test]
+    fn window_size_fits_the_grid_exactly() {
+        let (width, height) = window_size((80, 24), CELL, (8.0, 6.0), 30.0);
+        assert_eq!((width, height), (816, 522));
+        let rect = Rect {
+            x: 0.0,
+            y: 30.0,
+            width: width as f32,
+            height: height as f32 - 30.0,
+        };
+        let size = grid_size(rect, (8.0, 6.0), CELL);
+        assert_eq!((size.columns, size.lines), (80, 24));
     }
 
     #[test]

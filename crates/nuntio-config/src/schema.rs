@@ -9,6 +9,9 @@ pub const DIM_INACTIVE: (f64, f64) = (0.0, 1.0);
 pub const MAX_SCROLLBACK: i64 = 1_000_000;
 /// Enough for any sensible margin; more would leave no room for text.
 pub const MAX_PADDING: u16 = 200;
+/// Allowed `window.columns` and `window.lines`.
+pub const WINDOW_COLUMNS: (u16, u16) = (10, 1000);
+pub const WINDOW_LINES: (u16, u16) = (4, 500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -262,6 +265,28 @@ pub static SETTINGS: &[Setting] = &[
             step: 0.5,
         },
         "Font size in points.",
+    ),
+    setting(
+        "window.columns",
+        Section::Window,
+        "Columns",
+        Kind::Int {
+            min: WINDOW_COLUMNS.0 as i64,
+            max: WINDOW_COLUMNS.1 as i64,
+            step: 10,
+        },
+        "Width of a new window, in cells. Applies at the next start.",
+    ),
+    setting(
+        "window.lines",
+        Section::Window,
+        "Lines",
+        Kind::Int {
+            min: WINDOW_LINES.0 as i64,
+            max: WINDOW_LINES.1 as i64,
+            step: 5,
+        },
+        "Height of a new window, in lines. Applies at the next start.",
     ),
     setting(
         "window.padding.x",

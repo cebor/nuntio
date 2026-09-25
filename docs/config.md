@@ -89,6 +89,9 @@ theme = "iTerm2 Default"
 size = 13.0
 
 [window]
+# Size of a new window, in cells.
+columns = 100
+lines = 30
 padding = { x = 8, y = 6 }
 decorations = "custom"
 # macOS only; derived from `decorations` unless set.
@@ -143,6 +146,8 @@ option_as_meta = "none"
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `columns` | integer | `100` | Width of a new window in cells, `10` to `1000`. Read at startup. |
+| `lines` | integer | `30` | Height of a new window in lines, `4` to `500`. Read at startup. |
 | `padding` | table | `{ x = 8, y = 6 }` | Space in pixels between the window edge and the text, at most `200`. |
 | `decorations` | string | `"custom"` | `"custom"`: nuntio draws its own header. The tab bar holds the window buttons: on the right on Linux and Windows, and the native traffic lights on the left on macOS. Drag the bar to move the window, double-click it to maximize. The corners are rounded as usual on the OS: by Windows 11 itself, by nuntio on Linux (square when maximized, or if the graphics driver offers no transparent windows). `"system"`: the system's title bar and frame. Takes effect on the next start. |
 | `macos_titlebar` | string | from `decorations` | macOS only, overrides `decorations`. `"native"`: normal title bar. `"transparent"`: the tab bar moves into the title bar, next to the traffic-light buttons (what `"custom"` uses). `"none"`: no title bar and no buttons. |

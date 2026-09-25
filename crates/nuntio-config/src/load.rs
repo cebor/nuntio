@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::schema::{DIM_INACTIVE, FONT_SIZE, MAX_PADDING, MAX_SCROLLBACK, OPACITY};
+use crate::schema::{
+    DIM_INACTIVE, FONT_SIZE, MAX_PADDING, MAX_SCROLLBACK, OPACITY, WINDOW_COLUMNS, WINDOW_LINES,
+};
 use crate::{Config, Shell, StatusBar};
 
 /// `$XDG_CONFIG_HOME/nuntio`, else `~/.config/nuntio` — on every platform,
@@ -153,6 +155,16 @@ impl Config {
                 self.scrollback
             ));
         }
+        for (name, value, (min, max)) in [
+            ("columns", self.window.columns, WINDOW_COLUMNS),
+            ("lines", self.window.lines, WINDOW_LINES),
+        ] {
+            if !(min..=max).contains(&value) {
+                return Err(format!(
+                    "`window.{name}` must be between {min} and {max}, got {value}"
+                ));
+            }
+        }
         let padding = self.window.padding;
         for (name, value) in [("x", padding.x), ("y", padding.y)] {
             if value > MAX_PADDING {
@@ -267,6 +279,8 @@ mod tests {
         assert!(err.contains("window.opacity"), "{err}");
         let err = parse("shell = { program = \"\" }").unwrap_err();
         assert!(err.contains("shell.program"), "{err}");
+        let err = parse("[window]\ncolumns = 5").unwrap_err();
+        assert!(err.contains("window.columns"), "{err}");
         let err = parse("[window]\npadding = { x = 8, y = 500 }").unwrap_err();
         assert!(err.contains("window.padding.y"), "{err}");
         let err = parse("[font]\nfamily = \" \"").unwrap_err();

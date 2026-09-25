@@ -574,6 +574,12 @@ impl App {
         });
         let pane = self.spawn_pane(cwd, command)?;
         let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
+        // The cell size is only known now that the renderer has the font.
+        // Where the size applies at once, there may be no `Resized` event.
+        let size = state.size_for_grid(&self.config);
+        if let Some(size) = state.window.request_inner_size(size) {
+            state.renderer.resize(size.width, size.height);
+        }
         state.resize_terms(&self.config);
         Ok(state)
     }
