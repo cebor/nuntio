@@ -1,5 +1,6 @@
 +++
 title = "Getting started"
+description = "Install nuntio on Linux, macOS or Windows, set up the config file and learn the keyboard shortcuts."
 weight = 1
 +++
 
@@ -19,12 +20,12 @@ Download the package for your platform from the [home page](@/_index.md) or the 
 
 The packages are not signed yet.
 
-- **macOS**: open nuntio the first time with right-click → **Open**, or run `xattr -dr com.apple.quarantine /Applications/nuntio.app`.
+- **macOS**: the first start is blocked. Allow it in **System Settings** → **Privacy & Security** → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/nuntio.app`. (Right-click → **Open** no longer works since macOS 15.)
 - **Windows**: SmartScreen may ask you to confirm with **More info** → **Run anyway**.
 
 ### Build from source
 
-You need current stable Rust. The toolchain is pinned in `rust-toolchain.toml`, and `rustup` installs it automatically. On Linux you also need the windowing development packages:
+You need current stable Rust; `rust-toolchain.toml` selects the stable channel with rustfmt and clippy, and `rustup` installs it automatically. On Linux you also need the windowing development packages:
 
 ```sh
 # Debian / Ubuntu
@@ -57,8 +58,8 @@ dark = "Tokyo Night"
 dim_inactive = 0.2
 
 [[keybindings]]
-key = "Ctrl+Shift+Enter"
-action = "split_vertical"
+key = "Ctrl+Shift+N"
+action = "new_tab"
 ```
 
 Changes apply as soon as you save the file. If something is wrong, a banner in the window shows the error and the previous settings stay active. You can also run `nuntio-config` in a nuntio tab to change settings in a terminal UI ([Editing in the terminal](@/docs/config.md#editing-in-the-terminal)). The [configuration reference](@/docs/config.md) covers every option with its default, custom themes, and all keybinding actions.
@@ -102,4 +103,4 @@ nuntio [--config <path>] [--log-level <level>]
 | `-V`, `--version` | Print the version |
 | `-h`, `--help` | Print usage |
 
-When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux. If something goes wrong, that's the first place to look, and the log is welcome in a [bug report](https://github.com/cebor/nuntio/issues).
+When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux (the previous run's log is kept as `nuntio.old.log`). If something goes wrong, that's the first place to look, and the log is welcome in a [bug report](https://github.com/cebor/nuntio/issues).

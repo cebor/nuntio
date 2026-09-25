@@ -42,6 +42,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Config editor**: run `nuntio-config` in a nuntio tab to change settings in a terminal UI that only offers valid values and previews every change live.
 - **Hot reload**: saving the config applies it right away. Mistakes show up as a banner in the window, and the previous settings stay active.
 - **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select.
+- **Status bar** (optional): live graphs of CPU, memory and network, the battery level and the time, as in iTerm2.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.
 
 ## Installation
@@ -56,11 +57,11 @@ Download the package for your platform from the [latest release](https://github.
 | Linux (any distribution) | `nuntio-<version>-x86_64-linux.tar.gz` | Unpack it; it contains `bin/`, a desktop file and icons |
 | Windows | `nuntio-<version>-x86_64-windows.zip` | Unpack it and run `nuntio.exe` |
 
-The packages are not signed yet. On macOS, open nuntio the first time with right-click → **Open**, or run `xattr -dr com.apple.quarantine /Applications/nuntio.app`. On Windows, SmartScreen may ask you to confirm with **More info** → **Run anyway**.
+The packages are not signed yet. On macOS, the first start is blocked: allow it in **System Settings** → **Privacy & Security** → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/nuntio.app` (right-click → **Open** no longer works since macOS 15). On Windows, SmartScreen may ask you to confirm with **More info** → **Run anyway**.
 
 ### Build from source
 
-You need current stable Rust. The toolchain is pinned in `rust-toolchain.toml`, and `rustup` installs it automatically. On Linux you also need the windowing development packages:
+You need current stable Rust; `rust-toolchain.toml` selects the stable channel with rustfmt and clippy, and `rustup` installs it automatically. On Linux you also need the windowing development packages:
 
 ```sh
 # Debian / Ubuntu
@@ -98,7 +99,7 @@ nuntio [--config <path>] [--log-level <level>]
 | `-V`, `--version` | Print the version |
 | `-h`, `--help` | Print usage |
 
-When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux.
+When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux. The previous run's log is kept as `nuntio.old.log`.
 
 ## Configuration
 
@@ -118,8 +119,8 @@ dark = "Tokyo Night"
 dim_inactive = 0.2
 
 [[keybindings]]
-key = "Ctrl+Shift+Enter"
-action = "split_vertical"
+key = "Ctrl+Shift+N"
+action = "new_tab"
 ```
 
 Changes apply as soon as you save the file. Or run `nuntio-config` in a nuntio tab and change settings in a terminal UI instead of editing TOML. The **[configuration reference](docs/config.md)** covers every option with its default, custom themes, and all keybinding actions.

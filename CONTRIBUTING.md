@@ -4,7 +4,7 @@ Thanks for your interest! This document explains how to build and test nuntio an
 
 ## Prerequisites
 
-- Current stable Rust. The toolchain is pinned in `rust-toolchain.toml`; `rustup` installs it automatically.
+- Current stable Rust. `rust-toolchain.toml` selects the stable channel with rustfmt and clippy; `rustup` installs it automatically.
 - Linux: development packages for windowing and input, e.g. on Debian/Ubuntu:
   ```sh
   sudo apt-get install libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
@@ -29,16 +29,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+On Linux it also builds the docs (`cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`), checks the minimum Rust version from `rust-version` in `Cargo.toml`, runs [`cargo deny check`](https://github.com/EmbarkStudios/cargo-deny) (licenses and advisories, configured in `deny.toml`), and builds the Linux package and the website.
+
 For changes to rendering or terminal emulation, please also check the affected cases manually, e.g. `vim`, `htop`, `tmux`, `less`, colored `git log`, emoji/CJK output and box drawing (`tree`, TUI borders).
 
 ## Layout
 
 | Crate | Contents |
 |---|---|
-| `crates/nuntio` | Binary: event loop, app state, input |
+| `crates/nuntio` | Binaries `nuntio` and `nuntio-config`: event loop, app state, input |
 | `crates/nuntio-config` | Config schema, loading, themes |
+| `crates/nuntio-config-tui` | The `nuntio-config` terminal UI |
 | `crates/nuntio-render` | wgpu renderer |
 | `crates/nuntio-term` | Wrapper around `alacritty_terminal` and the PTY |
+| `xtask` | Icons, packaging, changelog, website |
 
 Conventions:
 - Errors: `thiserror` in library crates, `anyhow` in the binary.
@@ -121,7 +125,7 @@ cargo xtask icons     # regenerate assets/icons/ after editing assets/icon.svg
 - macOS: a universal `.app` (Intel + Apple Silicon) in a `.dmg`; needs both Rust targets (`rustup target add x86_64-apple-darwin aarch64-apple-darwin`).
 - Windows: a `.zip` with `nuntio.exe`.
 
-To release, bump `version` in the workspace `Cargo.toml`, commit, and push a tag like `v0.2.0`. The release workflow builds all packages and publishes a GitHub release with the changelog since the previous tag.
+To release, bump `version` in the workspace `Cargo.toml`, run `cargo check` so `Cargo.lock` picks it up (packaging builds with `--locked`), commit both, and push a tag like `v0.2.0`. The release workflow checks that the tag matches the version, builds all packages and publishes a GitHub release with the changelog since the previous tag.
 
 ## License
 

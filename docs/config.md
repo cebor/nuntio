@@ -71,8 +71,8 @@ This file lists every option with its default value:
 # Program to run in new panes. Default: $SHELL on Linux and macOS
 # (falling back to sh), PowerShell on Windows.
 # shell = { program = "/bin/zsh", args = ["-l"] }
-# On Windows, start in a WSL distribution instead:
-# shell = { wsl = "Ubuntu" }
+# On Windows, start in a WSL distribution instead, optionally as another user:
+# shell = { wsl = "Ubuntu", wsl_user = "root" }
 
 # Lines of history per pane.
 scrollback = 10000
@@ -90,6 +90,9 @@ size = 13.0
 [window]
 padding = { x = 8, y = 6 }
 decorations = "custom"
+# macOS only; derived from `decorations` unless set.
+# macos_titlebar = "transparent"
+opacity = 1.0
 
 [tabs]
 hide_when_single = true
@@ -112,8 +115,8 @@ copy_on_select = false
 option_as_meta = "none"
 
 # [[keybindings]]
-# key = "Ctrl+Shift+Enter"
-# action = "split_vertical"
+# key = "Ctrl+Shift+N"
+# action = "new_tab"
 ```
 
 > [!NOTE]
@@ -140,7 +143,7 @@ option_as_meta = "none"
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `padding` | table | `{ x = 8, y = 6 }` | Space in pixels between the window edge and the text. |
+| `padding` | table | `{ x = 8, y = 6 }` | Space in pixels between the window edge and the text, at most `200`. |
 | `decorations` | string | `"custom"` | `"custom"`: nuntio draws its own header. The tab bar holds the window buttons: on the right on Linux and Windows, and the native traffic lights on the left on macOS. Drag the bar to move the window, double-click it to maximize. The corners are rounded as usual on the OS: by Windows 11 itself, by nuntio on Linux (square when maximized, or if the graphics driver offers no transparent windows). `"system"`: the system's title bar and frame. Takes effect on the next start. |
 | `macos_titlebar` | string | from `decorations` | macOS only, overrides `decorations`. `"native"`: normal title bar. `"transparent"`: the tab bar moves into the title bar, next to the traffic-light buttons (what `"custom"` uses). `"none"`: no title bar and no buttons. |
 | `opacity` | float | `1.0` | Opacity of the terminal background, `0.0` (clear) to `1.0` (opaque). Text, cells with their own background color, the tab bar and the status bar stay opaque. Changing it applies right away, except that going below `1.0` from an opaque start needs a restart (on Linux with `decorations = "custom"` the window is always transparent, so it applies at once). Needs a compositor that supports transparent windows. |
@@ -174,13 +177,13 @@ Each item starts with an icon:
 
 - `cpu`: usage of all cores over the last minute, and the current value.
 - `memory`: used memory over the last minute (relative to the total), and the current amount in GiB.
-- `network`: throughput of all interfaces except loopback. Download grows up from the middle of the graph, upload down.
+- `network`: throughput of the physical interfaces (loopback, container and VM bridges such as `docker0` are left out, so traffic isn't counted twice). Download grows up from the middle of the graph, upload down.
 - `battery`: charge level, with ⚡ while charging. Hidden on machines without a battery.
 - `datetime`: the local date and time.
 
 If the window is too narrow, items before the last one are dropped, starting with the one closest to the right edge.
 
-While the bar is shown, nuntio samples the system and redraws once per second. With the bar off, nothing is sampled.
+While the bar is shown, nuntio samples the system and redraws once per second. With the bar off, or while the window is minimized or covered, nothing is sampled.
 
 ### `[mouse]`
 
@@ -265,8 +268,8 @@ Each `[[keybindings]]` entry binds a key combination to an action:
 
 ```toml
 [[keybindings]]
-key = "Ctrl+Shift+Enter"
-action = "split_vertical"
+key = "Ctrl+Shift+N"
+action = "new_tab"
 
 # Send Ctrl+Shift+K to the terminal instead of clearing scrollback
 [[keybindings]]
