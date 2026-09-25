@@ -249,6 +249,18 @@ Themes are color schemes: each one sets the foreground, background, cursor and s
 - `Tokyo Night Storm`
 - `Tokyo Night Moon`
 - `Tokyo Night Day`
+- `Catppuccin Mocha`
+- `Catppuccin Macchiato`
+- `Catppuccin Frappe`
+- `Catppuccin Latte`
+- `Gruvbox Dark`
+- `Gruvbox Light`
+- `Nord`
+- `One Dark`
+- `One Light`
+- `Rose Pine`
+- `Rose Pine Moon`
+- `Rose Pine Dawn`
 
 Theme names are case-insensitive. If a theme can't be found, nuntio falls back to `iTerm2 Default` and shows a warning with the list of available themes.
 

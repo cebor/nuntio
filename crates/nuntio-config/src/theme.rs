@@ -39,7 +39,7 @@ impl Theme {
     }
 }
 
-const BUILTIN: [&str; 8] = [
+const BUILTIN: [&str; 20] = [
     include_str!("../themes/iterm2-default.toml"),
     include_str!("../themes/solarized-dark.toml"),
     include_str!("../themes/solarized-light.toml"),
@@ -48,6 +48,18 @@ const BUILTIN: [&str; 8] = [
     include_str!("../themes/tokyo-night-storm.toml"),
     include_str!("../themes/tokyo-night-moon.toml"),
     include_str!("../themes/tokyo-night-day.toml"),
+    include_str!("../themes/catppuccin-mocha.toml"),
+    include_str!("../themes/catppuccin-macchiato.toml"),
+    include_str!("../themes/catppuccin-frappe.toml"),
+    include_str!("../themes/catppuccin-latte.toml"),
+    include_str!("../themes/gruvbox-dark.toml"),
+    include_str!("../themes/gruvbox-light.toml"),
+    include_str!("../themes/nord.toml"),
+    include_str!("../themes/one-dark.toml"),
+    include_str!("../themes/one-light.toml"),
+    include_str!("../themes/rose-pine.toml"),
+    include_str!("../themes/rose-pine-moon.toml"),
+    include_str!("../themes/rose-pine-dawn.toml"),
 ];
 
 pub const DEFAULT_THEME: &str = "iTerm2 Default";
@@ -253,16 +265,21 @@ mod tests {
     #[test]
     fn builtin_themes_parse() {
         let themes = builtin_themes();
-        assert_eq!(themes.len(), 8);
+        assert_eq!(themes.len(), 20);
         let (set, warnings) = ThemeSet::load(None);
         assert!(warnings.is_empty());
         assert!(set.get("tokyo night").is_some());
         assert!(set.get(DEFAULT_THEME).is_some());
         assert!(set.get("Solarized Light").is_some_and(|t| !t.is_dark()));
         assert!(set.get("dracula").is_some_and(|t| t.is_dark()));
-        assert!(set.get("Tokyo Night Storm").is_some_and(|t| t.is_dark()));
-        assert!(set.get("Tokyo Night Moon").is_some_and(|t| t.is_dark()));
-        assert!(set.get("Tokyo Night Day").is_some_and(|t| !t.is_dark()));
+        // Light variants are named so; the light/dark pair setting relies
+        // on is_dark() telling them apart.
+        for theme in &themes {
+            let light = ["Light", "Latte", "Dawn", "Day"]
+                .iter()
+                .any(|word| theme.name.contains(word));
+            assert_eq!(theme.is_dark(), !light, "{}", theme.name);
+        }
     }
 
     #[test]
