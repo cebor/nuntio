@@ -235,6 +235,8 @@ New tabs and panes start in your Linux home directory (`~`). nuntio adds `TERM`,
 
 ## Themes
 
+Themes are color schemes: each one sets the foreground, background, cursor and selection colors and the 16 ANSI colors. The tab bar and other overlays take their colors from the theme too.
+
 ![The same window in Solarized Light and Tokyo Night, split diagonally](../assets/screenshots/themes.png)
 
 ### Built-in themes
@@ -244,6 +246,9 @@ New tabs and panes start in your Linux home directory (`~`). nuntio adds `TERM`,
 - `Solarized Light`
 - `Dracula`
 - `Tokyo Night`
+- `Tokyo Night Storm`
+- `Tokyo Night Moon`
+- `Tokyo Night Day`
 
 Theme names are case-insensitive. If a theme can't be found, nuntio falls back to `iTerm2 Default` and shows a warning with the list of available themes.
 
