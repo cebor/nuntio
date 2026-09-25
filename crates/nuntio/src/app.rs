@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use nuntio_config::{
@@ -52,6 +52,10 @@ const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
 const RESIZE_STEP_CELLS: u32 = 2;
 /// Immediate retries of a skipped frame before waiting for the next event.
 const MAX_FRAME_RETRIES: u32 = 3;
+/// How long a close that asked for confirmation waits for its repetition.
+const CONFIRM_CLOSE: Duration = Duration::from_secs(5);
+/// Title of the banner that asks to confirm a close.
+const CLOSE_BANNER: &str = "Close";
 
 /// WSLg's Weston (9.0, RDP backend) segfaults on pointer motion over windows
 /// with winit's client-side decorations, taking every Wayland client down with
@@ -218,6 +222,53 @@ fn themes_dir(config_path: Option<&Path>) -> Option<PathBuf> {
     nuntio_config::themes_dir(config_path?)
 }
 
+/// What a close request ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseTarget {
+    Window,
+    /// The tab holding this pane.
+    Tab(PaneId),
+    Pane(PaneId),
+}
+
+/// A close that named running programs and waits to be repeated.
+#[derive(Debug, Clone, Copy)]
+struct PendingClose {
+    target: CloseTarget,
+    until: Instant,
+}
+
+/// Asks to confirm closing `target`, in which the programs `running` run
+/// (one name per pane).
+fn close_message(running: &[String], target: CloseTarget) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for name in running {
+        let count = running.iter().filter(|n| *n == name).count();
+        let name = if count > 1 {
+            format!("{name} ({count})")
+        } else {
+            name.clone()
+        };
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    let (verb, pronoun) = if running.len() == 1 {
+        ("is", "it")
+    } else {
+        ("are", "them")
+    };
+    let again = match target {
+        CloseTarget::Window => "quit",
+        CloseTarget::Tab(_) => "close the tab",
+        CloseTarget::Pane(_) => "close the pane",
+    };
+    format!(
+        "{} {verb} still running; {again} again to end {pronoun}",
+        names.join(", ")
+    )
+}
+
 /// How the first pane starts, from the command line.
 #[derive(Debug, Default)]
 pub struct Startup {
@@ -253,6 +304,8 @@ pub struct App {
     startup: Startup,
     /// The last tab was closed; quit at the next opportunity.
     exit_requested: bool,
+    /// A close waiting for confirmation (`window.confirm_close`).
+    pending_close: Option<PendingClose>,
     /// A fatal error that ended the event loop.
     error: Option<anyhow::Error>,
 }
@@ -299,6 +352,7 @@ impl App {
             state: None,
             startup,
             exit_requested: false,
+            pending_close: None,
             error: None,
         };
         let theme_warning = app.update_palette();
@@ -792,6 +846,91 @@ impl App {
         state.window.request_redraw();
     }
 
+    /// Close what the user asked to close, unless programs run there and
+    /// this isn't the confirming repetition.
+    fn request_close(&mut self, target: CloseTarget) {
+        if !self.confirm_close(target) {
+            return;
+        }
+        match target {
+            CloseTarget::Window => self.exit_requested = true,
+            CloseTarget::Tab(id) => {
+                let index = self
+                    .state
+                    .as_ref()
+                    .and_then(|s| s.tabs.position(|c| c.contains(id)));
+                if let Some(index) = index {
+                    self.close_tab(index);
+                }
+            }
+            CloseTarget::Pane(id) => self.close_pane(id),
+        }
+    }
+
+    /// Close the tab at `index`, as `request_close` does.
+    fn request_close_tab(&mut self, index: usize) {
+        let id = self
+            .state
+            .as_ref()
+            .and_then(|s| s.tabs.iter().nth(index))
+            .map(|tab| tab.content.focused);
+        if let Some(id) = id {
+            self.request_close(CloseTarget::Tab(id));
+        }
+    }
+
+    /// Whether `target` may close now. If programs other than the shell
+    /// run in it, the first request names them in a banner, and only the
+    /// same request again within `CONFIRM_CLOSE` closes it.
+    fn confirm_close(&mut self, target: CloseTarget) -> bool {
+        let now = Instant::now();
+        let pending = self.pending_close.take();
+        let Some(state) = self
+            .state
+            .as_ref()
+            .filter(|_| self.config.window.confirm_close)
+        else {
+            return true;
+        };
+        let tabs = state.tabs.iter().map(|t| &t.content);
+        let panes: Vec<&Pane> = match target {
+            CloseTarget::Window => tabs.flat_map(|c| &c.panes).collect(),
+            CloseTarget::Tab(id) => tabs
+                .filter(|c| c.contains(id))
+                .flat_map(|c| &c.panes)
+                .collect(),
+            CloseTarget::Pane(id) => tabs.filter_map(|c| c.pane(id)).collect(),
+        };
+        // Where the process can't be seen (Windows, WSL), don't ask.
+        let running: Vec<String> = panes
+            .iter()
+            .filter(|p| p.term.foreground_is_shell() == Some(false))
+            .map(|p| p.term.process_name())
+            .collect();
+        if self
+            .banner
+            .as_ref()
+            .is_some_and(|b| b.title == CLOSE_BANNER)
+        {
+            self.banner = None;
+        }
+        if running.is_empty() || pending.is_some_and(|p| p.target == target && now < p.until) {
+            return true;
+        }
+        self.pending_close = Some(PendingClose {
+            target,
+            until: now + CONFIRM_CLOSE,
+        });
+        // Shown even over an error: closing must not look like it failed.
+        let message = close_message(&running, target);
+        tracing::info!("{message}");
+        self.banner = Banner::new(Severity::Warning, CLOSE_BANNER, vec![message]);
+        if let Some(state) = self.state.as_ref() {
+            state.window.request_redraw();
+        }
+        false
+    }
+
     fn run_action(&mut self, action: Action) {
         let Some(state) = self.state.as_mut() else {
             return;
@@ -822,8 +961,8 @@ impl App {
             Action::FontReset => self.set_font_size(self.config.font.size),
             Action::NewTab => self.new_tab(),
             Action::CloseTab => {
-                let index = state.tabs.active_index();
-                self.close_tab(index);
+                let id = state.content().focused;
+                self.request_close(CloseTarget::Tab(id));
             }
             Action::NextTab => {
                 let next = (state.tabs.active_index() + 1) % state.tabs.len();
@@ -837,7 +976,7 @@ impl App {
             Action::ReloadConfig => self.reload_config(),
             Action::ClosePane => {
                 let id = state.content().focused;
-                self.close_pane(id);
+                self.request_close(CloseTarget::Pane(id));
             }
             Action::SplitVertical => self.split(Axis::Vertical),
             Action::SplitHorizontal => self.split(Axis::Horizontal),
@@ -1099,7 +1238,7 @@ impl App {
                             moved: false,
                         });
                     }
-                    BarHit::Close(index) => self.close_tab(index),
+                    BarHit::Close(index) => self.request_close_tab(index),
                     BarHit::NewTab => self.new_tab(),
                     BarHit::Empty => {
                         // Double click maximizes, like a title bar.
@@ -1122,7 +1261,7 @@ impl App {
                         let maximized = state.window.is_maximized();
                         state.window.set_maximized(!maximized);
                     }
-                    BarHit::CloseWindow => self.exit_requested = true,
+                    BarHit::CloseWindow => self.request_close(CloseTarget::Window),
                 }
                 return;
             }
@@ -1134,7 +1273,7 @@ impl App {
             && let Some(BarHit::Tab(index) | BarHit::Close(index)) =
                 bar.hit(pos.x as f32, pos.y as f32)
         {
-            self.close_tab(index);
+            self.request_close_tab(index);
             return;
         }
 
@@ -1544,7 +1683,7 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         };
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => self.request_close(CloseTarget::Window),
             // Minimized on Windows: keep the grids, don't reflow to 1x1.
             WindowEvent::Resized(size) if size.width == 0 || size.height == 0 => {}
             WindowEvent::Resized(size) => {
@@ -1678,6 +1817,23 @@ mod tests {
     use winit::keyboard::ModifiersState;
 
     use super::*;
+
+    #[test]
+    fn close_messages_name_the_programs() {
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            close_message(&names(&["vim"]), CloseTarget::Pane(PaneId(0))),
+            "vim is still running; close the pane again to end it"
+        );
+        assert_eq!(
+            close_message(&names(&["ssh", "vim", "ssh"]), CloseTarget::Window),
+            "ssh (2), vim are still running; quit again to end them"
+        );
+        assert_eq!(
+            close_message(&names(&["htop", "top"]), CloseTarget::Tab(PaneId(1))),
+            "htop, top are still running; close the tab again to end them"
+        );
+    }
 
     #[test]
     fn alt_is_meta_outside_macos() {

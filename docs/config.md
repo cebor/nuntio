@@ -99,6 +99,7 @@ decorations = "custom"
 # macOS only; derived from `decorations` unless set.
 # macos_titlebar = "transparent"
 opacity = 1.0
+confirm_close = true
 
 [tabs]
 hide_when_single = true
@@ -154,6 +155,7 @@ option_as_meta = "none"
 | `decorations` | string | `"custom"` | `"custom"`: nuntio draws its own header. The tab bar holds the window buttons: on the right on Linux and Windows, and the native traffic lights on the left on macOS. Drag the bar to move the window, double-click it to maximize. The corners are rounded as usual on the OS: by Windows 11 itself, by nuntio on Linux (square when maximized, or if the graphics driver offers no transparent windows). `"system"`: the system's title bar and frame. Takes effect on the next start. |
 | `macos_titlebar` | string | from `decorations` | macOS only, overrides `decorations`. `"native"`: normal title bar. `"transparent"`: the tab bar moves into the title bar, next to the traffic-light buttons (what `"custom"` uses). `"none"`: no title bar and no buttons. |
 | `opacity` | float | `1.0` | Opacity of the terminal background, `0.0` (clear) to `1.0` (opaque). Text, cells with their own background color, the tab bar and the status bar stay opaque. Changing it applies right away, except that going below `1.0` from an opaque start needs a restart (on Linux with `decorations = "custom"` the window is always transparent, so it applies at once). Needs a compositor that supports transparent windows. |
+| `confirm_close` | bool | `true` | Ask before closing a window, tab or pane in which a program still runs (not just the shell at its prompt): a banner names the programs, and closing again within 5 seconds confirms. Where nuntio can't see the running process (currently Windows and WSL shells), it closes without asking. |
 
 ### `[tabs]`
 

@@ -159,6 +159,8 @@ pub struct Window {
     pub decorations: Decorations,
     /// Overrides `decorations` on macOS when set.
     pub macos_titlebar: Option<MacosTitlebar>,
+    /// Ask before closing a window, tab or pane in which a program runs.
+    pub confirm_close: bool,
 }
 
 impl Window {
@@ -181,6 +183,7 @@ impl Default for Window {
             opacity: 1.0,
             decorations: Decorations::default(),
             macos_titlebar: None,
+            confirm_close: true,
         }
     }
 }

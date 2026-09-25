@@ -342,6 +342,13 @@ pub static SETTINGS: &[Setting] = &[
         "Opacity of the terminal background, 0.0 (clear) to 1.0 (opaque). Text, colored backgrounds and the bars stay opaque. Going below 1.0 needs a restart unless the window already is transparent.",
     ),
     setting(
+        "window.confirm_close",
+        Section::Window,
+        "Confirm close",
+        Kind::Bool,
+        "Ask before closing a window, tab or pane in which a program still runs: close it again within a few seconds to confirm.",
+    ),
+    setting(
         "tabs.hide_when_single",
         Section::Tabs,
         "Hide when single",
