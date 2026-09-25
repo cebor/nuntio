@@ -35,7 +35,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Tabs**: drag to reorder, middle-click to close, hidden while only one tab is open. Titles follow the shell's title or the foreground process.
 - **Split panes**: split side by side or top and bottom, move focus and resize with the keyboard or by dragging dividers, zoom a pane to fill the tab. Inactive panes are dimmed.
 - **New tabs and panes open in the current directory** of the focused pane.
-- **Find bar** with incremental search and a regex mode (<kbd>Alt</kbd>+<kbd>R</kbd>).
+- **Find bar** with incremental search, a match count and a regex mode (<kbd>Alt</kbd>+<kbd>R</kbd>). It starts with the selected text, if there is one.
 - **Clickable URLs**: hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on macOS) and click.
 - **Themes**: five built in, your own as TOML or iTerm2 `.itermcolors`, and a light/dark pair that follows the OS appearance.
 - **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.

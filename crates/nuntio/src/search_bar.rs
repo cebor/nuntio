@@ -2,7 +2,7 @@
 //! `nuntio_term`.
 
 use nuntio_render::{CellMetrics, UiRect, UiText};
-use nuntio_term::{Rgb, Search, TermHandle};
+use nuntio_term::{MatchPosition, Rgb, Search, TermHandle};
 use unicode_width::UnicodeWidthStr;
 
 use crate::pane_tree::Rect;
@@ -74,13 +74,23 @@ impl SearchBar {
         }
     }
 
-    fn status(&self) -> &str {
+    /// Replace the query, e.g. with the selected text, and search.
+    pub fn set_query(&mut self, query: String, term: &TermHandle) {
+        self.query = query;
+        self.update(term);
+    }
+
+    /// The regex error, "no match", or where the current match is ("3/17").
+    fn status(&self) -> (String, bool) {
         if let Some(error) = &self.error {
-            error
-        } else if self.search.as_ref().is_some_and(|s| !s.has_match()) {
-            "no match"
-        } else {
-            ""
+            return (error.clone(), true);
+        }
+        let Some(search) = &self.search else {
+            return (String::new(), false);
+        };
+        match search.position() {
+            None => ("no match".into(), true),
+            Some(position) => (format_position(position), false),
         }
     }
 
@@ -138,21 +148,21 @@ impl SearchBar {
         if self.regex {
             right.push_str(".*");
         }
-        let status = self.status();
+        let (status, is_error) = self.status();
         if !status.is_empty() {
             if !right.is_empty() {
                 right.push(' ');
             }
-            right.push_str(status);
+            right.push_str(&status);
         }
         let right = head(&right, columns.saturating_sub(4));
         let right_width = right.width();
         let query = tail(&self.query, columns.saturating_sub(right_width + 2));
 
-        let right_color = if status.is_empty() {
-            mix(foreground, background, 0.4)
-        } else {
+        let right_color = if is_error {
             mix(foreground, ERROR_RED, 0.6)
+        } else {
+            mix(foreground, background, 0.4)
         };
         let (x, y) = (bounds.x + padding, bounds.y + padding);
         let cw = cell.width as f32;
@@ -175,6 +185,15 @@ impl SearchBar {
             },
         ];
         (rects, texts)
+    }
+}
+
+/// "3/17", or "999+" when counting stopped before the current match.
+fn format_position(position: MatchPosition) -> String {
+    let more = if position.more { "+" } else { "" };
+    match position.index {
+        Some(index) => format!("{index}/{}{more}", position.total),
+        None => format!("{}{more}", position.total),
     }
 }
 
@@ -248,6 +267,14 @@ mod tests {
         assert_eq!(texts[1].text, ".* bad");
         // Right-aligned: 44 columns wide, starting after the padding.
         assert_eq!(texts[1].x, 546.0 + 4.0 + (44 - 6) as f32 * 10.0);
+    }
+
+    #[test]
+    fn match_positions() {
+        let position = |index, total, more| MatchPosition { index, total, more };
+        assert_eq!(format_position(position(Some(3), 17, false)), "3/17");
+        assert_eq!(format_position(position(Some(3), 999, true)), "3/999+");
+        assert_eq!(format_position(position(None, 999, true)), "999+");
     }
 
     #[test]

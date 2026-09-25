@@ -816,8 +816,18 @@ impl App {
             }
             Action::ResizePane(direction) => self.resize_pane(direction),
             Action::Search => {
-                if state.search.is_none() {
-                    state.search = Some(SearchBar::new());
+                // A selected piece of a line becomes the query.
+                let selection = state
+                    .term()
+                    .selection_text()
+                    .map(|text| text.trim_end_matches(['\r', '\n']).to_owned())
+                    .filter(|text| !text.trim().is_empty() && !text.contains('\n'));
+                state.search.get_or_insert_with(SearchBar::new);
+                if let Some(text) = selection
+                    && let Some((bar, term)) = state.search_and_term()
+                {
+                    term.clear_selection();
+                    bar.set_query(text, term);
                 }
             }
             Action::ZoomPane => {

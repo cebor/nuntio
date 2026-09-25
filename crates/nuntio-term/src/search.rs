@@ -6,6 +6,9 @@ use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 
+/// Matches counted at most; beyond that the count shows as "999+".
+const MAX_COUNTED: usize = 999;
+
 /// The query is not a valid regular expression.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -21,6 +24,18 @@ pub struct Search {
     /// count from the top of the screen, so new output that grows the
     /// scrollback moves the text they point at upwards.
     history: usize,
+    /// Where the current match is among all matches, as of the last `find`.
+    position: Option<MatchPosition>,
+}
+
+/// The current match's place among all matches in the scrollback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchPosition {
+    /// 1-based index of the current match, if it is among those counted.
+    pub index: Option<usize>,
+    pub total: usize,
+    /// There are more than `total` matches; counting stopped.
+    pub more: bool,
 }
 
 impl Search {
@@ -43,6 +58,7 @@ impl Search {
             current: None,
             anchor: None,
             history: 0,
+            position: None,
         })
     }
 
@@ -85,6 +101,11 @@ impl Search {
 
     pub fn has_match(&self) -> bool {
         self.current.is_some()
+    }
+
+    /// Where the current match is among all matches, if there is one.
+    pub fn position(&self) -> Option<MatchPosition> {
+        self.position.filter(|_| self.current.is_some())
     }
 }
 
@@ -131,7 +152,30 @@ pub(crate) fn find<T: EventListener>(term: &mut Term<T>, search: &mut Search, up
     if let Some(m) = &search.current {
         term.scroll_to_point(*m.start());
     }
+    search.position = search.current.is_some().then(|| count(term, search));
     search.current.is_some()
+}
+
+/// Count the matches in the whole scrollback, up to `MAX_COUNTED`, and
+/// find the current one among them.
+fn count<T>(term: &Term<T>, search: &mut Search) -> MatchPosition {
+    let start = Point::new(term.topmost_line(), Column(0));
+    let end = Point::new(term.bottommost_line(), term.last_column());
+    let current = search.current.as_ref().map(|m| *m.start());
+    let mut total = 0;
+    let mut index = None;
+    let mut more = false;
+    for m in RegexIter::new(start, end, Direction::Right, term, &mut search.regex) {
+        if total == MAX_COUNTED {
+            more = true;
+            break;
+        }
+        total += 1;
+        if Some(*m.start()) == current {
+            index = Some(total);
+        }
+    }
+    MatchPosition { index, total, more }
 }
 
 /// All matches in the visible part of the screen, for highlighting.
@@ -195,6 +239,21 @@ mod tests {
         assert!(find(&mut term, &mut search, false));
         let next = search.current_in(&term).cloned().unwrap();
         assert!(next.start().line > current.start().line);
+    }
+
+    #[test]
+    fn matches_are_counted_across_the_scrollback() {
+        let mut term = term(3);
+        feed(&mut term, "a1\r\nb\r\na2\r\nc\r\nd\r\na3\r\ne");
+        let mut search = Search::new("a", false).unwrap();
+        assert!(find(&mut term, &mut search, true));
+        let position = search.position().unwrap();
+        assert_eq!(
+            (position.index, position.total, position.more),
+            (Some(3), 3, false)
+        );
+        assert!(find(&mut term, &mut search, true));
+        assert_eq!(search.position().unwrap().index, Some(2));
     }
 
     #[test]
