@@ -163,6 +163,7 @@ impl SearchBar {
                 text: format!("{query}▏"),
                 color: foreground,
                 bold: false,
+                small: false,
             },
             UiText {
                 x: x + columns.saturating_sub(right_width) as f32 * cw,
@@ -170,6 +171,7 @@ impl SearchBar {
                 text: right,
                 color: right_color,
                 bold: false,
+                small: false,
             },
         ];
         (rects, texts)

@@ -1,4 +1,5 @@
-//! Status bar layout and drawing: system graphs, date and time.
+//! Status bar layout and drawing: system graphs, date and time. It is
+//! laid out in the cells of the small UI font (`small_cell_metrics`).
 
 use std::collections::VecDeque;
 
@@ -144,13 +145,14 @@ impl StatusBar {
         foreground: Rgb,
     ) -> (Vec<UiRect>, Vec<UiText>) {
         let bar_bg = bar_background(background);
+        // Muted, so the bar stays in the background.
         let colors = Colors {
             background: bar_bg,
-            label: mix(foreground, background, 0.45),
-            value: foreground,
+            label: mix(foreground, background, 0.55),
+            value: mix(foreground, background, 0.25),
             track: mix(bar_bg, foreground, 0.06),
-            graph: mix(bar_bg, foreground, 0.55),
-            graph_alt: mix(bar_bg, foreground, 0.30),
+            graph: mix(bar_bg, foreground, 0.45),
+            graph_alt: mix(bar_bg, foreground, 0.25),
             separator: mix(bar_bg, foreground, 0.15),
         };
         let mut out = Output {
@@ -194,6 +196,7 @@ impl StatusBar {
                 text,
                 color,
                 bold: false,
+                small: true,
             });
         };
         let graph_x = x + CONTENT as f32 * cw;

@@ -247,6 +247,7 @@ impl TabBar {
                 text: title,
                 color,
                 bold: false,
+                small: false,
             });
 
             let indicator_x = slot.x + self.padding + ((side - cw) / 2.0).floor();
@@ -257,6 +258,7 @@ impl TabBar {
                     text: "●".into(),
                     color: BELL_COLOR,
                     bold: false,
+                    small: false,
                 });
             } else if label.activity {
                 texts.push(UiText {
@@ -265,6 +267,7 @@ impl TabBar {
                     text: "•".into(),
                     color: inactive_text,
                     bold: false,
+                    small: false,
                 });
             }
 
@@ -293,6 +296,7 @@ impl TabBar {
                         inactive_text
                     },
                     bold: false,
+                    small: false,
                 });
             }
         }

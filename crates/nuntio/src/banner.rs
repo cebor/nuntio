@@ -99,6 +99,7 @@ impl Banner {
                 text,
                 color: foreground,
                 bold: false,
+                small: false,
             },
         )
     }

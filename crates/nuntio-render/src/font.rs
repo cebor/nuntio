@@ -40,10 +40,16 @@ pub struct Fonts {
     system: FontSystem,
     swash: SwashCache,
     buffer: Buffer,
+    /// Shapes the smaller UI text (see [`SMALL_TEXT_SCALE`]).
+    small_buffer: Buffer,
     family: Option<String>,
     px_size: f32,
     metrics: CellMetrics,
+    small_metrics: CellMetrics,
 }
+
+/// Size of small UI text (the status bar) relative to the terminal font.
+pub const SMALL_TEXT_SCALE: f32 = 0.9;
 
 /// Font sizes are given in points. macOS treats 1pt as one logical pixel,
 /// elsewhere the usual 96 DPI convention applies.
@@ -132,20 +138,24 @@ impl Fonts {
         let mut system = FontSystem::new();
         let px_size = points_to_pixels(size_points, scale_factor);
         let buffer = new_buffer(&mut system, px_size);
+        let small_buffer = new_buffer(&mut system, px_size * SMALL_TEXT_SCALE);
+        let placeholder = CellMetrics {
+            width: 1,
+            height: 1,
+            baseline: 1,
+            underline_y: 1,
+            stroke: 1,
+            strikeout_y: 1,
+        };
         let mut fonts = Self {
             system,
             swash: SwashCache::new(),
             buffer,
+            small_buffer,
             family: None,
             px_size,
-            metrics: CellMetrics {
-                width: 1,
-                height: 1,
-                baseline: 1,
-                underline_y: 1,
-                stroke: 1,
-                strikeout_y: 1,
-            },
+            metrics: placeholder,
+            small_metrics: placeholder,
         };
         let warning = fonts.set_family(family);
         (fonts, warning)
@@ -183,8 +193,7 @@ impl Fonts {
             }
         };
         self.family = resolved;
-        self.buffer = new_buffer(&mut self.system, self.px_size);
-        self.metrics = self.measure();
+        self.remeasure();
         tracing::info!(family = ?self.family, px_size = self.px_size, metrics = ?self.metrics, "font loaded");
         warning
     }
@@ -192,13 +201,25 @@ impl Fonts {
     /// Change font size or scale factor. Returns the new cell metrics.
     pub fn set_size(&mut self, size_points: f32, scale_factor: f64) -> CellMetrics {
         self.px_size = points_to_pixels(size_points, scale_factor);
-        self.buffer = new_buffer(&mut self.system, self.px_size);
-        self.metrics = self.measure();
+        self.remeasure();
         self.metrics
+    }
+
+    /// Rebuild both buffers and their metrics after a size or family change.
+    fn remeasure(&mut self) {
+        self.buffer = new_buffer(&mut self.system, self.px_size);
+        self.small_buffer = new_buffer(&mut self.system, self.px_size * SMALL_TEXT_SCALE);
+        self.metrics = self.measure(false);
+        self.small_metrics = self.measure(true);
     }
 
     pub fn metrics(&self) -> CellMetrics {
         self.metrics
+    }
+
+    /// Cell metrics of small UI text.
+    pub fn small_metrics(&self) -> CellMetrics {
+        self.small_metrics
     }
 
     fn attrs(&self, style: FaceStyle) -> Attrs<'_> {
@@ -220,35 +241,53 @@ impl Fonts {
             })
     }
 
-    fn shape(&mut self, text: &str, style: FaceStyle) {
+    fn buffer(&self, small: bool) -> &Buffer {
+        if small {
+            &self.small_buffer
+        } else {
+            &self.buffer
+        }
+    }
+
+    fn shape(&mut self, text: &str, style: FaceStyle, small: bool) {
         let attrs = self.attrs(style);
         // `attrs` borrows `self.family`; clone it out so the buffer can be borrowed mutably.
         let attrs = cosmic_text::AttrsOwned::new(&attrs);
-        self.buffer
-            .set_text(text, &attrs.as_attrs(), Shaping::Advanced, None);
-        self.buffer.shape_until_scroll(&mut self.system, false);
+        let buffer = if small {
+            &mut self.small_buffer
+        } else {
+            &mut self.buffer
+        };
+        buffer.set_text(text, &attrs.as_attrs(), Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.system, false);
     }
 
-    fn measure(&mut self) -> CellMetrics {
+    fn measure(&mut self, small: bool) -> CellMetrics {
         self.shape(
             "M",
             FaceStyle {
                 bold: false,
                 italic: false,
             },
+            small,
         );
-        let run = self.buffer.layout_runs().next();
+        let px_size = if small {
+            self.px_size * SMALL_TEXT_SCALE
+        } else {
+            self.px_size
+        };
+        let run = self.buffer(small).layout_runs().next();
         let glyph = run.and_then(|run| run.glyphs.first());
         let (advance, font_id) = match glyph {
             Some(g) => (g.w, Some(g.font_id)),
-            None => (self.px_size * 0.6, None),
+            None => (px_size * 0.6, None),
         };
 
         let font = font_id.and_then(|id| self.system.get_font(id, Weight::NORMAL));
         let (ascent, descent, leading, underline, strikeout) = match &font {
             Some(font) => {
                 let m = font.metrics();
-                let scale = self.px_size / m.units_per_em as f32;
+                let scale = px_size / m.units_per_em as f32;
                 (
                     m.ascent * scale,
                     -m.descent * scale,
@@ -258,7 +297,7 @@ impl Fonts {
                     m.strikeout.map(|d| (d.offset * scale, d.thickness * scale)),
                 )
             }
-            None => (self.px_size * 0.8, self.px_size * 0.2, 0.0, None, None),
+            None => (px_size * 0.8, px_size * 0.2, 0.0, None, None),
         };
 
         let baseline = (ascent + leading / 2.0).round().max(1.0);
@@ -278,9 +317,14 @@ impl Fonts {
     }
 
     /// Shape one grapheme (with fallback) and rasterize its glyphs.
-    pub fn rasterize(&mut self, text: &str, style: FaceStyle) -> Vec<RasterGlyph> {
-        self.shape(text, style);
-        let Some(run) = self.buffer.layout_runs().next() else {
+    pub fn rasterize(&mut self, text: &str, style: FaceStyle, small: bool) -> Vec<RasterGlyph> {
+        self.shape(text, style, small);
+        let buffer = if small {
+            &self.small_buffer
+        } else {
+            &self.buffer
+        };
+        let Some(run) = buffer.layout_runs().next() else {
             return Vec::new();
         };
 

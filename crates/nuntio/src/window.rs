@@ -290,7 +290,7 @@ impl WindowState {
         if !config.status_bar.visible() {
             return None;
         }
-        let height = StatusBar::height(self.renderer.cell_metrics(), self.scale());
+        let height = StatusBar::height(self.renderer.small_cell_metrics(), self.scale());
         let top = match config.status_bar.position {
             StatusBarPosition::Top => self.tab_bar(config).map_or(0.0, |bar| bar.height),
             StatusBarPosition::Bottom => self.window.inner_size().height as f32 - height,
@@ -307,7 +307,7 @@ impl WindowState {
             &config.status_bar.items,
             stats,
             datetime,
-            self.renderer.cell_metrics(),
+            self.renderer.small_cell_metrics(),
             self.scale(),
         ))
     }

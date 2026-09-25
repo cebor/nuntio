@@ -63,6 +63,8 @@ fn rgba(c: Rgb) -> [f32; 4] {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GlyphKey {
     Char(char, FaceStyle),
+    /// A character of small UI text.
+    Small(char, FaceStyle),
     /// A base character with combining marks.
     Cluster(Box<str>, FaceStyle),
 }
@@ -295,6 +297,11 @@ impl Renderer {
         self.fonts.metrics()
     }
 
+    /// Cell metrics of small UI text ([`UiText::small`]).
+    pub fn small_cell_metrics(&self) -> CellMetrics {
+        self.fonts.small_metrics()
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
     }
@@ -437,7 +444,12 @@ impl Renderer {
     }
 
     fn push_text(&mut self, text: &UiText) -> Result<(), AtlasFull> {
-        let cw = self.fonts.metrics().width as f32;
+        let metrics = if text.small {
+            self.fonts.small_metrics()
+        } else {
+            self.fonts.metrics()
+        };
+        let cw = metrics.width as f32;
         let style = FaceStyle {
             bold: text.bold,
             italic: false,
@@ -449,7 +461,12 @@ impl Renderer {
                 continue;
             }
             if c != ' ' {
-                let sprites = self.glyph_sprites(GlyphKey::Char(c, style))?;
+                let key = if text.small {
+                    GlyphKey::Small(c, style)
+                } else {
+                    GlyphKey::Char(c, style)
+                };
+                let sprites = self.glyph_sprites(key)?;
                 self.push_sprites(&sprites, x, text.y, text.color);
             }
             x += width as f32 * cw;
@@ -580,15 +597,20 @@ impl Renderer {
         }
 
         let (text, style) = match &key {
-            GlyphKey::Char(c, style) => (c.to_string(), *style),
+            GlyphKey::Char(c, style) | GlyphKey::Small(c, style) => (c.to_string(), *style),
             GlyphKey::Cluster(s, style) => (s.to_string(), *style),
         };
-        let metrics = self.fonts.metrics();
+        let small = matches!(key, GlyphKey::Small(..));
+        let metrics = if small {
+            self.fonts.small_metrics()
+        } else {
+            self.fonts.metrics()
+        };
         let queue = &self.gpu.queue;
         let mut sprites = Vec::new();
 
         // Box-drawing and block characters are drawn to fill the cell exactly.
-        if let GlyphKey::Char(c, _) = key
+        if let GlyphKey::Char(c, _) | GlyphKey::Small(c, _) = key
             && let Some(mask) =
                 box_drawing::rasterize(c, metrics.width, metrics.height, metrics.stroke)
         {
@@ -606,7 +628,7 @@ impl Renderer {
 
         let baseline = metrics.baseline as i32;
         let glyphs = if sprites.is_empty() {
-            self.fonts.rasterize(&text, style)
+            self.fonts.rasterize(&text, style, small)
         } else {
             Vec::new()
         };

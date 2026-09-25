@@ -49,4 +49,7 @@ pub struct UiText {
     pub text: String,
     pub color: Rgb,
     pub bold: bool,
+    /// Drawn in the smaller UI font, whose cells are
+    /// `Renderer::small_cell_metrics`.
+    pub small: bool,
 }
