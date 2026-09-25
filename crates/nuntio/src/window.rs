@@ -442,6 +442,18 @@ impl WindowState {
         PhysicalSize::new(width, height)
     }
 
+    /// Drop every cached tab title, so the next frame computes them all.
+    /// Refreshing only the expired ones would leave others cached, which
+    /// would schedule yet another refresh, tab after tab.
+    pub fn invalidate_titles(&mut self) {
+        for tab in self.tabs.iter_mut() {
+            for pane in &mut tab.content.panes {
+                pane.title_cache = None;
+            }
+        }
+        self.title_refresh = None;
+    }
+
     /// Fit every pane's terminal to its area, in all tabs.
     pub fn resize_terms(&mut self, config: &Config) {
         let area = self.terminal_area(config);

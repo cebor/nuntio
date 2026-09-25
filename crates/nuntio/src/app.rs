@@ -1415,7 +1415,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         if state.title_refresh.is_some_and(|t| now >= t) {
             // The redraw computes fresh titles and schedules no further one.
-            state.title_refresh = None;
+            state.invalidate_titles();
             state.window.request_redraw();
         }
         if let Some(scroll) = state.mouse.autoscroll
