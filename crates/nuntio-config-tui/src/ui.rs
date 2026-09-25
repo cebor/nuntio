@@ -85,14 +85,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
             let items: Vec<ListItem> = picker
                 .visible
                 .iter()
-                .map(|&entry| {
+                .enumerate()
+                .map(|(index, &entry)| {
                     let mut spans = Vec::new();
                     if theme_target
                         && let Some(i) = entry
                         && let Pick::Value(name) = &picker.choices[i].pick
                         && let Some(theme) = app.themes.get(name)
                     {
-                        spans.extend(swatch(theme, 8));
+                        spans.extend(swatch(theme, 8, index == picker.selected));
                         spans.push(Span::raw(" "));
                     }
                     let label = picker.label(entry);
@@ -288,7 +289,8 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App) {
         + 2;
     let items: Vec<ListItem> = rows
         .iter()
-        .map(|&row| {
+        .enumerate()
+        .map(|(index, &row)| {
             let marker = match row {
                 Row::Keybinding(i) if app.binding_problem(i).is_some() => {
                     Span::styled("⚠ ", tone(Tone::Warn))
@@ -306,7 +308,7 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App) {
                 && let Some(theme) = app.themes.get(&app.theme_name(slot))
             {
                 spans.push(Span::raw("  "));
-                spans.extend(swatch(theme, 16));
+                spans.extend(swatch(theme, 16, focused && index == app.row));
             }
             let mut item = ListItem::new(Line::from(spans));
             if app.row_is_foreign(row) {
@@ -331,21 +333,25 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Colored blocks for the theme's first `count` ANSI colors on its
-/// background.
-fn swatch(theme: &Theme, count: usize) -> Vec<Span<'static>> {
+/// background. In a row highlighted with [`Modifier::REVERSED`], pass
+/// `highlighted` so the colors are swapped in advance and the highlight
+/// swaps them back; otherwise the blocks turn into the background color.
+fn swatch(theme: &Theme, count: usize, highlighted: bool) -> Vec<Span<'static>> {
     let rgb = |c: nuntio_config::Color| Color::Rgb(c.r, c.g, c.b);
+    let style = |fg, bg| {
+        let (fg, bg) = if highlighted { (bg, fg) } else { (fg, bg) };
+        Style::new().fg(rgb(fg)).bg(rgb(bg))
+    };
     let mut spans = vec![Span::styled(
         " Aa ",
-        Style::new()
-            .fg(rgb(theme.foreground))
-            .bg(rgb(theme.background)),
+        style(theme.foreground, theme.background),
     )];
     spans.extend(
         theme
             .ansi()
             .iter()
             .take(count)
-            .map(|&c| Span::styled("▆", Style::new().fg(rgb(c)).bg(rgb(theme.background)))),
+            .map(|&c| Span::styled("▆", style(c, theme.background))),
     );
     spans
 }
