@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::schema::{
     DIM_INACTIVE, FONT_SIZE, MAX_PADDING, MAX_SCROLLBACK, OPACITY, WINDOW_COLUMNS, WINDOW_LINES,
 };
-use crate::{Config, Shell, StatusBar};
+use crate::{Config, Shell, StatusBar, StatusItem};
 
 /// `$XDG_CONFIG_HOME/nuntio`, else `~/.config/nuntio` — on every platform,
 /// so dotfiles work the same on Linux, macOS and Windows.
@@ -214,8 +214,8 @@ impl Shell {
 impl StatusBar {
     fn validate(&self) -> Result<(), String> {
         for (i, item) in self.items.iter().enumerate() {
-            if self.items[..i].contains(item) {
-                let name = format!("{item:?}").to_lowercase();
+            if *item != StatusItem::Spring && self.items[..i].contains(item) {
+                let name = item.name();
                 return Err(format!("`status_bar.items` lists \"{name}\" twice"));
             }
         }
@@ -314,6 +314,11 @@ mod tests {
         assert!(err.starts_with("line 2:"), "{err}");
         let err = parse("[status_bar]\nitems = [\"cpu\", \"datetime\", \"cpu\"]").unwrap_err();
         assert!(err.contains("\"cpu\" twice"), "{err}");
+        // Springs may repeat.
+        let cfg = parse("[status_bar]\nitems = [\"cpu\", \"<->\", \"<->\", \"datetime\"]")
+            .unwrap()
+            .config;
+        assert_eq!(cfg.status_bar.items[1], StatusItem::Spring);
         let err = parse("[status_bar]\ndatetime_format = \"%H:%\"").unwrap_err();
         assert!(err.contains("status_bar.datetime_format"), "{err}");
         assert!(parse("[status_bar]\ndatetime_format = \"%a %d.%m. %H:%M\"").is_ok());

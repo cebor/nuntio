@@ -88,8 +88,25 @@ pub struct StatusBar {
     padding: f32,
     scale: f32,
     cell: CellMetrics,
-    /// Items that fit, with their left edge.
-    slots: Vec<(StatusItem, f32)>,
+    /// Items that fit, left to right.
+    slots: Vec<Slot>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    item: StatusItem,
+    /// Left edge.
+    x: f32,
+    /// A spring separates it from the previous item.
+    spring_before: bool,
+}
+
+/// A piece of the bar to lay out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Piece {
+    /// An item this wide.
+    Item(f32),
+    Spring,
 }
 
 impl StatusBar {
@@ -99,7 +116,8 @@ impl StatusBar {
     }
 
     /// Lay out `items` in a bar of `width` pixels whose top edge is at
-    /// `top`. Items without data to show (no battery) are left out.
+    /// `top`. Springs share the free space. Items without data to show
+    /// (no battery) are left out.
     pub fn new(
         width: f32,
         top: f32,
@@ -117,15 +135,28 @@ impl StatusBar {
             .filter(|&item| item != StatusItem::Battery || stats.latest.battery.is_some())
             .collect();
         let cw = cell.width as f32;
-        let widths: Vec<f32> = shown
+        let pieces: Vec<Piece> = shown
             .iter()
-            .map(|&item| item_cells(item, datetime) as f32 * cw)
+            .map(|&item| match item {
+                StatusItem::Spring => Piece::Spring,
+                item => Piece::Item(item_cells(item, datetime) as f32 * cw),
+            })
             .collect();
-        let slots = layout(width, cw, GAP_CELLS as f32 * cw, &widths)
-            .into_iter()
-            .zip(shown)
-            .filter_map(|(x, item)| Some((item, x?)))
-            .collect();
+        let mut positions = layout(width, cw, GAP_CELLS as f32 * cw, &pieces).into_iter();
+        let mut slots = Vec::new();
+        let mut spring_before = false;
+        for item in shown {
+            if item == StatusItem::Spring {
+                spring_before = true;
+            } else if let Some(x) = positions.next().flatten() {
+                slots.push(Slot {
+                    item,
+                    x,
+                    spring_before,
+                });
+                spring_before = false;
+            }
+        }
         Self {
             top,
             height,
@@ -159,21 +190,22 @@ impl StatusBar {
             rects: vec![rect(0.0, self.top, self.width, self.height, bar_bg)],
             texts: Vec::new(),
         };
-        // A thin line in the middle of the gap before every item but the first.
+        // A thin line in the middle of the gap between neighbouring items;
+        // springs separate items by space alone.
         let gap = GAP_CELLS as f32 * self.cell.width as f32;
         let (line_top, line_height) = self.graph_box();
         let stroke = self.stroke();
-        for &(_, x) in self.slots.iter().skip(1) {
+        for slot in self.slots.iter().skip(1).filter(|s| !s.spring_before) {
             out.rects.push(rect(
-                (x - (gap + stroke) / 2.0).round(),
+                (slot.x - (gap + stroke) / 2.0).round(),
                 line_top,
                 stroke,
                 line_height,
                 colors.separator,
             ));
         }
-        for &(item, x) in &self.slots {
-            self.draw_item(&mut out, item, x, stats, datetime, &colors);
+        for slot in &self.slots {
+            self.draw_item(&mut out, slot.item, slot.x, stats, datetime, &colors);
         }
         (out.rects, out.texts)
     }
@@ -241,6 +273,7 @@ impl StatusBar {
                 self.clock_icon(out, x, colors);
                 text(CONTENT, datetime.to_owned(), colors.value, out);
             }
+            StatusItem::Spring => {}
         }
     }
 
@@ -523,29 +556,67 @@ fn item_cells(item: StatusItem, datetime: &str) -> usize {
         StatusItem::Battery => CONTENT + 4 + 2,
         // icon "Fri 25 Sep 10:50"
         StatusItem::Datetime => CONTENT + datetime.width(),
+        StatusItem::Spring => 0,
     }
 }
 
-/// Left edges of items of the given widths: the last at the right edge,
-/// the others from the left. Items that don't fit before the last one are
-/// dropped from the end, so earlier items take precedence.
-fn layout(width: f32, margin: f32, gap: f32, widths: &[f32]) -> Vec<Option<f32>> {
-    let Some((&last, rest)) = widths.split_last() else {
-        return Vec::new();
-    };
-    let right = (width - margin - last).max(margin);
-    let mut x = margin;
-    let mut fits = true;
-    let mut out: Vec<Option<f32>> = rest
+/// Left edges of the items among `pieces`, one per item. Items are a gap
+/// apart; springs share the space that is left over evenly. Without
+/// springs, the items fill from the left. If they don't fit, items are
+/// dropped from the end, but the last one only when nothing else is left:
+/// it keeps the left margin even if it is too wide.
+fn layout(width: f32, margin: f32, gap: f32, pieces: &[Piece]) -> Vec<Option<f32>> {
+    let widths: Vec<f32> = pieces
         .iter()
-        .map(|&w| {
-            fits &= x + w + gap <= right;
-            let pos = fits.then_some(x);
-            x += w + gap;
-            pos
+        .filter_map(|p| match p {
+            Piece::Item(w) => Some(*w),
+            Piece::Spring => None,
         })
         .collect();
-    out.push(Some(right));
+    let mut keep = vec![true; widths.len()];
+    let available = width - 2.0 * margin;
+    let needed = |keep: &[bool]| {
+        let (sum, count) = widths
+            .iter()
+            .zip(keep)
+            .filter(|(_, k)| **k)
+            .fold((0.0, 0usize), |(sum, n), (w, _)| (sum + w, n + 1));
+        sum + gap * count.saturating_sub(1) as f32
+    };
+    while needed(&keep) > available {
+        let droppable = widths.len().saturating_sub(1);
+        match keep[..droppable].iter().rposition(|k| *k) {
+            Some(i) => keep[i] = false,
+            None => break,
+        }
+    }
+    let springs = pieces.iter().filter(|p| **p == Piece::Spring).count();
+    let spring = if springs == 0 {
+        0.0
+    } else {
+        (available - needed(&keep)).max(0.0) / springs as f32
+    };
+    let mut x = margin;
+    let mut placed = false;
+    let mut keep = keep.into_iter();
+    let mut out = Vec::with_capacity(widths.len());
+    for piece in pieces {
+        match *piece {
+            Piece::Spring => x += spring,
+            Piece::Item(w) => {
+                if keep.next() == Some(true) {
+                    if placed {
+                        x += gap;
+                    }
+                    out.push(Some(x.round()));
+                    x += w;
+                    placed = true;
+                } else {
+                    out.push(None);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -579,6 +650,7 @@ fn format_gib(bytes: u64) -> String {
 mod tests {
     use super::*;
     use crate::sysmon::{Battery, Memory, Throughput};
+    use nuntio_config::arranged;
 
     const CELL: CellMetrics = CellMetrics {
         width: 10,
@@ -589,25 +661,86 @@ mod tests {
         strikeout_y: 10,
     };
 
+    use Piece::{Item, Spring};
+
     #[test]
-    fn last_item_is_right_aligned_the_rest_fill_from_the_left() {
+    fn a_spring_pushes_the_items_after_it_to_the_right() {
         assert_eq!(
-            layout(1000.0, 10.0, 20.0, &[100.0, 200.0, 50.0]),
+            layout(
+                1000.0,
+                10.0,
+                20.0,
+                &[Item(100.0), Item(200.0), Spring, Item(50.0)]
+            ),
             [Some(10.0), Some(130.0), Some(940.0)]
         );
-        assert_eq!(layout(1000.0, 10.0, 20.0, &[50.0]), [Some(940.0)]);
+        assert_eq!(
+            layout(1000.0, 10.0, 20.0, &[Spring, Item(50.0)]),
+            [Some(940.0)]
+        );
         assert_eq!(layout(1000.0, 10.0, 20.0, &[]), []);
+        assert_eq!(layout(1000.0, 10.0, 20.0, &[Spring]), []);
+    }
+
+    #[test]
+    fn without_springs_items_fill_from_the_left() {
+        assert_eq!(
+            layout(1000.0, 10.0, 20.0, &[Item(100.0), Item(50.0), Spring]),
+            [Some(10.0), Some(130.0)]
+        );
+        assert_eq!(
+            layout(1000.0, 10.0, 20.0, &[Item(100.0), Item(50.0)]),
+            [Some(10.0), Some(130.0)]
+        );
+    }
+
+    #[test]
+    fn springs_share_the_free_space() {
+        // 980px inside the margins, 100px taken: 880 between two springs.
+        assert_eq!(
+            layout(1000.0, 10.0, 20.0, &[Spring, Item(100.0), Spring]),
+            [Some(450.0)]
+        );
+        // Two items at the edges, one centered: 980 - 3·100 - 2·20 = 640.
+        assert_eq!(
+            layout(
+                1000.0,
+                10.0,
+                20.0,
+                &[Item(100.0), Spring, Item(100.0), Spring, Item(100.0)]
+            ),
+            [Some(10.0), Some(450.0), Some(890.0)]
+        );
     }
 
     #[test]
     fn items_before_the_last_are_dropped_when_narrow() {
-        // 400px: the last item starts at 340; the second would end at 350.
+        // 380px inside the margins: 50 + 50 + 200 + 100 and gaps are too
+        // wide, the last two before the right edge have to go.
         assert_eq!(
-            layout(400.0, 10.0, 20.0, &[100.0, 200.0, 50.0, 50.0]),
+            layout(
+                400.0,
+                10.0,
+                20.0,
+                &[Item(100.0), Item(200.0), Item(50.0), Spring, Item(50.0)]
+            ),
             [Some(10.0), None, None, Some(340.0)]
         );
+        // Dropped from the end of the list, even right of a spring.
+        assert_eq!(
+            layout(
+                300.0,
+                10.0,
+                20.0,
+                &[Item(100.0), Spring, Item(100.0), Item(100.0)]
+            ),
+            [Some(10.0), None, Some(190.0)]
+        );
         // Too narrow for anything else; the last item keeps the margin.
-        assert_eq!(layout(40.0, 10.0, 20.0, &[10.0, 50.0]), [None, Some(10.0)]);
+        assert_eq!(
+            layout(40.0, 10.0, 20.0, &[Item(10.0), Spring, Item(50.0)]),
+            [None, Some(10.0)]
+        );
     }
 
     #[test]
@@ -657,12 +790,12 @@ mod tests {
 
     #[test]
     fn missing_battery_is_left_out() {
-        let items = [StatusItem::Cpu, StatusItem::Battery, StatusItem::Datetime];
+        let items = arranged(&[StatusItem::Cpu, StatusItem::Battery, StatusItem::Datetime]);
         let bar = StatusBar::new(1000.0, 0.0, &items, &stats(false), "12:34", CELL, 1.0);
-        let shown: Vec<_> = bar.slots.iter().map(|s| s.0).collect();
+        let shown: Vec<_> = bar.slots.iter().map(|s| s.item).collect();
         assert_eq!(shown, [StatusItem::Cpu, StatusItem::Datetime]);
         // Icon, space and "12:34" (8 cells) sit at the right margin of one cell.
-        assert_eq!(bar.slots[1].1, 1000.0 - 10.0 - 80.0);
+        assert_eq!(bar.slots[1].x, 1000.0 - 10.0 - 80.0);
 
         let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", CELL, 1.0);
         assert_eq!(bar.slots.len(), 3);
@@ -678,7 +811,7 @@ mod tests {
             StatusItem::Datetime,
         ];
         let stats = stats(true);
-        let bar = StatusBar::new(1200.0, 500.0, &items, &stats, "12:34", CELL, 1.0);
+        let bar = StatusBar::new(1200.0, 500.0, &arranged(&items), &stats, "12:34", CELL, 1.0);
         assert_eq!(bar.height, 28.0);
         let (bg, fg) = (
             Rgb { r: 0, g: 0, b: 0 },
@@ -698,5 +831,28 @@ mod tests {
         }
         // Half-full CPU bar: half of the 16px graph box.
         assert!(rects.iter().any(|r| r.width == 1.0 && r.height == 8.0));
+    }
+
+    #[test]
+    fn separators_only_between_neighbours() {
+        use StatusItem::*;
+        let (bg, fg) = (
+            Rgb { r: 0, g: 0, b: 0 },
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        );
+        let separator = mix(bar_background(bg), fg, 0.15);
+        let count = |items: &[StatusItem]| {
+            let stats = stats(false);
+            let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", CELL, 1.0);
+            let (rects, _) = bar.draw(&stats, "12:34", bg, fg);
+            rects.iter().filter(|r| r.color == separator).count()
+        };
+        assert_eq!(count(&[Cpu, Memory, Spring, Datetime]), 1);
+        assert_eq!(count(&[Cpu, Memory, Datetime]), 2);
+        assert_eq!(count(&[Spring, Cpu, Spring, Datetime, Spring]), 0);
     }
 }

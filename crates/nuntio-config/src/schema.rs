@@ -115,7 +115,8 @@ pub enum Kind {
     Text,
     /// A list of strings (program arguments).
     StringList,
-    /// A subset of the variants in a chosen order, each at most once.
+    /// A subset of the variants in a chosen order, each at most once
+    /// except [`SPRING`], which may repeat.
     OrderedSet(&'static [Variant]),
     /// A theme name, or a light/dark pair of them.
     Theme,
@@ -175,12 +176,19 @@ pub static STATUS_BAR_POSITION: &[Variant] = &[
     variant("top", "Right below the tab bar."),
 ];
 
+/// The status bar item that is a flexible gap instead of content.
+pub const SPRING: &str = "<->";
+
 pub static STATUS_ITEMS: &[Variant] = &[
     variant("cpu", "Usage of all cores over the last minute."),
     variant("memory", "Used memory over the last minute."),
     variant("network", "Download and upload throughput."),
     variant("battery", "Charge level; hidden without a battery."),
     variant("datetime", "The local date and time."),
+    variant(
+        SPRING,
+        "A flexible gap: springs share the free space, pushing the items apart.",
+    ),
 ];
 
 pub static OPTION_AS_META: &[Variant] = &[
@@ -378,7 +386,7 @@ pub static SETTINGS: &[Setting] = &[
         Section::StatusBar,
         "Items",
         Kind::OrderedSet(STATUS_ITEMS),
-        "What the bar shows, in this order. The last item sits at the right edge.",
+        "What the bar shows, in this order. Springs (<->) push items apart; without one, the last item sits at the right edge.",
     ),
     setting(
         "status_bar.datetime_format",
@@ -650,7 +658,8 @@ mod tests {
             | StatusItem::Memory
             | StatusItem::Network
             | StatusItem::Battery
-            | StatusItem::Datetime => (),
+            | StatusItem::Datetime
+            | StatusItem::Spring => (),
         };
         check(
             STATUS_ITEMS,
@@ -660,6 +669,7 @@ mod tests {
                 StatusItem::Network,
                 StatusItem::Battery,
                 StatusItem::Datetime,
+                StatusItem::Spring,
             ],
         );
         let _ = |o: OptionAsMeta| match o {

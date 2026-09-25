@@ -4,7 +4,8 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use nuntio_config::{
-    Color, Config, ConfigWatcher, DEFAULT_THEME, OptionAsMeta, Theme, ThemeSelection, ThemeSet,
+    Color, Config, ConfigWatcher, DEFAULT_THEME, OptionAsMeta, StatusItem, Theme, ThemeSelection,
+    ThemeSet,
 };
 use nuntio_render::{FrameStatus, Renderer};
 use nuntio_term::{
@@ -375,9 +376,13 @@ impl App {
     /// Start, restart or stop sampling to match the status bar config.
     fn sync_system_monitor(&mut self) {
         let bar = &self.config.status_bar;
-        let wanted = (bar.visible() && !self.occluded).then_some(bar.items.as_slice());
+        // Without springs, so that moving one doesn't restart sampling.
+        let wanted: Option<Vec<StatusItem>> = (bar.visible() && !self.occluded).then(|| {
+            let items = bar.items.iter().copied();
+            items.filter(|&item| item != StatusItem::Spring).collect()
+        });
         let running = self.system_monitor.as_ref().map(SystemMonitor::items);
-        if wanted == running {
+        if wanted.as_deref() == running {
             return;
         }
         // Dropping the old monitor stops its thread.
@@ -385,7 +390,7 @@ impl App {
         self.stats.clear();
         if let Some(items) = wanted {
             tracing::debug!("starting system monitor");
-            self.system_monitor = Some(SystemMonitor::start(items, self.proxy.clone()));
+            self.system_monitor = Some(SystemMonitor::start(&items, self.proxy.clone()));
         }
     }
 

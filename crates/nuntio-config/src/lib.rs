@@ -8,6 +8,8 @@ pub mod schema;
 mod theme;
 mod watch;
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 pub use color::{Color, ColorError};
@@ -245,6 +247,23 @@ pub enum StatusItem {
     Network,
     Battery,
     Datetime,
+    /// A flexible gap; springs share the free space evenly.
+    #[serde(rename = "<->")]
+    Spring,
+}
+
+impl StatusItem {
+    /// How the item is spelled in the config file.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Memory => "memory",
+            Self::Network => "network",
+            Self::Battery => "battery",
+            Self::Datetime => "datetime",
+            Self::Spring => schema::SPRING,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -261,8 +280,24 @@ pub struct StatusBar {
 impl StatusBar {
     /// Enabled and with something to show.
     pub fn visible(&self) -> bool {
-        self.enabled && !self.items.is_empty()
+        self.enabled && self.items.iter().any(|&item| item != StatusItem::Spring)
     }
+
+    /// The items as laid out: without a spring, one before the last item,
+    /// so it sits at the right edge.
+    pub fn arranged_items(&self) -> Cow<'_, [StatusItem]> {
+        arranged(&self.items)
+    }
+}
+
+/// `items` with a spring before the last one, if it has none.
+pub fn arranged(items: &[StatusItem]) -> Cow<'_, [StatusItem]> {
+    if items.is_empty() || items.contains(&StatusItem::Spring) {
+        return Cow::Borrowed(items);
+    }
+    let mut out = items.to_vec();
+    out.insert(items.len() - 1, StatusItem::Spring);
+    Cow::Owned(out)
 }
 
 impl Default for StatusBar {
@@ -376,6 +411,28 @@ pub struct Keybinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn without_a_spring_the_last_item_is_pushed_right() {
+        use StatusItem::*;
+        assert_eq!(
+            arranged(&[Cpu, Memory, Datetime])[..],
+            [Cpu, Memory, Spring, Datetime]
+        );
+        assert_eq!(arranged(&[Cpu, Spring, Memory])[..], [Cpu, Spring, Memory]);
+        assert_eq!(
+            arranged(&[Cpu, Datetime, Spring])[..],
+            [Cpu, Datetime, Spring]
+        );
+        assert_eq!(arranged(&[Datetime])[..], [Spring, Datetime]);
+        assert_eq!(arranged(&[])[..], []);
+        let bar = StatusBar {
+            enabled: true,
+            items: vec![Spring, Spring],
+            ..StatusBar::default()
+        };
+        assert!(!bar.visible(), "springs alone show nothing");
+    }
 
     #[test]
     fn incomplete_keybinding_does_not_reject_the_config() {

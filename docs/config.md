@@ -48,7 +48,7 @@ Run `nuntio-config` in a nuntio tab to change settings without editing TOML by h
 | <kbd>R</kbd> | Restore the file as it was when `nuntio-config` started |
 | <kbd>q</kbd> | Quit |
 
-In a list of choices, typing filters it; moving through themes or fonts previews each one, <kbd>Enter</kbd> keeps it and <kbd>Esc</kbd> goes back. The font list also accepts any name you type. In the status bar items, <kbd>Space</kbd> shows or hides an item and <kbd>Shift</kbd><kbd>↑</kbd>/<kbd>↓</kbd> moves it.
+In a list of choices, typing filters it; moving through themes or fonts previews each one, <kbd>Enter</kbd> keeps it and <kbd>Esc</kbd> goes back. The font list also accepts any name you type. In the status bar items, <kbd>Space</kbd> shows or hides an item and <kbd>Shift</kbd><kbd>↑</kbd>/<kbd>↓</kbd> moves it. <kbd>S</kbd> adds a spring below the cursor and <kbd>D</kbd> removes one; a line above the list sketches the bar.
 
 A key combination for a keybinding is typed as text, like `Ctrl+Shift+Enter` (see [Key syntax](#key-syntax)), because a terminal can't report every combination reliably. The editor checks it as you type and warns when the combination is already bound.
 
@@ -178,7 +178,7 @@ A bar with live system graphs and the date and time, as in iTerm2. It is off by 
 |---|---|---|---|
 | `enabled` | bool | `false` | Show the status bar. |
 | `position` | string | `"bottom"` | `"bottom"`: at the bottom edge of the window. `"top"`: right below the tab bar. |
-| `items` | list of strings | `["cpu", "memory", "network", "battery", "datetime"]` | What the bar shows, in this order. The last item sits at the right edge, the others fill from the left. Leave an item out to hide it; each may appear only once. |
+| `items` | list of strings | `["cpu", "memory", "network", "battery", "datetime"]` | What the bar shows, in this order, and springs (`"<->"`) between them. See [Springs](#springs). Leave an item out to hide it; each may appear only once. |
 | `datetime_format` | string | `"%a %d %b %H:%M"` | Format of the date and time in [strftime syntax](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). The default shows `Fri 25 Sep 10:50`; `"%d.%m.%Y %H:%M"` shows `25.09.2026 10:50`. |
 
 Each item starts with an icon:
@@ -189,7 +189,22 @@ Each item starts with an icon:
 - `battery`: charge level, with ⚡ while charging. Hidden on machines without a battery.
 - `datetime`: the local date and time.
 
-If the window is too narrow, items before the last one are dropped, starting with the one closest to the right edge.
+#### Springs
+
+A spring `"<->"` is a flexible gap, as in iTerm2: the space the items don't need is shared evenly among the springs, pushing the items apart. A list may contain any number of them.
+
+```toml
+# Graphs on the left, date and time on the right:
+items = ["cpu", "memory", "network", "<->", "datetime"]
+# The clock centered, the battery at the right edge:
+items = ["cpu", "<->", "datetime", "<->", "battery"]
+# Everything on the left:
+items = ["cpu", "memory", "datetime", "<->"]
+```
+
+Without a spring, the bar behaves as if there were one before the last item, so the last item sits at the right edge.
+
+If the window is too narrow, items are dropped from the end of the list, but the last one only when nothing else is left.
 
 While the bar is shown, nuntio samples the system and redraws once per second. With the bar off, or while the window is minimized or covered, nothing is sampled.
 

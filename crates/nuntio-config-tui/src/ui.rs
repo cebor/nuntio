@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::state::{App, Focus, Mode, PickTarget, Row, Tone};
+use crate::state::{App, Entry, Focus, Mode, PickTarget, Row, Tone, bar_preview};
 use crate::widgets::{Pick, TextInput};
 
 const ACCENT: Color = Color::Cyan;
@@ -152,25 +152,59 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
         }
         Mode::Items { setting, selected } => {
             let entries = app.item_entries(setting);
-            let area = popup(frame.area(), 40, entries.len() as u16 + 2);
+            // Preview and a rule above the list.
+            let area = popup(frame.area(), 44, entries.len() as u16 + 4);
             frame.render_widget(Clear, area);
             let block = Block::bordered()
                 .border_type(BorderType::Rounded)
                 .title(format!(" {} ", setting.label))
                 .border_style(Style::new().fg(ACCENT));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let [preview_area, rule_area, list_area] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .areas(inner);
+            let width = inner.width as usize;
+            let preview = bar_preview(&entries, width.saturating_sub(2));
+            frame.render_widget(
+                Paragraph::new(Line::from(format!(" {preview}"))).style(tone(Tone::Accent)),
+                preview_area,
+            );
+            frame.render_widget(
+                Paragraph::new("─".repeat(width)).style(tone(Tone::Dim)),
+                rule_area,
+            );
             let items: Vec<ListItem> = entries
                 .iter()
-                .map(|(value, on)| {
-                    let mark = if *on { "[x] " } else { "[ ] " };
-                    let style = if *on { Style::new() } else { tone(Tone::Dim) };
-                    ListItem::new(Line::styled(format!("{mark}{value}"), style))
+                .map(|entry| match *entry {
+                    Entry::Item { value, on } => {
+                        let mark = if on { "[x] " } else { "[ ] " };
+                        let style = if on { Style::new() } else { tone(Tone::Dim) };
+                        ListItem::new(Line::styled(format!("{mark}{value}"), style))
+                    }
+                    Entry::Spring { implicit } => {
+                        let label = if implicit {
+                            " spring (automatic) "
+                        } else {
+                            " spring "
+                        };
+                        ListItem::new(Line::styled(spring_line(label, width), {
+                            let style = tone(Tone::Accent);
+                            if implicit {
+                                style.add_modifier(Modifier::DIM)
+                            } else {
+                                style
+                            }
+                        }))
+                    }
                 })
                 .collect();
             let mut state = ListState::default().with_selected(Some(*selected));
-            let list = List::new(items)
-                .block(block)
-                .highlight_style(selected_style(true));
-            frame.render_stateful_widget(list, area, &mut state);
+            let list = List::new(items).highlight_style(selected_style(true));
+            frame.render_stateful_widget(list, list_area, &mut state);
         }
         Mode::Search {
             input,
@@ -207,6 +241,13 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
 }
 
 /// A centered area of the given size, clamped to `area`.
+/// ` ⟷ ──── spring ──────`, `width` columns wide.
+fn spring_line(label: &str, width: usize) -> String {
+    let rest = width.saturating_sub(label.width() + 4);
+    let left = rest / 3;
+    format!(" ⟷ {}{label}{}", "─".repeat(left), "─".repeat(rest - left))
+}
+
 fn popup(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(4));
     let height = height.min(area.height.saturating_sub(2));
@@ -478,6 +519,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("↑↓", "move"),
             ("Space", "show/hide"),
             ("Shift+↑↓", "reorder"),
+            ("s", "add spring"),
+            ("d", "remove spring"),
             ("⏎/Esc", "done"),
         ],
         Mode::Search { .. } => &[

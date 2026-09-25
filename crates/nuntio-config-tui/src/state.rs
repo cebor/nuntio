@@ -6,7 +6,9 @@
 
 use std::io;
 
-use nuntio_config::schema::{Kind, SETTINGS, Section, Setting};
+use unicode_width::UnicodeWidthStr;
+
+use nuntio_config::schema::{Kind, SETTINGS, SPRING, Section, Setting};
 use nuntio_config::toml_edit::{self, InlineTable};
 use nuntio_config::{ACTIONS, Config, ConfigDoc, KeyCombo, Keybinding, ThemeSelection, ThemeSet};
 
@@ -47,6 +49,96 @@ pub enum ThemeSlot {
     Single,
     Light,
     Dark,
+}
+
+/// A line in the editor of an ordered set like the status bar items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    Item {
+        value: &'static str,
+        on: bool,
+    },
+    /// A flexible gap. `implicit` is the one nuntio assumes before the last
+    /// item when the list has none; it can be moved but not removed.
+    Spring {
+        implicit: bool,
+    },
+}
+
+impl Entry {
+    /// Part of the list that is written, as opposed to a hidden item.
+    pub fn is_chosen(&self) -> bool {
+        !matches!(self, Entry::Item { on: false, .. })
+    }
+}
+
+/// One line sketching the bar with the chosen `entries`: item names a space
+/// apart, springs as dotted gaps sharing the free space. Items that don't
+/// fit are dropped as in the bar: from the end, the last one last.
+pub fn bar_preview(entries: &[Entry], width: usize) -> String {
+    let chosen: Vec<Option<&str>> = entries
+        .iter()
+        .take_while(|e| e.is_chosen())
+        .map(|e| match e {
+            Entry::Item { value, .. } => Some(*value),
+            Entry::Spring { .. } => None,
+        })
+        .collect();
+    let names: Vec<&str> = chosen.iter().flatten().copied().collect();
+    let mut keep = vec![true; names.len()];
+    let needed = |keep: &[bool]| {
+        let kept = names.iter().zip(keep).filter(|(_, k)| **k);
+        kept.map(|(n, _)| n.width() + 1)
+            .sum::<usize>()
+            .saturating_sub(1)
+    };
+    while needed(&keep) > width {
+        match keep[..names.len().saturating_sub(1)]
+            .iter()
+            .rposition(|k| *k)
+        {
+            Some(i) => keep[i] = false,
+            None => break,
+        }
+    }
+    let springs = chosen.iter().filter(|c| c.is_none()).count();
+    let free = width.saturating_sub(needed(&keep));
+    // A run of `len` columns before, between or after items; dotted where
+    // springs are, with a space left next to each item.
+    let run = |len: usize, dotted: bool, left: bool, right: bool| {
+        let pad = usize::from(left) + usize::from(right);
+        if !dotted || len <= pad {
+            return " ".repeat(len);
+        }
+        let dots = "·".repeat(len - pad);
+        format!(
+            "{}{dots}{}",
+            if left { " " } else { "" },
+            if right { " " } else { "" }
+        )
+    };
+    let mut out = String::new();
+    let (mut spring, mut pending, mut dotted, mut placed) = (0, 0, false, false);
+    let mut keep = keep.into_iter();
+    for c in &chosen {
+        match c {
+            None => {
+                pending += free / springs + usize::from(spring < free % springs);
+                spring += 1;
+                dotted = true;
+            }
+            Some(name) => {
+                if keep.next() != Some(true) {
+                    continue;
+                }
+                out += &run(pending + usize::from(placed), dotted, placed, true);
+                out += name;
+                (pending, dotted, placed) = (0, false, true);
+            }
+        }
+    }
+    out += &run(pending, dotted, placed, false);
+    out
 }
 
 /// A line in the settings list.
@@ -562,9 +654,21 @@ impl App {
             }
             Mode::Items { setting, selected } => {
                 if let Kind::OrderedSet(variants) = setting.kind {
-                    let (variant, _) = self.item_entries(setting)[*selected];
-                    if let Some(v) = variants.iter().find(|v| v.value == variant) {
+                    let entry = self.item_entries(setting)[*selected];
+                    let value = match entry {
+                        Entry::Item { value, .. } => value,
+                        Entry::Spring { .. } => SPRING,
+                    };
+                    if let Some(v) = variants.iter().find(|v| v.value == value) {
                         lines.push((Tone::Normal, v.help.into()));
+                    }
+                    if entry == (Entry::Spring { implicit: true }) {
+                        lines.push((
+                            Tone::Dim,
+                            "Without a spring, the last item sits at the right edge. \
+                             Put a spring at the end to align everything left."
+                                .into(),
+                        ));
                     }
                 }
                 return lines;
@@ -1228,9 +1332,9 @@ impl App {
         self.open_picker(picker, PickTarget::Action { index, key });
     }
 
-    /// The variants of an ordered set in display order: the chosen ones
-    /// first, in their order, then the rest.
-    pub fn item_entries(&self, setting: &Setting) -> Vec<(&'static str, bool)> {
+    /// The entries of an ordered set in display order: the chosen ones
+    /// first, in their order and with their springs, then the rest.
+    pub fn item_entries(&self, setting: &Setting) -> Vec<Entry> {
         let Kind::OrderedSet(variants) = setting.kind else {
             return Vec::new();
         };
@@ -1240,16 +1344,28 @@ impl App {
             .flatten()
             .filter_map(|v| v.as_str())
             .collect();
-        let mut entries: Vec<(&'static str, bool)> = chosen
+        let mut entries: Vec<Entry> = chosen
             .iter()
             .filter_map(|c| variants.iter().find(|v| v.value == *c))
-            .map(|v| (v.value, true))
+            .map(|v| match v.value {
+                SPRING => Entry::Spring { implicit: false },
+                value => Entry::Item { value, on: true },
+            })
             .collect();
+        // Same rule as `nuntio_config::arranged`: without a spring, the
+        // last item is pushed to the right edge.
+        let springs = variants.iter().any(|v| v.value == SPRING);
+        if springs && !entries.is_empty() && !chosen.contains(&SPRING) {
+            entries.insert(entries.len() - 1, Entry::Spring { implicit: true });
+        }
         entries.extend(
             variants
                 .iter()
-                .filter(|v| !chosen.contains(&v.value))
-                .map(|v| (v.value, false)),
+                .filter(|v| v.value != SPRING && !chosen.contains(&v.value))
+                .map(|v| Entry::Item {
+                    value: v.value,
+                    on: false,
+                }),
         );
         entries
     }
@@ -1257,21 +1373,39 @@ impl App {
     fn items_key(&mut self, key: Key, setting: &'static Setting, mut selected: usize) {
         let mut entries = self.item_entries(setting);
         let last = entries.len().saturating_sub(1);
+        let chosen = entries.iter().take_while(|e| e.is_chosen()).count();
         let mut changed = false;
         match key {
             Key::Esc | Key::Enter | Key::Char('q') => return,
             Key::Up | Key::Char('k') => selected = selected.saturating_sub(1),
             Key::Down | Key::Char('j') => selected = (selected + 1).min(last),
-            Key::Char(' ') => {
-                entries[selected].1 = !entries[selected].1;
+            Key::Char(' ') | Key::Char('d') | Key::Delete => match &mut entries[selected] {
+                Entry::Item { on, .. } if key == Key::Char(' ') => {
+                    *on = !*on;
+                    changed = true;
+                }
+                Entry::Spring { implicit: false } => {
+                    entries.remove(selected);
+                    // Onto the previous entry if it was the last chosen one.
+                    selected = selected.min(chosen.saturating_sub(2));
+                    changed = true;
+                }
+                // Removing it would bring it back.
+                Entry::Spring { implicit: true } | Entry::Item { .. } => {}
+            },
+            Key::Char('s') => {
+                selected = (selected + 1).min(chosen);
+                entries.insert(selected, Entry::Spring { implicit: false });
                 changed = true;
             }
-            Key::ShiftUp | Key::Char('K') if selected > 0 && entries[selected].1 => {
+            Key::ShiftUp | Key::Char('K') if selected > 0 && entries[selected].is_chosen() => {
                 entries.swap(selected, selected - 1);
                 selected -= 1;
                 changed = true;
             }
-            Key::ShiftDown | Key::Char('J') if selected < last && entries[selected + 1].1 => {
+            Key::ShiftDown | Key::Char('J')
+                if selected < last && entries[selected + 1].is_chosen() =>
+            {
                 entries.swap(selected, selected + 1);
                 selected += 1;
                 changed = true;
@@ -1279,21 +1413,27 @@ impl App {
             _ => {}
         }
         if changed {
+            // Every spring shown is written, so the bar looks as listed.
             let chosen: toml_edit::Array = entries
                 .iter()
-                .filter(|(_, on)| *on)
-                .map(|(v, _)| *v)
+                .filter_map(|e| match *e {
+                    Entry::Item { value, on: true } => Some(value),
+                    Entry::Item { on: false, .. } => None,
+                    Entry::Spring { .. } => Some(SPRING),
+                })
                 .collect();
             self.commit(|doc| doc.set(setting.path, chosen));
             // Keep the cursor on the same item after it moved in the order.
-            let (moved, _) = entries[selected];
-            if let Some(i) = self
-                .item_entries(setting)
-                .iter()
-                .position(|(v, _)| *v == moved)
+            // Springs keep their place: the chosen part is written as is.
+            let entries_now = self.item_entries(setting);
+            if let Entry::Item { value: moved, .. } = entries[selected]
+                && let Some(i) = entries_now
+                    .iter()
+                    .position(|e| matches!(e, Entry::Item { value, .. } if *value == moved))
             {
                 selected = i;
             }
+            selected = selected.min(entries_now.len().saturating_sub(1));
         }
         self.mode = Mode::Items { setting, selected };
     }
@@ -1631,7 +1771,8 @@ mod tests {
         let (mut app, memory) = app(None);
         go_to(&mut app, "status_bar.items");
         app.key(Key::Enter);
-        // cpu memory network battery datetime: drop cpu, move datetime first.
+        // cpu memory network battery (spring) datetime: drop cpu, move
+        // datetime first.
         app.key(Key::Char(' '));
         let items = || {
             nuntio_config::parse(&memory.text())
@@ -1640,25 +1781,128 @@ mod tests {
                 .status_bar
                 .items
         };
-        assert_eq!(items().len(), 4);
-        for _ in 0..5 {
-            app.key(Key::Down);
-        }
+        use nuntio_config::StatusItem::*;
+        // The automatic spring is written, so the bar stays as shown.
+        assert_eq!(items(), [Memory, Network, Battery, Spring, Datetime]);
         let Mode::Items { selected, .. } = app.mode else {
             panic!("no items");
         };
         // The cursor followed cpu to the end; datetime is right before it.
-        assert_eq!(selected, 4);
+        assert_eq!(selected, 5);
         app.key(Key::Up);
-        for _ in 0..3 {
+        for _ in 0..4 {
             app.key(Key::ShiftUp);
         }
-        use nuntio_config::StatusItem::*;
-        assert_eq!(items(), [Datetime, Memory, Network, Battery]);
+        assert_eq!(items(), [Datetime, Memory, Network, Battery, Spring]);
         let Mode::Items { selected, .. } = app.mode else {
             panic!("no items");
         };
         assert_eq!(selected, 0, "the cursor follows the moved item");
+    }
+
+    #[test]
+    fn springs_are_added_moved_and_removed() {
+        let (mut app, memory) = app(Some("[status_bar]\nitems = [\"cpu\", \"datetime\"]\n"));
+        go_to(&mut app, "status_bar.items");
+        app.key(Key::Enter);
+        let setting = SETTINGS
+            .iter()
+            .find(|s| s.path == "status_bar.items")
+            .unwrap();
+        let entries = |app: &App| app.item_entries(setting);
+        let spring = |implicit| Entry::Spring { implicit };
+        let item = |value, on| Entry::Item { value, on };
+        assert_eq!(
+            entries(&app)[..3],
+            [item("cpu", true), spring(true), item("datetime", true)]
+        );
+        // The automatic spring can't be removed, and nothing is written.
+        app.key(Key::Down);
+        app.key(Key::Char('d'));
+        assert_eq!(entries(&app)[1], spring(true));
+        assert!(memory.text().contains("[\"cpu\", \"datetime\"]"));
+
+        // A second spring after cpu: both are written.
+        app.key(Key::Up);
+        app.key(Key::Char('s'));
+        let Mode::Items { selected, .. } = app.mode else {
+            panic!("no items");
+        };
+        assert_eq!(selected, 1, "the cursor is on the new spring");
+        assert!(
+            memory
+                .text()
+                .contains("items = [\"cpu\", \"<->\", \"<->\", \"datetime\"]"),
+            "{}",
+            memory.text()
+        );
+        // Center cpu: move a spring in front of it.
+        app.key(Key::ShiftUp);
+        let items = || memory.text();
+        assert!(items().contains("[\"<->\", \"cpu\", \"<->\", \"datetime\"]"));
+        // Remove the spring after cpu; the cursor stays in the list.
+        app.key(Key::Down);
+        app.key(Key::Down);
+        app.key(Key::Delete);
+        assert!(
+            items().contains("[\"<->\", \"cpu\", \"datetime\"]"),
+            "{}",
+            items()
+        );
+        let Mode::Items { selected, .. } = app.mode else {
+            panic!("no items");
+        };
+        assert_eq!(selected, 2, "on datetime");
+        // Space hides items but doesn't remove springs by accident.
+        app.key(Key::Up);
+        app.key(Key::Char(' '));
+        assert!(items().contains("[\"<->\", \"datetime\"]"), "{}", items());
+        // `s` below the chosen items adds the spring at their end.
+        for _ in 0..10 {
+            app.key(Key::Down);
+        }
+        app.key(Key::Char('s'));
+        assert!(
+            items().contains("[\"<->\", \"datetime\", \"<->\"]"),
+            "{}",
+            items()
+        );
+    }
+
+    #[test]
+    fn preview_sketches_the_bar() {
+        let item = |value| Entry::Item { value, on: true };
+        let spring = Entry::Spring { implicit: false };
+        let hidden = Entry::Item {
+            value: "battery",
+            on: false,
+        };
+        assert_eq!(
+            bar_preview(
+                &[
+                    item("cpu"),
+                    item("memory"),
+                    spring,
+                    item("datetime"),
+                    hidden
+                ],
+                30
+            ),
+            "cpu memory ·········· datetime"
+        );
+        assert_eq!(
+            bar_preview(&[spring, item("cpu"), spring], 11),
+            "··· cpu ···"
+        );
+        assert_eq!(
+            bar_preview(&[item("cpu"), item("memory")], 12),
+            "cpu memory"
+        );
+        // Too narrow: memory goes, datetime stays.
+        assert_eq!(
+            bar_preview(&[item("cpu"), item("memory"), spring, item("datetime")], 14),
+            "cpu · datetime"
+        );
     }
 
     #[test]

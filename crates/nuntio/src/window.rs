@@ -369,7 +369,7 @@ impl WindowState {
         Some(StatusBar::new(
             self.window.inner_size().width as f32,
             top,
-            &config.status_bar.items,
+            &config.status_bar.arranged_items(),
             stats,
             datetime,
             self.renderer.small_cell_metrics(),
