@@ -61,7 +61,7 @@ key = "Ctrl+Shift+Enter"
 action = "split_vertical"
 ```
 
-Changes apply as soon as you save the file. If something is wrong, a banner in the window shows the error and the previous settings stay active. The [configuration reference](@/docs/config.md) covers every option with its default, custom themes, and all keybinding actions.
+Changes apply as soon as you save the file. If something is wrong, a banner in the window shows the error and the previous settings stay active. You can also run `nuntio-config` in a nuntio tab to change settings in a terminal UI ([Editing in the terminal](@/docs/config.md#editing-in-the-terminal)). The [configuration reference](@/docs/config.md) covers every option with its default, custom themes, and all keybinding actions.
 
 ## Keyboard shortcuts
 

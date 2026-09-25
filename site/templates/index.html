@@ -8,71 +8,68 @@
 {% set releases_url = config.extra.repo ~ "/releases/latest" %}
 <main>
   <section class="hero">
-    <div class="wrap hero-grid">
-      <div>
-        <h1>A fast terminal with tabs, split panes and a config that reloads while you type.</h1>
-        <p class="lead">nuntio is a GPU-rendered terminal emulator for Linux, macOS and Windows, modeled on iTerm2. One window, one TOML file, close to 0% CPU when idle.</p>
-        <div class="actions">
-          <a class="button" id="hero-download" href="#download">Download{% if release %} {{ release.tag_name }}{% endif %}</a>
-          <a class="button ghost" href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a>
-        </div>
-        <p class="hint" id="hero-hint">Free and open source · MIT or Apache-2.0</p>
+    <div class="wrap hero-head">
+      <h1>A fast terminal with tabs, split panes and a config that reloads while you type.</h1>
+      <p class="lead">nuntio is a GPU-rendered terminal emulator for Linux, macOS and Windows, modeled on iTerm2. One window, one TOML file, close to 0% CPU when idle.</p>
+      <div class="actions">
+        <a class="button" id="hero-download" href="#download">Download{% if release %} {{ release.tag_name }}{% endif %}</a>
+        <a class="button ghost" href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a>
       </div>
-      <div class="term" aria-hidden="true">
+      <p class="hint" id="hero-hint">Free and open source · MIT or Apache-2.0</p>
+    </div>
+    <div class="wrap">
+      {# Two real tabs: radio buttons switch them without JS. #}
+      <div class="term hero-term">
+        <input type="radio" name="hero-tab" id="tab-shell" checked>
+        <input type="radio" name="hero-tab" id="tab-config">
         <div class="term-bar">
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <span class="term-tab active">~/code/nuntio</span><span class="term-tab">htop</span>
+          <label class="term-tab" for="tab-shell">~/code/nuntio</label><label class="term-tab" for="tab-config">nuntio-config</label>
         </div>
-        <div class="term-panes">
-          <pre class="pane"><span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ cargo test
-   <span class="c-g">Compiling</span> nuntio v0.1.1
-    <span class="c-g">Finished</span> test profile
-     <span class="c-g">Running</span> unittests
-test result: <span class="c-g">ok</span>.
+        <div class="screens" aria-hidden="true">
+          <pre class="screen shell"><span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ cargo build -r
+    <span class="c-g">Finished</span> `release` profile [optimized] target(s) in 0.21s
+<span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ fastfetch
+
+<span class="c-c">╭──────────────────────────╮</span>    <span class="c-b tui-b">you</span>@<span class="c-b tui-b">nuntio</span>
+<span class="c-c">│</span>                          <span class="c-c">│</span>    <span class="c-c">──────────</span>
+<span class="c-c">│</span>  <span class="px" style="background:#7aa2f7">    </span>                    <span class="c-c">│</span>    <span class="c-b">Terminal</span>  nuntio 0.1.2
+<span class="c-c">│</span>    <span class="px" style="background:#7aa2f7">    </span>                  <span class="c-c">│</span>    <span class="c-b">Renderer</span>  wgpu · Vulkan
+<span class="c-c">│</span>      <span class="px" style="background:#7aa2f7">    </span>                <span class="c-c">│</span>    <span class="c-b">Font</span>      JetBrains Mono 14
+<span class="c-c">│</span>        <span class="px" style="background:#7aa2f7">    </span>              <span class="c-c">│</span>    <span class="c-b">Theme</span>     Tokyo Night
+<span class="c-c">│</span>      <span class="px" style="background:#7aa2f7">    </span>                <span class="c-c">│</span>    <span class="c-b">Shell</span>     zsh 5.9
+<span class="c-c">│</span>    <span class="px" style="background:#7aa2f7">    </span>                  <span class="c-c">│</span>    <span class="c-b">Idle CPU</span>  0.0 %
+<span class="c-c">│</span>  <span class="px" style="background:#7aa2f7">    </span>      <span class="px" style="background:#c0caf5">          </span>    <span class="c-c">│</span>
+<span class="c-c">│</span>                          <span class="c-c">│</span>    <span class="px" style="background:#15161e">   </span><span class="px" style="background:#f7768e">   </span><span class="px" style="background:#9ece6a">   </span><span class="px" style="background:#e0af68">   </span><span class="px" style="background:#7aa2f7">   </span><span class="px" style="background:#bb9af7">   </span><span class="px" style="background:#7dcfff">   </span><span class="px" style="background:#a9b1d6">   </span>
+<span class="c-c">╰──────────────────────────╯</span>    <span class="px" style="background:#414868">   </span><span class="px" style="background:#f7768e">   </span><span class="px" style="background:#9ece6a">   </span><span class="px" style="background:#e0af68">   </span><span class="px" style="background:#7aa2f7">   </span><span class="px" style="background:#bb9af7">   </span><span class="px" style="background:#7dcfff">   </span><span class="px" style="background:#c0caf5">   </span>
 
 <span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ <span class="cursor"> </span></pre>
-          <pre class="pane dim"><span class="c-m">[theme]</span>
-light = <span class="c-y">"Solarized Light"</span>
-dark  = <span class="c-y">"Tokyo Night"</span>
-
-<span class="c-m">[panes]</span>
-dim_inactive = <span class="c-o">0.2</span>
-
-<span class="c-c"># saved — applied</span></pre>
+          <pre class="screen tui"><span class="c-b tui-b"> nuntio-config </span><span class="c-c">~/.config/nuntio/config.toml</span>                      <span class="c-b">  changed · applied live </span>
+<span class="c-c">╭───────────────╮╭ Theme ────────────────────────────────────────────────────────────────╮</span>
+<span class="c-c">│</span> General       <span class="c-c">││</span><span class="c-b">● </span>Follow OS appearance  on                                             <span class="c-c">│</span>
+<span class="c-c">│</span><span class="tui-b"> Theme</span>         <span class="c-c">││</span><span class="c-b">● </span>Light theme           Solarized Light  <span class="px" style="color:#657b83;background:#fdf6e3"> Aa </span><span class="px" style="background:#073642"> </span><span class="px" style="background:#dc322f"> </span><span class="px" style="background:#859900"> </span><span class="px" style="background:#b58900"> </span><span class="px" style="background:#268bd2"> </span><span class="px" style="background:#d33682"> </span><span class="px" style="background:#2aa198"> </span><span class="px" style="background:#eee8d5"> </span><span class="px" style="background:#002b36"> </span><span class="px" style="background:#cb4b16"> </span><span class="px" style="background:#586e75"> </span><span class="px" style="background:#657b83"> </span><span class="px" style="background:#839496"> </span><span class="px" style="background:#6c71c4"> </span><span class="px" style="background:#93a1a1"> </span><span class="px" style="background:#fdf6e3"> </span>          <span class="c-c">│</span>
+<span class="c-c">│</span> Font          <span class="c-c">││</span><span class="c-b">● </span><span class="tui-b">Dark theme            Tokyo Night</span>  <span class="px" style="color:#c0caf5;background:#1a1b26"> Aa </span><span class="px" style="background:#15161e"> </span><span class="px" style="background:#f7768e"> </span><span class="px" style="background:#9ece6a"> </span><span class="px" style="background:#e0af68"> </span><span class="px" style="background:#7aa2f7"> </span><span class="px" style="background:#bb9af7"> </span><span class="px" style="background:#7dcfff"> </span><span class="px" style="background:#a9b1d6"> </span><span class="px" style="background:#414868"> </span><span class="px" style="background:#f7768e"> </span><span class="px" style="background:#9ece6a"> </span><span class="px" style="background:#e0af68"> </span><span class="px" style="background:#7aa2f7"> </span><span class="px" style="background:#bb9af7"> </span><span class="px" style="background:#7dcfff"> </span><span class="px" style="background:#c0caf5"> </span>              <span class="c-c">│</span>
+<span class="c-c">│</span> Window        <span class="c-c">││</span>                                                                       <span class="c-c">│</span>
+<span class="c-c">│</span> Tabs          <span class="c-c">││</span>                                                                       <span class="c-c">│</span>
+<span class="c-c">│</span> Panes         <span class="c-c">││</span>                                                                       <span class="c-c">│</span>
+<span class="c-c">│</span> Status bar   <span class="c-b">╭ Dark theme ──────────────────────────────────────────────╮</span>              <span class="c-c">│</span>
+<span class="c-c">│</span> Mouse        <span class="c-b">│</span><span class="px" style="color:#f8f8f2;background:#282a36"> Aa </span><span class="px" style="background:#21222c"> </span><span class="px" style="background:#ff5555"> </span><span class="px" style="background:#50fa7b"> </span><span class="px" style="background:#f1fa8c"> </span><span class="px" style="background:#bd93f9"> </span><span class="px" style="background:#ff79c6"> </span><span class="px" style="background:#8be9fd"> </span><span class="px" style="background:#f8f8f2"> </span> Dracula                                      <span class="c-b">│</span>              <span class="c-c">│</span>
+<span class="c-c">│</span> Shell        <span class="c-b">│</span><span class="px" style="color:#c7c7c7;background:#000000"> Aa </span><span class="px" style="background:#000000"> </span><span class="px" style="background:#c91b00"> </span><span class="px" style="background:#00c200"> </span><span class="px" style="background:#c7c400"> </span><span class="px" style="background:#0225c7"> </span><span class="px" style="background:#c930c7"> </span><span class="px" style="background:#00c5c7"> </span><span class="px" style="background:#c7c7c7"> </span> iTerm2 Default                               <span class="c-b">│</span>              <span class="c-c">│</span>
+<span class="c-c">│</span> Keybindings  <span class="c-b">│</span><span class="px" style="color:#839496;background:#002b36"> Aa </span><span class="px" style="background:#073642"> </span><span class="px" style="background:#dc322f"> </span><span class="px" style="background:#859900"> </span><span class="px" style="background:#b58900"> </span><span class="px" style="background:#268bd2"> </span><span class="px" style="background:#d33682"> </span><span class="px" style="background:#2aa198"> </span><span class="px" style="background:#eee8d5"> </span> Solarized Dark                               <span class="c-b">│</span>              <span class="c-c">│</span>
+<span class="c-c">│</span> macOS        <span class="c-b">│</span><span class="px" style="color:#657b83;background:#fdf6e3"> Aa </span><span class="px" style="background:#073642"> </span><span class="px" style="background:#dc322f"> </span><span class="px" style="background:#859900"> </span><span class="px" style="background:#b58900"> </span><span class="px" style="background:#268bd2"> </span><span class="px" style="background:#d33682"> </span><span class="px" style="background:#2aa198"> </span><span class="px" style="background:#eee8d5"> </span> Solarized Light                              <span class="c-b">│</span>              <span class="c-c">│</span>
+<span class="c-c">│</span>              <span class="c-b">│</span><span class="px" style="color:#c0caf5;background:#1a1b26"> Aa </span><span class="px" style="background:#15161e"> </span><span class="px" style="background:#f7768e"> </span><span class="px" style="background:#9ece6a"> </span><span class="px" style="background:#e0af68"> </span><span class="px" style="background:#7aa2f7"> </span><span class="px" style="background:#bb9af7"> </span><span class="px" style="background:#7dcfff"> </span><span class="px" style="background:#a9b1d6"> </span><span class="tui-sel"> Tokyo Night                                  </span><span class="c-b">│</span>              <span class="c-c">│</span>
+<span class="c-c">│</span>              <span class="c-b">╰──────────────────────────────────────────────────────────╯</span>              <span class="c-c">│</span>
+<span class="c-c">╰───────────────╯╰───────────────────────────────────────────────────────────────────────╯</span>
+<span class="c-c">╭────────────────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="c-c">│</span>A theme, or a light/dark pair that follows the OS appearance.                           <span class="c-c">│</span>
+<span class="c-c">│</span>Custom themes (.toml or .itermcolors) go in the themes/ directory next to the config    <span class="c-c">│</span>
+<span class="c-c">│</span>file.                                                                                   <span class="c-c">│</span>
+<span class="c-c">│</span>                                                                                        <span class="c-c">│</span>
+<span class="c-c">│</span>                                                                                        <span class="c-c">│</span>
+<span class="c-c">╰────────────────────────────────────────────────────────────────────────────────────────╯</span>
+ <span class="c-b">↑↓</span><span class="c-c"> choose  </span><span class="c-b">⏎</span><span class="c-c"> apply  </span><span class="c-b">Esc</span><span class="c-c"> cancel  </span></pre>
         </div>
       </div>
-    </div>
-  </section>
-
-  <section id="download" class="section">
-    <div class="wrap">
-      <h2>Download</h2>
-      {% if release %}
-      <p class="lead">nuntio {{ release.tag_name }}, released {{ release.published_at | date(format="%B %-d, %Y") }}. <a href="{{ release.html_url }}">Release notes</a></p>
-      <div class="cards">
-        <div class="card" data-os="mac">
-          <h3>macOS</h3>
-          <p class="hint">Universal: Intel and Apple Silicon</p>
-          {{ <download assets={release.assets} ext=".dmg" label="Disk image" primary={true} /> }}
-        </div>
-        <div class="card" data-os="linux">
-          <h3>Linux</h3>
-          <p class="hint">x86_64</p>
-          {{ <download assets={release.assets} ext=".AppImage" label="AppImage" primary={true} /> }}
-          {{ <download assets={release.assets} ext=".deb" label="Debian / Ubuntu" /> }}
-          {{ <download assets={release.assets} ext=".tar.gz" label="Tarball" /> }}
-        </div>
-        <div class="card" data-os="windows">
-          <h3>Windows</h3>
-          <p class="hint">x86_64</p>
-          {{ <download assets={release.assets} ext=".zip" label="Zip archive" primary={true} /> }}
-        </div>
-      </div>
-      {% else %}
-      <p class="lead">Packages for macOS, Linux and Windows are on GitHub.</p>
-      <p><a class="button" href="{{ releases_url }}">Latest release on GitHub</a></p>
-      {% endif %}
-      <p class="note">The packages are not signed yet. On macOS, open nuntio the first time with right-click → <strong>Open</strong>. On Windows, SmartScreen may ask you to confirm with <strong>More info</strong> → <strong>Run anyway</strong>. <a href="{{ get_url(path='@/docs/getting-started.md') }}#install">Installation details</a></p>
     </div>
   </section>
 
@@ -82,7 +79,7 @@ dim_inactive = <span class="c-o">0.2</span>
       <div class="features">
         <div><h3>GPU rendering</h3><p>One wgpu pipeline draws backgrounds, glyphs and UI. Box-drawing characters are drawn procedurally, so TUI borders line up without gaps.</p></div>
         <div><h3>Tabs and split panes</h3><p>Drag tabs to reorder, split side by side or top and bottom, resize with keyboard or mouse, zoom a pane to fill the tab.</p></div>
-        <div><h3>Hot reload</h3><p>Save the config and it applies right away. Mistakes show up as a banner, and the previous settings stay active.</p></div>
+        <div><h3>Hot reload</h3><p>Save the config, or change it in <code>nuntio-config</code>, and it applies right away. Mistakes show up as a banner, and the previous settings stay active.</p></div>
         <div><h3>Themes</h3><p>Five built in, your own as TOML or iTerm2 <code>.itermcolors</code>, and a light/dark pair that follows the OS appearance.</p></div>
         <div><h3>Text done right</h3><p>Shaped with cosmic-text: font fallback, color emoji, CJK and wide characters.</p></div>
         <div><h3>Find bar</h3><p>Incremental search through the scrollback, with a regex mode.</p></div>
@@ -93,10 +90,16 @@ dim_inactive = <span class="c-o">0.2</span>
   </section>
 
   <section class="section">
-    <div class="wrap narrow">
-      <h2>Configure it in one file</h2>
-      <p>Every setting is optional. Put this in <code>~/.config/nuntio/config.toml</code> on any platform:</p>
-      <pre class="code"><code><span class="c-m">[font]</span>
+    <div class="wrap config-grid">
+      <div>
+        <h2>Everything is a terminal. Even the settings.</h2>
+        <p>Run <code>nuntio-config</code> in any nuntio tab. Settings are grouped by section, choices offer only valid values, and themes and fonts preview as you move through them.</p>
+        <p>Every change is written to the file right away and applied by hot reload, so the window itself is the preview. The command comes with nuntio and exists only inside its panes.</p>
+        <p class="links"><a href="{{ get_url(path='@/docs/config.md') }}#editing-in-the-terminal">Editing in the terminal →</a> <a href="{{ get_url(path='@/docs/config.md') }}">Configuration reference →</a></p>
+      </div>
+      <div>
+        <p class="muted">Prefer a text editor? It's one plain TOML file at <code>~/.config/nuntio/config.toml</code> on every platform, and <code>nuntio-config</code> keeps your comments.</p>
+        <pre class="code"><code><span class="c-m">[font]</span>
 family = <span class="c-y">"JetBrains Mono"</span>
 size = <span class="c-o">14.0</span>
 
@@ -104,7 +107,64 @@ size = <span class="c-o">14.0</span>
 <span class="c-m">[theme]</span>
 light = <span class="c-y">"Solarized Light"</span>
 dark = <span class="c-y">"Tokyo Night"</span></code></pre>
-      <p><a href="{{ get_url(path='@/docs/config.md') }}">Configuration reference →</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="section download">
+    <div class="wrap">
+      <h2>Download</h2>
+      {% if release %}
+      <p class="muted">nuntio {{ release.tag_name }}, released {{ release.published_at | date(format="%B %-d, %Y") }} · <a href="{{ release.html_url }}">Release notes</a></p>
+      {# Radio buttons make the tabs work without JS; the script below picks the visitor's OS. #}
+      <div class="term dl">
+        <input type="radio" name="dl-os" id="dl-mac" checked>
+        <input type="radio" name="dl-os" id="dl-linux">
+        <input type="radio" name="dl-os" id="dl-windows">
+        <div class="term-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <label class="term-tab" for="dl-mac">macOS</label><label class="term-tab" for="dl-linux">Linux</label><label class="term-tab" for="dl-windows">Windows</label>
+        </div>
+        <div class="dl-panel" data-os="mac">
+          <div class="dl-files">
+            {{ <download assets={release.assets} ext=".dmg" label="Disk image" primary={true} /> }}
+            <p class="dl-hint">Universal: Intel and Apple Silicon</p>
+          </div>
+          <pre class="pane"><span class="c-c"># Not signed yet. Open nuntio the first time with</span>
+<span class="c-c"># right-click → Open, or clear the quarantine flag:</span>
+<span class="c-g">❯</span> xattr -dr com.apple.quarantine /Applications/nuntio.app</pre>
+        </div>
+        <div class="dl-panel" data-os="linux">
+          <div class="dl-files">
+            {{ <download assets={release.assets} ext=".AppImage" label="AppImage" primary={true} /> }}
+            {{ <download assets={release.assets} ext=".deb" label="Debian / Ubuntu" /> }}
+            {{ <download assets={release.assets} ext=".tar.gz" label="Tarball" /> }}
+            <p class="dl-hint">x86_64</p>
+          </div>
+          <pre class="pane"><span class="c-c"># Any distribution</span>
+<span class="c-g">❯</span> chmod +x {{ <asset_name assets={release.assets} ext=".AppImage" /> }}
+<span class="c-g">❯</span> ./{{ <asset_name assets={release.assets} ext=".AppImage" /> }}
+
+<span class="c-c"># Debian / Ubuntu</span>
+<span class="c-g">❯</span> sudo apt install ./{{ <asset_name assets={release.assets} ext=".deb" /> }}</pre>
+        </div>
+        <div class="dl-panel" data-os="windows">
+          <div class="dl-files">
+            {{ <download assets={release.assets} ext=".zip" label="Zip archive" primary={true} /> }}
+            <p class="dl-hint">x86_64</p>
+          </div>
+          <pre class="pane"><span class="c-c"># Unpack the archive and run nuntio.exe.</span>
+<span class="c-g">❯</span> Expand-Archive {{ <asset_name assets={release.assets} ext=".zip" /> }}
+
+<span class="c-c"># Not signed yet: SmartScreen may ask you to</span>
+<span class="c-c"># confirm with More info → Run anyway.</span></pre>
+        </div>
+      </div>
+      <p class="note"><a href="{{ get_url(path='@/docs/getting-started.md') }}#install">Installation details</a> · <a href="{{ get_url(path='@/docs/getting-started.md') }}#build-from-source">Build from source</a></p>
+      {% else %}
+      <p class="muted">Packages for macOS, Linux and Windows are on GitHub.</p>
+      <p><a class="button" href="{{ releases_url }}">Latest release on GitHub</a></p>
+      {% endif %}
     </div>
   </section>
 </main>
@@ -114,10 +174,10 @@ dark = <span class="c-y">"Tokyo Night"</span></code></pre>
     var ua = navigator.userAgent;
     var os = /Mac/.test(ua) ? "mac" : /Win/.test(ua) ? "windows" : /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : null;
     if (!os) return;
-    var card = document.querySelector('.card[data-os="' + os + '"]');
-    if (!card) return;
-    card.classList.add("yours");
-    var link = card.querySelector("a.primary");
+    var tab = document.getElementById("dl-" + os);
+    if (!tab) return;
+    tab.checked = true;
+    var link = document.querySelector('.dl-panel[data-os="' + os + '"] a.primary');
     if (!link) return;
     document.getElementById("hero-download").href = link.href;
     var names = { mac: "macOS", linux: "Linux", windows: "Windows" };
