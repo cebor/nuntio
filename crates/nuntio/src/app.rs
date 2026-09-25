@@ -934,6 +934,9 @@ impl App {
         let Some(bar) = state.search.as_mut() else {
             return false;
         };
+        // On macOS, Option+R arrives as "®"; the toggle must see the "r".
+        let unmodified = event.key_without_modifiers();
+        let is_r = matches!(&unmodified, Key::Character(c) if c.eq_ignore_ascii_case("r"));
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => state.search = None,
             Key::Named(NamedKey::Enter) => bar.next(term, !mods.shift_key()),
@@ -944,7 +947,7 @@ impl App {
                 bar.update(term);
             }
             // Alt+R toggles regex mode, like in many editors.
-            Key::Character(c) if mods.alt_key() && c.eq_ignore_ascii_case("r") => {
+            _ if mods.alt_key() && is_r => {
                 bar.regex = !bar.regex;
                 bar.update(term);
             }
@@ -957,7 +960,6 @@ impl App {
                 if !typed {
                     // Shortcuts still work; other keys (Tab, Home, F1, …)
                     // must not reach the shell behind the bar.
-                    let unmodified = event.key_without_modifiers();
                     return self.bindings.lookup(&unmodified, mods).is_none();
                 }
                 bar.query.push_str(text);
