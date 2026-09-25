@@ -26,14 +26,31 @@ use nuntio_config::Config;
 use tracing_subscriber::EnvFilter;
 use winit::event_loop::EventLoop;
 
-use crate::app::App;
+use crate::app::{App, Startup};
 use crate::banner::{Banner, Severity};
 use crate::event::UserEvent;
+
+const HELP: &str = "\
+nuntio: a GPU-rendered terminal emulator with tabs and split panes
+
+Usage: nuntio [options] [[-e] <command> [<args>...]]
+
+Options:
+  -e, --command <command> [<args>...]
+                                Run a command instead of the shell in the first
+                                tab; everything after it is passed to the command
+      --working-directory <dir> Start the first tab in this directory
+      --config <path>           Use this config file instead of the default one
+      --log-level <level>       Log filter, such as `debug` or `nuntio=trace`
+  -h, --help                    Print this help
+  -V, --version                 Print the version
+";
 
 #[derive(Debug, Default)]
 struct Args {
     config: Option<PathBuf>,
     log_level: Option<String>,
+    startup: Startup,
 }
 
 fn parse_args() -> Result<Args, lexopt::Error> {
@@ -45,8 +62,19 @@ fn parse_args() -> Result<Args, lexopt::Error> {
         match arg {
             Long("config") => args.config = Some(parser.value()?.into()),
             Long("log-level") => args.log_level = Some(parser.value()?.string()?),
+            Long("working-directory") => {
+                args.startup.working_directory = Some(parser.value()?.into());
+            }
+            // The command takes all remaining arguments, options included.
+            Short('e') | Long("command") => {
+                let program = parser.value()?.string()?;
+                args.startup.command = Some(command(program, &mut parser)?);
+            }
+            Value(program) => {
+                args.startup.command = Some(command(program.string()?, &mut parser)?);
+            }
             Short('h') | Long("help") => {
-                println!("Usage: nuntio [--config <path>] [--log-level <level>]");
+                print!("{HELP}");
                 std::process::exit(0);
             }
             Short('V') | Long("version") => {
@@ -57,6 +85,15 @@ fn parse_args() -> Result<Args, lexopt::Error> {
         }
     }
     Ok(args)
+}
+
+/// `program` followed by the rest of the command line.
+fn command(program: String, parser: &mut lexopt::Parser) -> Result<Vec<String>, lexopt::Error> {
+    let mut argv = vec![program];
+    for arg in parser.raw_args()? {
+        argv.push(arg.into_string().map_err(lexopt::Error::NonUnicodeValue)?);
+    }
+    Ok(argv)
 }
 
 /// Load the config for startup. Unlike a reload, an invalid file doesn't
@@ -132,7 +169,13 @@ fn main() -> Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .context("failed to create event loop")?;
-    let mut app = App::new(config, config_path, banner, event_loop.create_proxy());
+    let mut app = App::new(
+        config,
+        config_path,
+        banner,
+        args.startup,
+        event_loop.create_proxy(),
+    );
     event_loop.run_app(&mut app).context("event loop failed")?;
     app.into_result()
 }

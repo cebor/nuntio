@@ -217,6 +217,14 @@ fn themes_dir(config_path: Option<&Path>) -> Option<PathBuf> {
     nuntio_config::themes_dir(config_path?)
 }
 
+/// How the first pane starts, from the command line.
+#[derive(Debug, Default)]
+pub struct Startup {
+    /// Program and arguments to run instead of the shell; never empty.
+    pub command: Option<Vec<String>>,
+    pub working_directory: Option<PathBuf>,
+}
+
 pub struct App {
     config: Config,
     config_path: Option<PathBuf>,
@@ -240,6 +248,8 @@ pub struct App {
     font_size: f32,
     next_pane_id: u64,
     state: Option<WindowState>,
+    /// Used up by the first pane.
+    startup: Startup,
     /// The last tab was closed; quit at the next opportunity.
     exit_requested: bool,
     /// A fatal error that ended the event loop.
@@ -251,6 +261,7 @@ impl App {
         config: Config,
         config_path: Option<PathBuf>,
         banner: Option<Banner>,
+        startup: Startup,
         proxy: EventLoopProxy<UserEvent>,
     ) -> Self {
         let clipboard = arboard::Clipboard::new()
@@ -285,6 +296,7 @@ impl App {
             clipboard,
             next_pane_id: 0,
             state: None,
+            startup,
             exit_requested: false,
             error: None,
         };
@@ -466,27 +478,31 @@ impl App {
         )?)
     }
 
-    /// Start a shell in a new pane. The size is corrected by the next
-    /// `resize_terms`.
-    fn spawn_pane(&mut self, cwd: Option<PathBuf>) -> Result<Pane> {
+    /// Start a shell, or `command` instead, in a new pane. The size is
+    /// corrected by the next `resize_terms`.
+    fn spawn_pane(&mut self, cwd: Option<PathBuf>, command: Option<Vec<String>>) -> Result<Pane> {
         let id = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
         let proxy = self.proxy.clone();
-        let shell = self.config.shell.as_ref();
-        // `wsl.exe --cd ~` picks the directory; a Windows one would be ignored.
-        let cwd = cwd.filter(|_| !shell.is_some_and(|s| s.is_wsl()));
-        let options = SpawnOptions {
-            shell: shell.map(|s| {
+        let config_shell = self.config.shell.as_ref().filter(|_| command.is_none());
+        let wsl = config_shell.is_some_and(|s| s.is_wsl());
+        let shell = match command {
+            Some(mut argv) => Some(Shell {
+                program: argv.remove(0),
+                args: argv,
+            }),
+            None => config_shell.map(|s| {
                 let (program, args) = s.command();
                 Shell { program, args }
             }),
-            working_directory: cwd,
+        };
+        let options = SpawnOptions {
+            shell,
+            // `wsl.exe --cd ~` picks the directory; a Windows one would be ignored.
+            working_directory: cwd.filter(|_| !wsl),
             scrollback: self.config.scrollback,
             palette: self.palette.clone(),
-            env: crate::pane_env::pane_env(
-                self.config_path.as_deref(),
-                shell.is_some_and(|s| s.is_wsl()),
-            ),
+            env: crate::pane_env::pane_env(self.config_path.as_deref(), wsl),
         };
         let size = self.state.as_ref().map_or(
             nuntio_term::TermSize {
@@ -541,7 +557,22 @@ impl App {
                 ));
             }
         }
-        let pane = self.spawn_pane(None)?;
+        let Startup {
+            command,
+            working_directory,
+        } = std::mem::take(&mut self.startup);
+        let cwd = working_directory.filter(|dir| {
+            let exists = dir.is_dir();
+            if !exists {
+                self.notify(Banner::new(
+                    Severity::Warning,
+                    "Working directory",
+                    vec![format!("{} is not a directory", dir.display())],
+                ));
+            }
+            exists
+        });
+        let pane = self.spawn_pane(cwd, command)?;
         let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
         state.resize_terms(&self.config);
         Ok(state)
@@ -628,7 +659,7 @@ impl App {
             .state
             .as_ref()
             .and_then(|s| s.term().working_directory());
-        self.spawn_pane(cwd)
+        self.spawn_pane(cwd, None)
             .inspect_err(|err| {
                 self.notify(Banner::new(
                     Severity::Error,

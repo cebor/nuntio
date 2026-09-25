@@ -93,14 +93,16 @@ In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>
 ## Command line
 
 ```text
-nuntio [--config <path>] [--log-level <level>]
+nuntio [options] [[-e] <command> [<args>...]]
 ```
 
 | Flag | Description |
 |---|---|
+| `-e`, `--command <command> [<args>...]` | Run a command instead of the shell in the first tab, e.g. `nuntio -e htop`. Everything after it goes to the command. The window closes when it exits |
+| `--working-directory <dir>` | Start the first tab in this directory |
 | `--config <path>` | Use this config file instead of the default location |
 | `--log-level <level>` | Log filter such as `debug` or `nuntio=trace` (`RUST_LOG` also works) |
 | `-V`, `--version` | Print the version |
-| `-h`, `--help` | Print usage |
+| `-h`, `--help` | Print the options |
 
 When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux (the previous run's log is kept as `nuntio.old.log`). If something goes wrong, that's the first place to look, and the log is welcome in a [bug report](https://github.com/cebor/nuntio/issues).
