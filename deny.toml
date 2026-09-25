@@ -1,0 +1,46 @@
+# cargo-deny: licenses, security advisories, banned and duplicate crates,
+# and dependency sources. Run with `cargo deny check`; CI does too.
+
+[graph]
+all-features = false
+
+[advisories]
+# Unmaintained crates deep in the tree (winit, wgpu) are common and not
+# actionable here; vulnerabilities still fail.
+unmaintained = "workspace"
+
+[licenses]
+# Compatible with shipping nuntio under MIT OR Apache-2.0. Crates with a
+# choice of licenses (e.g. `Apache-2.0 OR GPL-2.0-only`) pass if one of
+# them is listed.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# The workspace's own crates aren't published.
+ignore = true
+
+[bans]
+# wgpu, winit and cosmic-text pull in several versions of the same crates
+# (windows-sys, hashbrown, …); that isn't worth failing on.
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

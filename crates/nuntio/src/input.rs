@@ -183,7 +183,7 @@ fn encode_app_keypad(input: &KeyInput) -> Option<Vec<u8>> {
     Some(vec![0x1b, b'O', f])
 }
 
-/// Ctrl+<key> as a C0 control character.
+/// `Ctrl+<key>` as a C0 control character.
 fn control_byte(s: &str) -> Option<u8> {
     let mut chars = s.chars();
     let c = chars.next()?;
