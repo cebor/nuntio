@@ -60,6 +60,7 @@ nuntio watches the config file and the `themes/` directory and applies changes a
 - **Invalid values** (for example a font size outside the allowed range) are handled the same way.
 - **Unknown keys** (typos like `famliy`) show a warning banner. Everything else in the file is still applied.
 - If the config is invalid at **startup**, nuntio starts with the defaults and shows the error.
+- With several problems, the banner shows how many (`(1/3)`). Click it for the next one, or click the × to close it.
 
 Most settings apply to open panes right away. `shell` and `scrollback` apply to panes opened after the change.
 

@@ -1,5 +1,5 @@
 //! A one-line notification at the bottom of the window, e.g. for config
-//! errors. Clicking it dismisses it.
+//! errors. Clicking it shows the next message, the × dismisses it.
 
 use nuntio_render::{CellMetrics, UiRect, UiText};
 use nuntio_term::Rgb;
@@ -20,6 +20,8 @@ pub struct Banner {
     /// What the messages are about, shown before the first one.
     pub title: &'static str,
     pub messages: Vec<String>,
+    /// Index of the message shown.
+    shown: usize,
 }
 
 impl Banner {
@@ -28,6 +30,7 @@ impl Banner {
             severity,
             title,
             messages,
+            shown: 0,
         })
     }
 
@@ -46,11 +49,25 @@ impl Banner {
     }
 
     fn text(&self) -> String {
-        let more = match self.messages.len() {
-            1 => String::new(),
-            n => format!(" (+{} more, see log)", n - 1),
-        };
-        format!("{}: {}{more}", self.title, self.messages[0])
+        let message = &self.messages[self.shown];
+        match self.messages.len() {
+            1 => format!("{}: {message}", self.title),
+            n => format!("{} ({}/{n}): {message}", self.title, self.shown + 1),
+        }
+    }
+
+    /// Handle a click at `x`: the × (or a banner with only one message)
+    /// closes it, anywhere else shows the next message. Returns whether the
+    /// banner stays open.
+    pub fn click(&mut self, x: f32, window_width: f32, cell: CellMetrics, scale: f64) -> bool {
+        let (_, height) = self.bounds(0.0, cell, scale);
+        let padding = (height - cell.height as f32) / 2.0;
+        let on_close = x >= window_width - padding - 3.0 * cell.width as f32;
+        if on_close || self.messages.len() == 1 {
+            return false;
+        }
+        self.shown = (self.shown + 1) % self.messages.len();
+        true
     }
 
     /// Top edge and height of the banner, which ends at `bottom`.
@@ -146,9 +163,24 @@ mod tests {
     fn text_summarizes_messages() {
         let banner =
             Banner::config(Severity::Warning, vec!["a".into(), "b".into(), "c".into()]).unwrap();
-        assert_eq!(banner.text(), "Config warning: a (+2 more, see log)");
+        assert_eq!(banner.text(), "Config warning (1/3): a");
         let banner = Banner::new(Severity::Warning, "Link", vec!["x".into()]).unwrap();
         assert_eq!(banner.text(), "Link: x");
+    }
+
+    #[test]
+    fn clicks_page_through_messages_and_the_cross_closes() {
+        let mut banner =
+            Banner::config(Severity::Warning, vec!["a".into(), "b".into(), "c".into()]).unwrap();
+        assert!(banner.click(10.0, 400.0, CELL, 1.0));
+        assert_eq!(banner.text(), "Config warning (2/3): b");
+        assert!(banner.click(10.0, 400.0, CELL, 1.0));
+        assert!(banner.click(10.0, 400.0, CELL, 1.0));
+        assert_eq!(banner.text(), "Config warning (1/3): a", "wraps around");
+        assert!(!banner.click(395.0, 400.0, CELL, 1.0), "the ×");
+
+        let mut single = Banner::new(Severity::Warning, "Link", vec!["x".into()]).unwrap();
+        assert!(!single.click(10.0, 400.0, CELL, 1.0));
     }
 
     #[test]

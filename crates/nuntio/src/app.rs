@@ -1001,12 +1001,20 @@ impl App {
         {
             return;
         }
-        // A click on the banner dismisses it.
+        // A click on the banner pages through its messages or closes it.
         if pressed
             && let Some(banner) = &self.banner
             && state.banner_contains(&self.config, banner, pos)
         {
-            self.banner = None;
+            let width = state.window.inner_size().width as f32;
+            let (cell, scale) = (state.renderer.cell_metrics(), state.window.scale_factor());
+            let stays = self
+                .banner
+                .as_mut()
+                .is_some_and(|banner| banner.click(pos.x as f32, width, cell, scale));
+            if !stays {
+                self.banner = None;
+            }
             state.window.request_redraw();
             return;
         }
