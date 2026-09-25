@@ -499,6 +499,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn metainfo_lists_the_current_version() {
+        let metainfo = fs::read_to_string(root().join("assets/nuntio.metainfo.xml")).unwrap();
+        let newest = metainfo
+            .split("<release version=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next());
+        assert_eq!(
+            newest,
+            Some(version().unwrap().as_str()),
+            "add a <release> for the new version to assets/nuntio.metainfo.xml"
+        );
+    }
+
+    #[test]
     fn groups_entries_by_category() {
         let log = "added\tAdd tabs\n\tRefactor internals\nfixed\tFix crash\nadded\tAdd splits\n";
         assert_eq!(

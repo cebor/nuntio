@@ -57,6 +57,8 @@ priority = "optional"
 depends = "$auto, libxkbcommon0, libwayland-client0, libwayland-cursor0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6"
 recommends = "libvulkan1 | libegl1"
 extended-description = "Terminal emulator with tabs, split panes, GPU rendering and a hot-reloaded TOML config."
+# postinst/prerm register nuntio as x-terminal-emulator.
+maintainer-scripts = "../../assets/deb/"
 assets = [
     ["target/release/nuntio", "usr/bin/", "755"],
     # Only on the PATH inside nuntio's panes.

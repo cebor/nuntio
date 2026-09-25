@@ -35,4 +35,11 @@
     <binary>nuntio</binary>
   </provides>
   <content_rating type="oars-1.1"/>
+  <!-- Newest first; add an entry with every version bump (checked by
+       `cargo test -p xtask`). -->
+  <releases>
+    <release version="0.1.2" date="2026-09-25"/>
+    <release version="0.1.1" date="2026-09-25"/>
+    <release version="0.1.0" date="2026-09-24"/>
+  </releases>
 </component>

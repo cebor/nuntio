@@ -11,3 +11,6 @@ Categories=System;TerminalEmulator;
 Keywords=shell;prompt;command;commandline;terminal;tty;pty;console;
 StartupWMClass=nuntio
 StartupNotify=true
+# How xdg-terminal-exec passes a command and a directory.
+X-TerminalArgExec=-e
+X-TerminalArgDir=--working-directory=
