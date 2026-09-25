@@ -17,7 +17,8 @@ pub struct ConfigWatcher {
 enum Signal {
     /// A watched file changed.
     Changed,
-    /// A directory on the way to a missing watched directory appeared.
+    /// A directory on the way to a watched directory, or one of those
+    /// directories itself, appeared or disappeared.
     Rescan,
 }
 
@@ -68,9 +69,11 @@ impl ConfigWatcher {
                 .paths
                 .iter()
                 .any(|path| wanted_dirs.iter().any(|dir| dir.starts_with(path)));
+            // Deleting a watched themes directory is both.
             if relevant {
                 let _ = tx.send(Signal::Changed);
-            } else if on_the_way {
+            }
+            if on_the_way {
                 let _ = tx.send(Signal::Rescan);
             }
         })?;
@@ -116,13 +119,22 @@ impl ConfigWatcher {
 }
 
 /// Watch each wanted directory, or its closest existing ancestor while it
-/// doesn't exist, skipping what is already watched. Returns whether a
-/// directory was added.
+/// doesn't exist, skipping what is already watched. Directories deleted
+/// since are dropped first, so that their ancestor takes over and sees
+/// them come back. Returns whether a directory was added.
 fn watch_existing(
     watcher: &mut RecommendedWatcher,
     wanted: &[PathBuf],
     watched: &mut Vec<PathBuf>,
 ) -> notify::Result<bool> {
+    watched.retain(|dir| {
+        let exists = dir.is_dir();
+        if !exists {
+            // The OS usually ended the watch already.
+            let _ = watcher.unwatch(dir);
+        }
+        exists
+    });
     let mut added = false;
     for dir in wanted {
         let Some(existing) = dir.ancestors().find(|d| d.is_dir()) else {
@@ -243,6 +255,38 @@ mod tests {
         let changed = rx.recv_timeout(Duration::from_secs(3));
         std::fs::remove_dir_all(&base).unwrap();
         assert!(changed.is_ok(), "config in a new directory not noticed");
+    }
+
+    #[test]
+    // Windows keeps a watched directory until the watch ends, so the test
+    // can't delete and recreate it.
+    #[cfg(unix)]
+    fn notices_a_config_directory_deleted_and_created_again() {
+        let base = std::env::temp_dir().join(format!("nuntio-watch-again-{}", std::process::id()));
+        let dir = base.join("nuntio");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&path, None, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        // A dotfiles tool replaces the whole directory.
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(&path, "scrollback = 5").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(
+            changed.is_ok(),
+            "config in a recreated directory not noticed"
+        );
     }
 
     #[test]
