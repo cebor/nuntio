@@ -163,6 +163,8 @@ impl Bindings {
             let ctrl = ModifiersState::CONTROL;
             bindings.push(named(NamedKey::Tab, ctrl, NextTab));
             bindings.push(named(NamedKey::Tab, ctrl | shift, PreviousTab));
+            bindings.push(named(NamedKey::PageDown, ctrl, NextTab));
+            bindings.push(named(NamedKey::PageUp, ctrl, PreviousTab));
             bindings.push(char('d', ctrl | shift, SplitVertical));
             bindings.push(char('e', ctrl | shift, SplitHorizontal));
             bindings.push(named(NamedKey::Enter, ctrl | shift, ZoomPane));
@@ -387,6 +389,19 @@ mod tests {
         assert_eq!(
             b.lookup(&Key::Named(NamedKey::Tab), ctrl | ModifiersState::SHIFT),
             Some(Action::PreviousTab)
+        );
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::PageDown), ctrl),
+            Some(Action::NextTab)
+        );
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::PageUp), ctrl),
+            Some(Action::PreviousTab)
+        );
+        // Shift+PageUp still scrolls.
+        assert_eq!(
+            b.lookup(&Key::Named(NamedKey::PageUp), ModifiersState::SHIFT),
+            Some(Action::ScrollPageUp)
         );
         assert_eq!(
             b.lookup(&ch("3"), ModifiersState::ALT),
