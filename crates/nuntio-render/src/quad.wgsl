@@ -3,7 +3,7 @@
 
 struct Uniforms {
     screen_size: vec2<f32>,
-    atlas_size: vec2<f32>,
+    _pad: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -19,8 +19,8 @@ const KIND_ROUNDED: u32 = 3u;
 struct Instance {
     @location(0) pos: vec2<f32>,
     @location(1) size: vec2<f32>,
-    // Atlas region in texels: x, y, width, height. Rounded rectangles keep
-    // their corner radius in x.
+    // Atlas region, normalized to 0..1: x, y, width, height. Rounded
+    // rectangles keep their corner radius in pixels in x.
     @location(2) uv: vec4<f32>,
     @location(3) color: vec4<f32>,
     @location(4) kind: u32,
@@ -50,7 +50,7 @@ fn vs_main(@builtin(vertex_index) vertex: u32, inst: Instance) -> VertexOut {
         0.0,
         1.0,
     );
-    out.uv = (inst.uv.xy + corner * inst.uv.zw) / u.atlas_size;
+    out.uv = inst.uv.xy + corner * inst.uv.zw;
     out.color = inst.color;
     out.kind = inst.kind;
     out.local = corner * inst.size;

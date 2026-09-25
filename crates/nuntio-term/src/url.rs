@@ -19,9 +19,14 @@ pub struct Link {
     pub end: (usize, i32),
 }
 
-/// The link under a grid point, if any.
+/// The link under a grid point, if any. Points outside the grid have none.
 pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     let grid = term.grid();
+    let inside = (grid.topmost_line()..=grid.bottommost_line()).contains(&point.line)
+        && point.column <= term.last_column();
+    if !inside {
+        return None;
+    }
     if grid[point].flags.contains(Flags::WIDE_CHAR_SPACER) && point.column.0 > 0 {
         point.column -= 1;
     }

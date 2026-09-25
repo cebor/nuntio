@@ -71,9 +71,15 @@ impl GpuContext {
             .ok_or(GpuError::UnsupportedSurface)?;
         // Colors in the config/themes are sRGB values; blending in a non-sRGB
         // target keeps them exact, like other terminals do.
+        // Only the plain 8-bit variant of the preferred format: the first
+        // non-sRGB format offered may be a float or 10-bit HDR format,
+        // which changes how colors come out.
         let caps = surface.get_capabilities(&adapter);
-        if let Some(format) = caps.formats.iter().copied().find(|f| !f.is_srgb()) {
-            config.format = format;
+        let linear = config.format.remove_srgb_suffix();
+        if caps.formats.contains(&linear) {
+            config.format = linear;
+        } else {
+            tracing::debug!(format = ?config.format, "no non-sRGB variant, blending in sRGB");
         }
         let alpha_mode = [
             wgpu::CompositeAlphaMode::PreMultiplied,

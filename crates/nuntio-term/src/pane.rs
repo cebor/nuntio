@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -143,17 +143,26 @@ impl EventListener for Listener {
             Event::ClipboardStore(_, text) => TermEvent::ClipboardStore(text),
             Event::PtyWrite(text) => return inner.write(text),
             Event::ColorRequest(index, format) => {
-                let color = inner.palette.read().unwrap().get(index);
+                let color = inner
+                    .palette
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(index);
                 return inner.write(format(color));
             }
             Event::TextAreaSizeRequest(format) => {
-                let size = *inner.size.lock().unwrap();
+                let size = *inner.size.lock().unwrap_or_else(PoisonError::into_inner);
                 return inner.write(format(size));
             }
-            // Clipboard reads, mouse cursor and blinking follow in M2.
-            Event::ClipboardLoad(..) | Event::MouseCursorDirty | Event::CursorBlinkingChange => {
+            // Programs may not read the clipboard (OSC 52 queries), as in
+            // xterm and iTerm2 by default: it could leak passwords. There is
+            // no reply, so the program sees no answer at all.
+            Event::ClipboardLoad(..) => {
+                tracing::debug!("denied a clipboard read (OSC 52)");
                 return;
             }
+            // The cursor is re-read with every snapshot.
+            Event::MouseCursorDirty | Event::CursorBlinkingChange => return,
         };
         (inner.callback)(forward);
     }
@@ -305,7 +314,12 @@ impl TermHandle {
     }
 
     pub fn resize(&self, size: TermSize) {
-        *self.listener.inner.size.lock().unwrap() = size.window_size();
+        *self
+            .listener
+            .inner
+            .size
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = size.window_size();
         self.term.lock().resize(size);
         let _ = self.sender.send(Msg::Resize(size.window_size()));
     }
@@ -329,7 +343,12 @@ impl TermHandle {
 
     /// Change the colors, e.g. after a theme switch.
     pub fn set_palette(&self, palette: Palette) {
-        *self.listener.inner.palette.write().unwrap() = palette;
+        *self
+            .listener
+            .inner
+            .palette
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = palette;
     }
 
     /// Terminal modes, e.g. for application cursor keys.
@@ -344,7 +363,12 @@ impl TermHandle {
             .wakeup_pending
             .store(false, Ordering::Release);
         let term = self.term.lock();
-        let palette = self.listener.inner.palette.read().unwrap();
+        let palette = self
+            .listener
+            .inner
+            .palette
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
         Snapshot::capture(&term, &palette, &[], None)
     }
 
@@ -357,8 +381,13 @@ impl TermHandle {
             .store(false, Ordering::Release);
         let term = self.term.lock();
         let matches = search::visible_matches(&term, search);
-        let palette = self.listener.inner.palette.read().unwrap();
-        Snapshot::capture(&term, &palette, &matches, search.current())
+        let palette = self
+            .listener
+            .inner
+            .palette
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        Snapshot::capture(&term, &palette, &matches, search.current_in(&term))
     }
 
     /// Select the next match upwards (older output) or downwards and scroll

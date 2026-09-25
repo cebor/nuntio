@@ -7,7 +7,7 @@ use nuntio_term::{CursorStyle, Rgb, Snapshot, SnapshotCell};
 use unicode_width::UnicodeWidthChar;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
-use crate::atlas::{ATLAS_SIZE, Atlas, AtlasRegion};
+use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::box_drawing;
 use crate::font::{CellMetrics, FaceStyle, Fonts};
 use crate::frame::{Frame, UiText};
@@ -17,6 +17,8 @@ const KIND_SOLID: u32 = 0;
 const KIND_MASK: u32 = 1;
 const KIND_COLOR: u32 = 2;
 const KIND_ROUNDED: u32 = 3;
+/// Upper bound for the mask atlas: 16 MiB at one byte per texel.
+const MAX_MASK_ATLAS_SIZE: u32 = 4096;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -46,7 +48,7 @@ impl Instance {
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct Uniforms {
     screen_size: [f32; 2],
-    atlas_size: [f32; 2],
+    _pad: [f32; 2],
 }
 
 fn rgba(c: Rgb) -> [f32; 4] {
@@ -96,6 +98,8 @@ pub struct Renderer {
     cutout_start: usize,
     /// Problem with the configured font, reported once.
     font_warning: Option<String>,
+    /// The last frame didn't fit into the glyph atlas (already warned).
+    atlas_overflow: bool,
 }
 
 impl Renderer {
@@ -115,12 +119,30 @@ impl Renderer {
         let (fonts, font_warning) = Fonts::new(font_family, font_size, scale_factor);
         let device = &gpu.device;
 
-        let mask_atlas = Atlas::new(device, wgpu::TextureFormat::R8Unorm, "mask atlas");
-        let color_atlas = Atlas::new(device, wgpu::TextureFormat::Rgba8Unorm, "color atlas");
+        // Large fonts on HiDPI screens need room for many glyph masks (one
+        // byte per texel). Color glyphs (emoji) are rarer and cost four.
+        let mask_size = device
+            .limits()
+            .max_texture_dimension_2d
+            .clamp(MIN_ATLAS_SIZE, MAX_MASK_ATLAS_SIZE);
+        let mask_atlas = Atlas::new(
+            device,
+            wgpu::TextureFormat::R8Unorm,
+            "mask atlas",
+            mask_size,
+        );
+        let color_atlas = Atlas::new(
+            device,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "color atlas",
+            MIN_ATLAS_SIZE,
+        );
+        // Glyphs are drawn 1:1; nearest sampling keeps them sharp even when
+        // a quad lands on a fractional position.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("atlas sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -252,6 +274,7 @@ impl Renderer {
             instances: Vec::new(),
             cutout_start: 0,
             font_warning,
+            atlas_overflow: false,
         })
     }
 
@@ -295,9 +318,12 @@ impl Renderer {
             // The atlas filled up mid-frame: start over with an empty one.
             tracing::debug!("glyph atlas full, clearing");
             self.clear_glyphs();
-            if self.build_instances(frame).is_err() {
+            let fits = self.build_instances(frame).is_ok();
+            // Warn once, not on every frame while it stays too full.
+            if !fits && !self.atlas_overflow {
                 tracing::warn!("screen content does not fit into the glyph atlas");
             }
+            self.atlas_overflow = !fits;
         }
         let background = frame.background;
 
@@ -311,7 +337,7 @@ impl Renderer {
         let (width, height) = self.gpu.size();
         let uniforms = Uniforms {
             screen_size: [width as f32, height as f32],
-            atlas_size: [ATLAS_SIZE as f32; 2],
+            _pad: [0.0; 2],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
@@ -423,10 +449,17 @@ impl Renderer {
     fn push_sprites(&mut self, sprites: &[Sprite], x: f32, y: f32, color: Rgb) {
         for sprite in sprites {
             let r = sprite.region;
+            let atlas = if sprite.color {
+                &self.color_atlas
+            } else {
+                &self.mask_atlas
+            };
+            let texel = 1.0 / atlas.size() as f32;
             self.instances.push(Instance {
                 pos: [x + sprite.x as f32, y + sprite.y as f32],
                 size: [r.width as f32, r.height as f32],
-                uv: [r.x as f32, r.y as f32, r.width as f32, r.height as f32],
+                // Normalized: the atlases can differ in size.
+                uv: [r.x as f32, r.y as f32, r.width as f32, r.height as f32].map(|v| v * texel),
                 color: rgba(color),
                 kind: if sprite.color { KIND_COLOR } else { KIND_MASK },
                 _pad: [0; 3],

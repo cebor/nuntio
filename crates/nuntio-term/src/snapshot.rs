@@ -72,8 +72,17 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// The cell at a position. Panics outside the grid; see [`Self::get`].
     pub fn cell(&self, column: usize, line: usize) -> &SnapshotCell {
         &self.cells[line * self.columns + column]
+    }
+
+    /// The cell at a position, if it is inside the grid.
+    pub fn get(&self, column: usize, line: usize) -> Option<&SnapshotCell> {
+        if column >= self.columns || line >= self.lines {
+            return None;
+        }
+        self.cells.get(line * self.columns + column)
     }
 
     /// Copy the visible screen. `matches` are highlighted as search

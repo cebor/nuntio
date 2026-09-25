@@ -1,9 +1,9 @@
 use etagere::{AtlasAllocator, size2};
 
-/// Glyph atlas side length. 2048 is guaranteed by every wgpu backend.
-pub const ATLAS_SIZE: u32 = 2048;
+/// Glyph atlas side length that every wgpu backend supports.
+pub const MIN_ATLAS_SIZE: u32 = 2048;
 
-/// Gap between glyphs so linear sampling never bleeds into neighbours.
+/// Gap between glyphs so sampling never bleeds into neighbours.
 const PADDING: i32 = 1;
 
 /// A region in an atlas texture, in texels.
@@ -22,15 +22,17 @@ pub struct Atlas {
     view: wgpu::TextureView,
     allocator: AtlasAllocator,
     bytes_per_pixel: u32,
+    size: u32,
 }
 
 impl Atlas {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, label: &str) -> Self {
+    /// A square atlas `size` texels wide.
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, label: &str, size: u32) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
-                width: ATLAS_SIZE,
-                height: ATLAS_SIZE,
+                width: size,
+                height: size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -47,9 +49,15 @@ impl Atlas {
         Self {
             texture,
             view,
-            allocator: AtlasAllocator::new(size2(ATLAS_SIZE as i32, ATLAS_SIZE as i32)),
+            allocator: AtlasAllocator::new(size2(size as i32, size as i32)),
             bytes_per_pixel,
+            size,
         }
+    }
+
+    /// Side length in texels, to normalize texture coordinates.
+    pub fn size(&self) -> u32 {
+        self.size
     }
 
     pub fn view(&self) -> &wgpu::TextureView {

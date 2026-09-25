@@ -23,7 +23,8 @@ const fn rgb(hex: u32) -> Rgb {
     }
 }
 
-/// iTerm2 "Default" preset, used until themes land.
+/// iTerm2 "Default" preset, the colors before a theme is applied. Same
+/// values as nuntio-config's `themes/iterm2-default.toml`.
 const ITERM2_ANSI: [u32; 16] = [
     0x000000, 0xc91b00, 0x00c200, 0xc7c400, 0x0225c7, 0xc930c7, 0x00c5c7, 0xc7c7c7, //
     0x686868, 0xff6e67, 0x5ffa68, 0xfffc67, 0x6871ff, 0xff77ff, 0x60fdff, 0xffffff,
