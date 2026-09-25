@@ -41,7 +41,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.
 - **Config editor**: run `nuntio-config` in a nuntio tab to change settings in a terminal UI that only offers valid values and previews every change live.
 - **Hot reload**: saving the config applies it right away. Mistakes show up as a banner in the window, and the previous settings stay active.
-- **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select.
+- **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select. <kbd>Shift</kbd>+click extends a selection, and on Linux a middle click pastes the last selection.
 - **Status bar** (optional): live graphs of CPU, memory and network, the battery level and the time, as in iTerm2.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.
 

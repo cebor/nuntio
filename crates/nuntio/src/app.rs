@@ -569,6 +569,42 @@ impl App {
             .ok()
     }
 
+    /// Put text into the primary selection, for middle-click paste. Only
+    /// Linux has one; Wayland needs the data-control protocol for it.
+    fn set_primary(&mut self, text: String) {
+        #[cfg(target_os = "linux")]
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            use arboard::{LinuxClipboardKind, SetExtLinux};
+
+            if let Err(err) = clipboard
+                .set()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text(text)
+            {
+                tracing::debug!("failed to write primary selection: {err}");
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = text;
+    }
+
+    fn primary_text(&mut self) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        {
+            use arboard::{GetExtLinux, LinuxClipboardKind};
+
+            let clipboard = self.clipboard.as_mut()?;
+            clipboard
+                .get()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text()
+                .inspect_err(|err| tracing::debug!("failed to read primary selection: {err}"))
+                .ok()
+        }
+        #[cfg(not(target_os = "linux"))]
+        None
+    }
+
     fn copy_selection(&mut self) {
         if let Some(text) = self.state.as_ref().and_then(|s| s.term().selection_text()) {
             self.set_clipboard(text);
@@ -1039,6 +1075,14 @@ impl App {
         }
 
         if button != Button::Left {
+            // Middle click pastes the primary selection, as on X11.
+            if pressed
+                && button == Button::Middle
+                && let Some(text) = self.primary_text()
+                && let Some(state) = self.state.as_ref()
+            {
+                state.term().paste(&text);
+            }
             return;
         }
         if pressed {
@@ -1063,8 +1107,11 @@ impl App {
         } else if state.mouse.selecting {
             state.mouse.selecting = false;
             state.mouse.autoscroll = None;
-            if self.config.mouse.copy_on_select {
-                self.copy_selection();
+            if let Some(text) = state.term().selection_text() {
+                if self.config.mouse.copy_on_select {
+                    self.set_clipboard(text.clone());
+                }
+                self.set_primary(text);
             }
         }
     }
