@@ -32,6 +32,8 @@ Run `nuntio-config` in a nuntio tab to change settings without editing TOML by h
 - Comments and the layout of your file are kept. Resetting a setting to its default removes it from the file.
 - A `●` marks settings that are set in the file.
 
+![nuntio-config showing the Theme section with a light and a dark theme that follow the OS appearance](../assets/screenshots/nuntio-config.png)
+
 | Key | Action |
 |---|---|
 | <kbd>↑</kbd> <kbd>↓</kbd> | Move |
@@ -170,6 +172,8 @@ option_as_meta = "none"
 
 A bar with live system graphs and the date and time, as in iTerm2. It is off by default.
 
+![The status bar with CPU, memory and network graphs, the battery level and the date](../assets/screenshots/status-bar.png)
+
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `false` | Show the status bar. |
@@ -230,6 +234,8 @@ shell = { wsl = "Ubuntu", program = "fish", args = ["-l"] }
 New tabs and panes start in your Linux home directory (`~`). nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM` and `TERM_PROGRAM_VERSION` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept.
 
 ## Themes
+
+![The same window in Solarized Light and Tokyo Night, split diagonally](../assets/screenshots/themes.png)
 
 ### Built-in themes
 

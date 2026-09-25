@@ -28,7 +28,7 @@
 
 nuntio is one window with tabs and split panes, rendered on the GPU and configured with a single TOML file that reloads while you type. Terminal emulation comes from [`alacritty_terminal`](https://crates.io/crates/alacritty_terminal); everything around it (window, tabs, panes, rendering, config) is nuntio's own.
 
-![nuntio with two tabs, a split pane with git log and the nuntio-config editor, and the status bar](assets/screenshot.png)
+![nuntio on macOS with two tabs, a split pane with git log and the nuntio-config editor, and the status bar](assets/screenshot.png)
 
 ## Features
 
@@ -46,6 +46,8 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select. <kbd>Shift</kbd>+click extends a selection, and on Linux a middle click pastes the last selection.
 - **Status bar** (optional): live graphs of CPU, memory and network, the battery level and the time, as in iTerm2.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.
+
+<img src="assets/screenshots/find-bar.png" width="656" alt="The find bar searching for &quot;tab&quot; in git log, with five matches highlighted and a match count of 5/5">
 
 ## Installation
 
@@ -126,6 +128,8 @@ dim_inactive = 0.2
 key = "Ctrl+Shift+N"
 action = "new_tab"
 ```
+
+![The same window in Solarized Light and Tokyo Night, split diagonally](assets/screenshots/themes.png)
 
 Changes apply as soon as you save the file. Or run `nuntio-config` in a nuntio tab and change settings in a terminal UI instead of editing TOML. The **[configuration reference](docs/config.md)** covers every option with its default, custom themes, and all keybinding actions.
 

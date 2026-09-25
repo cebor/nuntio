@@ -49,6 +49,8 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 /* In running text, links aren't told apart by color alone. */
 .prose a { text-decoration: underline; text-underline-offset: 2px; }
+/* Screenshots are taken at 2x; shrink them to the column. */
+.prose img { max-width: 100%; height: auto; }
 
 .skip { position: absolute; left: 12px; top: -48px; z-index: 100; padding: 8px 14px; border-radius: 6px; background: var(--accent); color: var(--accent-text); }
 .skip:focus { top: 12px; }

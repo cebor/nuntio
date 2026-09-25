@@ -166,6 +166,20 @@ fn site(serve: bool) -> Result<()> {
         &root.join("assets/icons/png/32.png"),
         &site.join("static/favicon.png"),
     )?;
+    // The hero shot is also the social preview image; the others are used
+    // by the configuration reference.
+    let screenshots = site.join("static/screenshots");
+    copy(
+        &root.join("assets/screenshot.png"),
+        &screenshots.join("screenshot.png"),
+    )?;
+    for entry in fs::read_dir(root.join("assets/screenshots"))? {
+        let path = entry?.path();
+        copy(
+            &path,
+            &screenshots.join(path.file_name().context("no file name")?),
+        )?;
+    }
 
     ensure!(
         available("zola"),
@@ -177,7 +191,8 @@ fn site(serve: bool) -> Result<()> {
 }
 
 /// Turn `docs/config.md` into a Zola page: front matter instead of the H1,
-/// and links into the repo pointed at the site's own pages.
+/// and links into the repo pointed at the site's own pages. Screenshots are
+/// served from `static/screenshots/`; the page lives at `docs/config/`.
 fn site_config_page(markdown: &str) -> Result<String> {
     let body = markdown
         .strip_prefix("# Configuration reference\n")
@@ -186,10 +201,13 @@ fn site_config_page(markdown: &str) -> Result<String> {
         "](../README.md#keyboard-shortcuts)",
         "](@/docs/getting-started.md#keyboard-shortcuts)",
     );
+    const SCREENSHOTS: &str = "](../assets/screenshots/";
     ensure!(
-        !body.contains("](../"),
+        body.match_indices("](../")
+            .all(|(i, _)| body[i..].starts_with(SCREENSHOTS)),
         "docs/config.md links to a repo file the site doesn't have"
     );
+    let body = body.replace(SCREENSHOTS, "](../../screenshots/");
     Ok(format!(
         "+++\ntitle = \"Configuration reference\"\ndescription = \"Every nuntio setting with its default, themes, keybindings and the nuntio-config editor.\"\nweight = 2\n+++\n{body}"
     ))
@@ -534,6 +552,15 @@ mod tests {
             body,
             "See the [defaults](@/docs/getting-started.md#keyboard-shortcuts).\n"
         );
+    }
+
+    #[test]
+    fn config_page_points_screenshots_at_the_site() {
+        let page = site_config_page(
+            "# Configuration reference\n![Themes](../assets/screenshots/themes.png)\n",
+        )
+        .unwrap();
+        assert!(page.ends_with("![Themes](../../screenshots/themes.png)\n"));
     }
 
     #[test]
