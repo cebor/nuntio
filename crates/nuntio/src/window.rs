@@ -16,6 +16,7 @@ use winit::window::{ResizeDirection, Window};
 use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::ime;
+use crate::link;
 use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
 use crate::pane_tree::{Divider, Layout, PaneTree, Rect};
 use crate::search_bar::SearchBar;
@@ -593,6 +594,31 @@ impl WindowState {
             );
             rects.extend(bar_rects);
             texts.extend(bar_texts);
+        }
+
+        // Where the link under the pointer leads: OSC 8 links may show
+        // other text.
+        if let Some((id, link)) = &self.mouse.hover_link
+            && let Some(mut rect) = layout.rect(*id)
+            && let Some(pos) = self.mouse.position
+        {
+            // Stay above the banner, which covers the bottom of the window.
+            if let Some(banner) = banner {
+                let cell = self.renderer.cell_metrics();
+                let (top, _) = banner.bounds(self.banner_bottom(config), cell, self.scale());
+                rect.height = rect.height.min(top - rect.y).max(0.0);
+            }
+            let (hint_rects, hint_texts) = link::draw_hint(
+                &link.url,
+                rect,
+                (pos.x as f32, pos.y as f32),
+                self.renderer.small_cell_metrics(),
+                self.scale(),
+                background,
+                foreground,
+            );
+            rects.extend(hint_rects);
+            texts.extend(hint_texts);
         }
 
         if let Some(banner) = banner {

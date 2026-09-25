@@ -71,7 +71,7 @@ impl Banner {
     }
 
     /// Top edge and height of the banner, which ends at `bottom`.
-    fn bounds(&self, bottom: f32, cell: CellMetrics, scale: f64) -> (f32, f32) {
+    pub fn bounds(&self, bottom: f32, cell: CellMetrics, scale: f64) -> (f32, f32) {
         let padding = (4.0 * scale).round() as f32;
         let height = cell.height as f32 + 2.0 * padding;
         (bottom - height, height)

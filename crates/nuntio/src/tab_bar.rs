@@ -455,7 +455,7 @@ impl TabBar {
 }
 
 /// Cut `text` to at most `cells` columns, ending in an ellipsis if cut.
-fn truncate(text: &str, cells: usize) -> String {
+pub fn truncate(text: &str, cells: usize) -> String {
     if text.width() <= cells {
         return text.to_owned();
     }

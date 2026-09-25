@@ -1117,7 +1117,13 @@ impl App {
             && let Some((_, link)) = &state.mouse.hover_link
         {
             let url = link.url.clone();
-            if let Err(err) = open::that_detached(&url) {
+            if let Err(reason) = crate::link::check(&url) {
+                self.notify(Banner::new(
+                    Severity::Warning,
+                    "Link",
+                    vec![format!("not opening {url}: {reason}")],
+                ));
+            } else if let Err(err) = open::that_detached(&url) {
                 self.notify(Banner::new(
                     Severity::Warning,
                     "Link",
