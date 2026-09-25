@@ -243,7 +243,7 @@ pub static SETTINGS: &[Setting] = &[
             max: MAX_SCROLLBACK,
             step: 1000,
         },
-        "Lines of history per pane. Applies to panes opened after the change.",
+        "Lines of history per pane. Applies to open panes too; a smaller value drops the oldest lines.",
     ),
     setting(
         "theme",
