@@ -33,7 +33,14 @@ fn selected_style(focused: bool) -> Style {
     }
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
+/// Drawing state that outlives a frame.
+#[derive(Default)]
+pub struct View {
+    /// Scroll position of the settings list.
+    rows: ListState,
+}
+
+pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
     let [header, body, details, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
@@ -46,7 +53,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let [sections, rows] =
         Layout::horizontal([Constraint::Length(17), Constraint::Min(20)]).areas(body);
     draw_sections(frame, sections, app);
-    draw_rows(frame, rows, app);
+    draw_rows(frame, rows, app, &mut view.rows);
     draw_details(frame, details, app);
     draw_footer(frame, footer, app);
 
@@ -261,7 +268,19 @@ fn draw_sections(frame: &mut Frame, area: Rect, app: &App) {
     let focused = app.focus == Focus::Sections && matches!(app.mode, Mode::Normal);
     let items: Vec<ListItem> = Section::ALL
         .iter()
-        .map(|s| ListItem::new(format!(" {}", s.label())))
+        .enumerate()
+        .map(|(index, s)| {
+            if index != app.section {
+                return ListItem::new(format!("  {}", s.label()));
+            }
+            let style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+            let style = if focused {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            };
+            ListItem::new(format!("▌ {}", s.label())).style(style)
+        })
         .collect();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -270,27 +289,35 @@ fn draw_sections(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             tone(Tone::Dim)
         });
+    // Selected only so the list scrolls to it; the item styles itself.
     let mut state = ListState::default().with_selected(Some(app.section));
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(selected_style(focused));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(List::new(items).block(block), area, &mut state);
 }
 
-fn draw_rows(frame: &mut Frame, area: Rect, app: &App) {
+/// All sections' rows in one list, each under a heading.
+fn draw_rows(frame: &mut Frame, area: Rect, app: &App, state: &mut ListState) {
     let focused = app.focus == Focus::Rows && matches!(app.mode, Mode::Normal);
-    let section = app.current_section();
-    let rows = app.rows(section);
-    let label_width = rows
-        .iter()
-        .map(|&r| app.row_label(r).chars().count())
-        .max()
-        .unwrap_or(0)
-        + 2;
-    let items: Vec<ListItem> = rows
-        .iter()
-        .enumerate()
-        .map(|(index, &row)| {
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut heading = 0;
+    for (section_index, &section) in Section::ALL.iter().enumerate() {
+        if section_index > 0 {
+            items.push(ListItem::new(""));
+        }
+        if section_index == app.section {
+            heading = items.len();
+        }
+        items.push(ListItem::new(Line::styled(
+            section.label(),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )));
+        let rows = app.rows(section);
+        let label_width = rows
+            .iter()
+            .map(|&r| app.row_label(r).chars().count())
+            .max()
+            .unwrap_or(0)
+            + 2;
+        items.extend(rows.iter().enumerate().map(|(index, &row)| {
             let marker = match row {
                 Row::Keybinding(i) if app.binding_problem(i).is_some() => {
                     Span::styled("⚠ ", tone(Tone::Warn))
@@ -307,29 +334,47 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App) {
             if let Row::Theme(slot) = row
                 && let Some(theme) = app.themes.get(&app.theme_name(slot))
             {
+                let highlighted = focused && section_index == app.section && index == app.row;
                 spans.push(Span::raw("  "));
-                spans.extend(swatch(theme, 16, focused && index == app.row));
+                spans.extend(swatch(theme, 16, highlighted));
             }
             let mut item = ListItem::new(Line::from(spans));
             if app.row_is_foreign(row) {
                 item = item.style(tone(Tone::Dim));
             }
             item
-        })
-        .collect();
+        }));
+    }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(format!(" {} ", section.label()))
+        .title(" Settings ")
         .border_style(if focused {
             Style::new().fg(ACCENT)
         } else {
             tone(Tone::Dim)
         });
-    let mut state = ListState::default().with_selected(Some(app.row));
+    let selected = heading + 1 + app.row;
+    let on_sections = app.focus == Focus::Sections;
+    *state.offset_mut() = rows_offset(state.offset(), heading, selected, on_sections);
+    state.select(Some(selected));
     let list = List::new(items)
         .block(block)
+        .scroll_padding(1)
         .highlight_style(selected_style(focused));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, area, state);
+}
+
+/// Where the settings list starts before ratatui scrolls the selection
+/// into view. Choosing a section in the sidebar puts its heading at the
+/// top; entering a section's first row keeps its heading visible.
+fn rows_offset(previous: usize, heading: usize, selected: usize, on_sections: bool) -> usize {
+    if on_sections {
+        heading
+    } else if selected == heading + 1 {
+        previous.min(heading)
+    } else {
+        previous
+    }
 }
 
 /// Colored blocks for the theme's first `count` ANSI colors on its
@@ -453,6 +498,18 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rows_offset_keeps_headings_in_view() {
+        // The sidebar puts the section's heading at the top.
+        assert_eq!(rows_offset(0, 20, 21, true), 20);
+        assert_eq!(rows_offset(40, 20, 23, true), 20);
+        // A first row pulls its heading into view.
+        assert_eq!(rows_offset(25, 20, 21, false), 20);
+        assert_eq!(rows_offset(10, 20, 21, false), 10);
+        // Elsewhere the list keeps its position.
+        assert_eq!(rows_offset(10, 20, 23, false), 10);
+    }
 
     #[test]
     fn input_scrolls_to_keep_the_cursor_visible() {

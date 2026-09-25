@@ -132,10 +132,11 @@ pub fn main() -> Result<()> {
     .map_err(anyhow::Error::msg)?;
     app.set_theme_warnings(theme_warnings);
 
+    let mut view = ui::View::default();
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
         while !app.quit {
-            terminal.draw(|frame| ui::draw(frame, &app))?;
+            terminal.draw(|frame| ui::draw(frame, &app, &mut view))?;
             // Blocks until there is input: no CPU use while idle.
             if let Event::Key(key) = event::read()?
                 && let Some(key) = map_key(key)
