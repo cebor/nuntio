@@ -246,6 +246,13 @@ pub static SETTINGS: &[Setting] = &[
         "Lines of history per pane. Applies to open panes too; a smaller value drops the oldest lines.",
     ),
     setting(
+        "clipboard_write",
+        Section::General,
+        "Clipboard write",
+        Kind::Bool,
+        "Let programs copy to the clipboard with OSC 52, e.g. vim or tmux over ssh. Programs can never read it.",
+    ),
+    setting(
         "theme",
         Section::Theme,
         "Theme",

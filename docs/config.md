@@ -80,6 +80,9 @@ This file lists every option with its default value:
 # Lines of history per pane.
 scrollback = 10000
 
+# Programs may copy to the clipboard (OSC 52).
+clipboard_write = true
+
 # One theme name…
 theme = "iTerm2 Default"
 # …or a pair that follows the OS appearance (replace the line above):
@@ -136,6 +139,7 @@ option_as_meta = "none"
 |---|---|---|---|
 | `shell` | table | platform shell | `program` (string) and `args` (list of strings), or `wsl` to start in a WSL distribution. See [Shell](#shell). |
 | `scrollback` | integer | `10000` | Lines of history per pane, at most `1000000`. |
+| `clipboard_write` | bool | `true` | Let programs copy to the clipboard with OSC 52, e.g. vim or tmux over ssh. Programs can never read the clipboard, so a program can't see what you copied, but one could replace it before you paste. |
 | `theme` | string or table | `"iTerm2 Default"` | A theme name, or `{ light = "…", dark = "…" }` to follow the OS appearance. See [Themes](#themes). |
 
 ### `[font]`

@@ -3,7 +3,9 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nuntio_term::{GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermSize};
+use nuntio_term::{
+    GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize,
+};
 
 const SIZE: TermSize = TermSize {
     columns: 40,
@@ -16,9 +18,22 @@ fn spawn(script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
     spawn_with_env(script, Vec::new())
 }
 
+const OPTIONS: TermOptions = TermOptions {
+    scrollback: 100,
+    clipboard_write: true,
+};
+
 fn spawn_with_env(
     script: &str,
     env: Vec<(String, String)>,
+) -> (TermHandle, mpsc::Receiver<TermEvent>) {
+    spawn_with(script, env, OPTIONS)
+}
+
+fn spawn_with(
+    script: &str,
+    env: Vec<(String, String)>,
+    term: TermOptions,
 ) -> (TermHandle, mpsc::Receiver<TermEvent>) {
     let (tx, rx) = mpsc::channel();
     let options = SpawnOptions {
@@ -27,7 +42,7 @@ fn spawn_with_env(
             args: vec!["-c".into(), script.into()],
         }),
         working_directory: None,
-        scrollback: 100,
+        term,
         palette: Default::default(),
         env,
     };
@@ -308,7 +323,26 @@ fn scrollback_can_shrink() {
     handle.scroll(1000);
     assert_eq!(line_text(&handle, 0), "line1");
 
-    handle.set_scrollback(10);
+    handle.set_options(TermOptions {
+        scrollback: 10,
+        ..OPTIONS
+    });
     handle.scroll(1000);
     assert_eq!(line_text(&handle, 0), "line37");
+}
+
+#[test]
+fn clipboard_writes_can_be_denied() {
+    // OSC 52 with "hi" in base64.
+    let script = "printf '\\033]52;c;aGk=\\a'";
+    let stored = |clipboard_write| {
+        let term = TermOptions {
+            clipboard_write,
+            ..OPTIONS
+        };
+        let (_handle, rx) = spawn_with(script, Vec::new(), term);
+        wait_for_exit(&rx).contains(&TermEvent::ClipboardStore("hi".into()))
+    };
+    assert!(stored(true));
+    assert!(!stored(false));
 }

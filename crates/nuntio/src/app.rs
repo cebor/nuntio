@@ -9,7 +9,7 @@ use nuntio_config::{
 };
 use nuntio_render::{FrameStatus, Renderer};
 use nuntio_term::{
-    Palette, Rgb, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
+    Palette, Rgb, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode, TermOptions,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -216,6 +216,14 @@ fn palette_from(theme: &Theme) -> Palette {
     palette.selection_foreground = to_rgb(theme.selection_foreground);
     palette.selection_background = to_rgb(theme.selection_background);
     palette
+}
+
+/// The terminal options of a pane, from the config.
+fn term_options(config: &Config) -> TermOptions {
+    TermOptions {
+        scrollback: config.scrollback,
+        clipboard_write: config.clipboard_write,
+    }
 }
 
 fn themes_dir(config_path: Option<&Path>) -> Option<PathBuf> {
@@ -497,9 +505,10 @@ impl App {
                         .set_font_family(self.config.font.family.clone()),
                 );
             }
-            if old.scrollback != self.config.scrollback {
+            let options = term_options(&self.config);
+            if term_options(&old) != options {
                 for pane in state.tabs.iter().flat_map(|t| &t.content.panes) {
-                    pane.term.set_scrollback(self.config.scrollback);
+                    pane.term.set_options(options);
                 }
             }
             if old.font.size != self.config.font.size {
@@ -564,7 +573,7 @@ impl App {
             shell,
             // `wsl.exe --cd ~` picks the directory; a Windows one would be ignored.
             working_directory: cwd.filter(|_| !wsl),
-            scrollback: self.config.scrollback,
+            term: term_options(&self.config),
             palette: self.palette.clone(),
             env: crate::pane_env::pane_env(self.config_path.as_deref(), wsl),
         };

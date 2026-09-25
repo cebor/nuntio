@@ -48,12 +48,22 @@ pub struct Shell {
     pub args: Vec<String>,
 }
 
+/// Terminal options that can also change while a pane runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermOptions {
+    /// Lines of history.
+    pub scrollback: usize,
+    /// Programs may copy to the clipboard (OSC 52). Reading it is never
+    /// allowed.
+    pub clipboard_write: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct SpawnOptions {
     /// `None` spawns the user's default shell.
     pub shell: Option<Shell>,
     pub working_directory: Option<PathBuf>,
-    pub scrollback: usize,
+    pub term: TermOptions,
     pub palette: Palette,
     /// More environment variables for the shell; they replace inherited ones.
     pub env: Vec<(String, String)>,
@@ -194,7 +204,7 @@ impl TermHandle {
             }),
         };
 
-        let config = term_config(options.scrollback);
+        let config = term_config(options.term);
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
 
         let shell_program = options
@@ -342,10 +352,10 @@ impl TermHandle {
         self.shell_pid.and_then(process::working_directory)
     }
 
-    /// Change how many lines of scrollback are kept. Fewer drops the
-    /// oldest lines.
-    pub fn set_scrollback(&self, lines: usize) {
-        self.term.lock().set_options(term_config(lines));
+    /// Change the terminal options. Less scrollback drops the oldest
+    /// lines.
+    pub fn set_options(&self, options: TermOptions) {
+        self.term.lock().set_options(term_config(options));
     }
 
     /// Change the colors, e.g. after a theme switch.
@@ -462,10 +472,15 @@ impl GridPoint {
     }
 }
 
-/// alacritty's terminal options; only the scrollback is configurable.
-fn term_config(scrollback: usize) -> term::Config {
+/// alacritty's terminal options.
+fn term_config(options: TermOptions) -> term::Config {
     term::Config {
-        scrolling_history: scrollback,
+        scrolling_history: options.scrollback,
+        osc52: if options.clipboard_write {
+            term::Osc52::OnlyCopy
+        } else {
+            term::Osc52::Disabled
+        },
         ..Default::default()
     }
 }

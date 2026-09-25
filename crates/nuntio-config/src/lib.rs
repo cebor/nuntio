@@ -27,6 +27,8 @@ pub use watch::ConfigWatcher;
 pub struct Config {
     pub shell: Option<Shell>,
     pub scrollback: usize,
+    /// Programs may copy to the clipboard (OSC 52).
+    pub clipboard_write: bool,
     pub font: Font,
     pub window: Window,
     pub tabs: Tabs,
@@ -43,6 +45,7 @@ impl Default for Config {
         Self {
             shell: None,
             scrollback: 10_000,
+            clipboard_write: true,
             font: Font::default(),
             window: Window::default(),
             tabs: Tabs::default(),

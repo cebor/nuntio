@@ -2018,7 +2018,10 @@ mod tests {
     fn navigation_moves_between_sections() {
         let (mut app, _) = app(None);
         assert_eq!(app.current_section(), Section::General);
-        app.key(Key::Down);
+        // Down past the last row of a section enters the next one.
+        for _ in 0..app.rows(Section::General).len() {
+            app.key(Key::Down);
+        }
         assert_eq!(app.current_section(), Section::Theme);
         app.key(Key::Up);
         assert_eq!(app.current_section(), Section::General);
