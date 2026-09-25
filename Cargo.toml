@@ -5,7 +5,7 @@ members = ["crates/*", "xtask"]
 default-members = ["crates/nuntio"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 # Checked in CI; the highest a dependency needs (sysinfo).
 rust-version = "1.95"

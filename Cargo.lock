@@ -1917,7 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1941,7 +1941,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-config"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "chrono",
  "dirs",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-config-tui"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-render"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-term"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "alacritty_terminal",
  "thiserror 2.0.21",
