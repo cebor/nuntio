@@ -444,6 +444,10 @@ impl App {
             working_directory: cwd,
             scrollback: self.config.scrollback,
             palette: self.palette.clone(),
+            env: crate::pane_env::pane_env(
+                self.config_path.as_deref(),
+                shell.is_some_and(|s| s.is_wsl()),
+            ),
         };
         let size = self.state.as_ref().map_or(
             nuntio_term::TermSize {

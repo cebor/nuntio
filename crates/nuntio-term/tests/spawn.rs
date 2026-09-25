@@ -13,6 +13,13 @@ const SIZE: TermSize = TermSize {
 };
 
 fn spawn(script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
+    spawn_with_env(script, Vec::new())
+}
+
+fn spawn_with_env(
+    script: &str,
+    env: Vec<(String, String)>,
+) -> (TermHandle, mpsc::Receiver<TermEvent>) {
     let (tx, rx) = mpsc::channel();
     let options = SpawnOptions {
         shell: Some(Shell {
@@ -22,6 +29,7 @@ fn spawn(script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
         working_directory: None,
         scrollback: 100,
         palette: Default::default(),
+        env,
     };
     let handle = TermHandle::spawn(options, SIZE, move |event| {
         let _ = tx.send(event);
@@ -72,6 +80,18 @@ fn environment_and_size() {
     wait_for_exit(&rx);
 
     assert_eq!(line_text(&handle, 0), "xterm-256color truecolor5 40");
+}
+
+#[test]
+fn extra_environment() {
+    let env = vec![
+        ("NUNTIO_CONFIG".to_owned(), "/tmp/x.toml".to_owned()),
+        ("TERM".to_owned(), "dumb".to_owned()),
+    ];
+    let (handle, rx) = spawn_with_env("printf \"$NUNTIO_CONFIG $TERM\"", env);
+    wait_for_exit(&rx);
+
+    assert_eq!(line_text(&handle, 0), "/tmp/x.toml dumb");
 }
 
 #[test]

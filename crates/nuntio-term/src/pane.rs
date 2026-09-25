@@ -55,6 +55,8 @@ pub struct SpawnOptions {
     pub working_directory: Option<PathBuf>,
     pub scrollback: usize,
     pub palette: Palette,
+    /// More environment variables for the shell; they replace inherited ones.
+    pub env: Vec<(String, String)>,
 }
 
 /// Terminal grid size plus the cell size in physical pixels.
@@ -194,7 +196,6 @@ impl TermHandle {
             .as_ref()
             .map(|s| s.program.clone())
             .unwrap_or_else(default_shell_name);
-        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut env = HashMap::from([
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
@@ -204,6 +205,7 @@ impl TermHandle {
                 env!("CARGO_PKG_VERSION").into(),
             ),
         ]);
+        env.extend(options.env);
         #[cfg(windows)]
         env.insert(
             "WSLENV".into(),

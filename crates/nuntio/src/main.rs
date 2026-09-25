@@ -8,6 +8,7 @@ mod event;
 mod ime;
 mod input;
 mod mouse;
+mod pane_env;
 mod pane_tree;
 mod search_bar;
 mod status_bar;
