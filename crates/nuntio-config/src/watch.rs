@@ -123,14 +123,18 @@ fn watch_existing(
     Ok(())
 }
 
-/// A path as given, with its directory resolved, and fully resolved
-/// (following a symlinked file to its target).
+/// A path as given, with its closest existing ancestor resolved (the rest may
+/// not exist yet), and fully resolved (following a symlinked file to its
+/// target).
 fn path_variants(path: &Path) -> Vec<PathBuf> {
     let mut variants = vec![path.to_owned()];
-    if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
-        && let Ok(parent) = parent.canonicalize()
+    if let Some(parent) = path.parent()
+        && let Some((existing, resolved)) = parent
+            .ancestors()
+            .find_map(|dir| Some((dir, dir.canonicalize().ok()?)))
+        && let Ok(rest) = path.strip_prefix(existing)
     {
-        variants.push(parent.join(name));
+        variants.push(resolved.join(rest));
     }
     if let Ok(resolved) = path.canonicalize() {
         variants.push(resolved);
@@ -193,6 +197,23 @@ mod tests {
         let changed = rx.recv_timeout(Duration::from_secs(3));
         std::fs::remove_dir_all(&base).unwrap();
         assert!(changed.is_ok(), "config in a new directory not noticed");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolves_a_symlinked_ancestor_of_a_missing_path() {
+        let base = std::env::temp_dir().join(format!("nuntio-watch-vars-{}", std::process::id()));
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let path = link.join("nuntio").join("config.toml");
+        let variants = path_variants(&path);
+        let expected = real.canonicalize().unwrap().join("nuntio/config.toml");
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(variants.contains(&path));
+        assert!(variants.contains(&expected), "{variants:?}");
     }
 
     #[test]
