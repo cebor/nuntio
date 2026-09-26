@@ -34,8 +34,8 @@ pub struct KeyInput<'a> {
     pub meta: bool,
     /// Option is held on macOS without acting as Meta.
     pub option: bool,
-    /// Only the kitty protocol reports it; otherwise Super combinations
-    /// are shortcuts.
+    /// Only the kitty protocol reports it, on the modifier keys' own
+    /// events; other Super combinations are nuntio's shortcuts.
     pub super_key: bool,
 }
 
@@ -263,6 +263,15 @@ fn is_latin(c: char) -> bool {
     matches!(
         c as u32,
         0..0x0250 | 0x1E00..0x1F00 | 0x2C60..0x2C80 | 0xA720..0xA800 | 0xAB30..0xAB70
+    )
+}
+
+/// Shift, Ctrl, Alt, Super and the like: keys that only modify others.
+pub fn is_modifier(key: &Key) -> bool {
+    use NamedKey::*;
+    matches!(
+        key,
+        Key::Named(Shift | Control | Alt | AltGraph | Super | Meta | Hyper)
     )
 }
 
@@ -602,6 +611,14 @@ mod tests {
         // Other keys and combinations keep their encoding.
         assert_eq!(option(NamedKey::ArrowUp, false), b"\x1bOA");
         assert_eq!(option(NamedKey::ArrowLeft, true), b"\x1b[1;2D");
+    }
+
+    #[test]
+    fn modifier_keys() {
+        assert!(is_modifier(&Key::Named(NamedKey::Super)));
+        assert!(is_modifier(&Key::Named(NamedKey::Shift)));
+        assert!(!is_modifier(&Key::Named(NamedKey::Enter)));
+        assert!(!is_modifier(&ch("a")));
     }
 
     #[test]

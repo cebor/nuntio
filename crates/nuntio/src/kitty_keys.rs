@@ -570,6 +570,12 @@ mod tests {
         assert_eq!(held.sends(ALL_KEYS | EVENTS), "\x1b[57441;1:3u");
         let right_ctrl = named(NamedKey::Control).at(KeyLocation::Right, KeyCode::ControlRight);
         assert_eq!(right_ctrl.sends(ALL_KEYS), "\x1b[57448;5u");
+        // Held with Super, which nuntio otherwise keeps for its shortcuts.
+        let super_key = Press {
+            super_key: true,
+            ..named(NamedKey::Super).at(KeyLocation::Left, KeyCode::SuperLeft)
+        };
+        assert_eq!(super_key.sends(ALL_KEYS), "\x1b[57444;9u");
     }
 
     #[test]

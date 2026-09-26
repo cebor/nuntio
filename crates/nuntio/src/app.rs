@@ -1316,8 +1316,10 @@ impl App {
             self.run_action(action);
             return false;
         }
-        // Unbound Cmd/Super combinations are shortcuts, not text.
-        !mods.super_key()
+        // Unbound Cmd/Super combinations are shortcuts, not text. The
+        // modifier keys themselves still go to programs that ask for them
+        // (kitty's "report all keys").
+        !mods.super_key() || input::is_modifier(&event.logical_key)
     }
 
     /// The shortcut for a key; on layouts without Latin letters, also
