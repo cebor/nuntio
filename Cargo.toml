@@ -54,6 +54,10 @@ starship-battery = "0.11"
 libc = "0.2"
 # The macOS language and region, for LANG in panes.
 sys-locale = "0.3"
+# The macOS menu bar. The versions wgpu and arboard already use.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSProcessInfo"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_System_Registry"] }
 
 [workspace.lints.rust]

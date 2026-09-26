@@ -9,6 +9,8 @@ mod ime;
 mod input;
 mod kitty_keys;
 mod link;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod mouse;
 mod pane_env;
 mod pane_tree;
@@ -201,9 +203,11 @@ fn main() -> Result<()> {
     });
     let (config, banner) = load_config(config_path.as_deref(), warnings);
 
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
-        .build()
-        .context("failed to create event loop")?;
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
+    // nuntio sets up its own menu bar (`macos_menu`).
+    #[cfg(target_os = "macos")]
+    winit::platform::macos::EventLoopBuilderExtMacOS::with_default_menu(&mut builder, false);
+    let event_loop = builder.build().context("failed to create event loop")?;
     let mut app = App::new(
         config,
         config_path,

@@ -26,7 +26,7 @@ use winit::window::{
 
 use crate::actions::{Action, Bindings};
 use crate::banner::{Banner, Severity};
-use crate::event::{PaneId, UserEvent};
+use crate::event::{MenuCommand, PaneId, UserEvent};
 use crate::input::{self, KeyEventKind};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
 use crate::pane_tree::{Axis, Direction, PaneTree};
@@ -357,6 +357,8 @@ pub struct App {
     pending_paste: Option<PendingPaste>,
     /// A fatal error that ended the event loop.
     error: Option<anyhow::Error>,
+    #[cfg(target_os = "macos")]
+    menu_bar: Option<crate::macos_menu::MenuBar>,
 }
 
 impl App {
@@ -404,6 +406,8 @@ impl App {
             pending_close: None,
             pending_paste: None,
             error: None,
+            #[cfg(target_os = "macos")]
+            menu_bar: None,
         };
         let theme_warning = app.update_palette();
         app.sync_system_monitor();
@@ -1792,6 +1796,10 @@ impl ApplicationHandler<UserEvent> for App {
         if self.state.is_some() {
             return;
         }
+        #[cfg(target_os = "macos")]
+        if self.menu_bar.is_none() {
+            self.menu_bar = crate::macos_menu::install(self.proxy.clone());
+        }
         match self.create_window(event_loop) {
             Ok(state) => {
                 state.window.request_redraw();
@@ -1805,6 +1813,8 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Term(pane, event) => self.term_event(pane, event),
             UserEvent::ConfigChanged => self.reload_config(),
+            UserEvent::Menu(MenuCommand::Action(action)) => self.run_action(action),
+            UserEvent::Menu(MenuCommand::Quit) => self.request_close(CloseTarget::Window),
             UserEvent::SystemStats(sample) => {
                 // Late samples from a monitor that was just stopped.
                 if self.system_monitor.is_none() {
