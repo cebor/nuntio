@@ -200,7 +200,7 @@ Each item starts with an icon:
 - `cpu`: usage of all cores over the last minute, and the current value.
 - `memory`: used memory over the last minute (relative to the total), and the current amount in GiB.
 - `network`: throughput of the physical interfaces (loopback, container and VM bridges such as `docker0` are left out, so traffic isn't counted twice). Download grows up from the middle of the graph, upload down. The download rate is shown left of the graph, the upload rate right of it; rates under 0.1 K show as `0K`.
-- `battery`: charge level, with ⚡ while charging. Hidden on machines without a battery.
+- `battery`: charge level, with ⚡ while charging; the graph shows the level over about the last hour, one bar per minute. Hidden on machines without a battery.
 - `datetime`: the local date and time.
 
 #### Springs

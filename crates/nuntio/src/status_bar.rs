@@ -25,6 +25,9 @@ const ICON_CELLS: usize = 2;
 const CONTENT: usize = ICON_CELLS + 1;
 /// Network graphs scale to at least this rate, so idle chatter stays flat.
 const MIN_NET_SCALE: f32 = 1024.0;
+/// The battery graph keeps one of this many samples: one per minute, so
+/// it spans about an hour.
+const BATTERY_EVERY: usize = 60;
 
 /// The most recent values of one graph, oldest first.
 #[derive(Debug, Clone, Default)]
@@ -55,6 +58,9 @@ pub struct Stats {
     memory: History,
     down: History,
     up: History,
+    battery: History,
+    /// Samples with a battery level so far, to thin out its history.
+    battery_samples: usize,
     latest: Sample,
 }
 
@@ -70,6 +76,12 @@ impl Stats {
         if let Some(net) = sample.network {
             self.down.push(net.down as f32);
             self.up.push(net.up as f32);
+        }
+        if let Some(battery) = sample.battery {
+            if self.battery_samples.is_multiple_of(BATTERY_EVERY) {
+                self.battery.push(battery.level);
+            }
+            self.battery_samples += 1;
         }
         self.latest = sample;
     }
@@ -285,10 +297,11 @@ impl StatusBar {
                     return;
                 };
                 self.battery_icon(out, x, battery.level, colors);
+                self.sparkline(out, graph_x, &stats.battery, 100.0, colors);
                 let level = format!("{:.0}%", battery.level);
-                text(CONTENT, format!("{level:>4}"), colors.value, out);
+                text(after_graph, format!("{level:>4}"), colors.value, out);
                 if battery.charging {
-                    text(CONTENT + 4, "⚡".into(), colors.value, out);
+                    text(after_graph + 4, "⚡".into(), colors.value, out);
                 }
             }
             StatusItem::Datetime => {
@@ -574,8 +587,8 @@ fn item_cells(item: StatusItem, datetime: &str) -> usize {
         StatusItem::Memory => CONTENT + GRAPH_CELLS + 1 + 5,
         // icon "↓1.2M " graph " ↑ 30K"
         StatusItem::Network => CONTENT + GRAPH_CELLS + 1 + 5 + 1 + 5,
-        // icon " 100%" "⚡"
-        StatusItem::Battery => CONTENT + 4 + 2,
+        // icon graph " 100%" "⚡"
+        StatusItem::Battery => CONTENT + GRAPH_CELLS + 1 + 4 + 2,
         // icon "Fri 25 Sep 10:50"
         StatusItem::Datetime => CONTENT + datetime.width(),
         StatusItem::Spring => 0,
@@ -795,6 +808,22 @@ mod tests {
         assert_eq!(format_rate(1023.9 * 1024.0), "1.0M");
         assert_eq!(format_gib(8_700_000_000), "8.1G");
         assert_eq!(format_gib(128 << 30), "128G");
+    }
+
+    #[test]
+    fn battery_history_keeps_one_sample_per_minute() {
+        let mut stats = Stats::default();
+        for i in 0..2 * BATTERY_EVERY + 1 {
+            stats.push(Sample {
+                battery: Some(Battery {
+                    level: i as f32,
+                    charging: false,
+                }),
+                ..Sample::default()
+            });
+        }
+        let levels: Vec<f32> = stats.battery.recent(HISTORY).collect();
+        assert_eq!(levels, [0.0, 60.0, 120.0]);
     }
 
     fn stats(battery: bool) -> Stats {
