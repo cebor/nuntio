@@ -193,6 +193,7 @@ pub struct TermHandle {
     /// The process nuntio started: the shell, or `login` running it.
     child_pid: Option<u32>,
     /// `child_pid` is `login`; the shell is its child.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     via_login: bool,
     /// The shell's pid, once known.
     shell_pid: OnceLock<u32>,

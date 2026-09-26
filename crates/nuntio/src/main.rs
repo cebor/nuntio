@@ -204,6 +204,7 @@ fn main() -> Result<()> {
     });
     let (config, banner) = load_config(config_path.as_deref(), warnings);
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = EventLoop::<UserEvent>::with_user_event();
     // nuntio sets up its own menu bar (`macos_menu`).
     #[cfg(target_os = "macos")]
