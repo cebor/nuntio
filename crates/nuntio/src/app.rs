@@ -1187,6 +1187,7 @@ impl App {
         let Some(state) = self.state.as_ref() else {
             return;
         };
+        let meta = alt_is_meta(&state.modifiers, self.config.macos.option_as_meta);
         let key_input = input::KeyInput {
             key: &event.logical_key,
             unmodified: &event.key_without_modifiers(),
@@ -1196,7 +1197,8 @@ impl App {
             event: kind,
             shift: mods.shift_key(),
             ctrl: mods.control_key(),
-            meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
+            meta,
+            option: cfg!(target_os = "macos") && mods.alt_key() && !meta,
             super_key: mods.super_key(),
         };
         let Some(bytes) = input::encode_key(&key_input, state.term().mode()) else {
@@ -1287,6 +1289,7 @@ impl App {
                     shift: mods.shift_key(),
                     ctrl: mods.control_key(),
                     meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
+                    option: false,
                     super_key: mods.super_key(),
                 };
                 let Some(text) = input::field_text(&key_input, mods.super_key()) else {

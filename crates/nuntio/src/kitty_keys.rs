@@ -450,6 +450,7 @@ mod tests {
                 shift: self.shift,
                 ctrl: self.ctrl,
                 meta: self.meta,
+                option: false,
                 super_key: self.super_key,
             };
             encode(&input, mode).map(|bytes| String::from_utf8(bytes).unwrap())

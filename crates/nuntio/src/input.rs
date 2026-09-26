@@ -32,6 +32,8 @@ pub struct KeyInput<'a> {
     /// Alt acts as Meta. On macOS only when Option-as-Meta is enabled for
     /// the pressed side; otherwise Option composes characters.
     pub meta: bool,
+    /// Option is held on macOS without acting as Meta.
+    pub option: bool,
     /// Only the kitty protocol reports it; otherwise Super combinations
     /// are shortcuts.
     pub super_key: bool,
@@ -128,6 +130,16 @@ fn with_meta(mut bytes: Vec<u8>, meta: bool) -> Vec<u8> {
 }
 
 fn encode_named(key: NamedKey, input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
+    // Option+←/→/⌫ work on words, as in Terminal.app: the Emacs keys that
+    // readline, zsh and fish know without any setup.
+    if input.option && !input.ctrl && !input.shift {
+        match key {
+            NamedKey::ArrowLeft => return Some(b"\x1bb".to_vec()),
+            NamedKey::ArrowRight => return Some(b"\x1bf".to_vec()),
+            NamedKey::Backspace => return Some(b"\x1b\x7f".to_vec()),
+            _ => {}
+        }
+    }
     let m = input.modifier_param();
     let plain = m == 1;
 
@@ -350,6 +362,7 @@ mod tests {
             shift: mods.shift,
             ctrl: mods.ctrl,
             meta: mods.meta,
+            option: false,
             super_key: false,
         };
         encode_key(&input, mode)
@@ -487,6 +500,7 @@ mod tests {
                 shift: mods.shift,
                 ctrl: mods.ctrl,
                 meta: mods.meta,
+                option: false,
                 super_key,
             };
             field_text(&input, super_key).map(str::to_owned)
@@ -564,6 +578,33 @@ mod tests {
     }
 
     #[test]
+    fn option_arrows_move_by_word() {
+        let option = |key: NamedKey, shift: bool| {
+            let key = Key::Named(key);
+            let input = KeyInput {
+                key: &key,
+                unmodified: &key,
+                text: None,
+                location: KeyLocation::Standard,
+                physical: UNIDENTIFIED,
+                event: KeyEventKind::Press,
+                shift,
+                ctrl: false,
+                meta: false,
+                option: true,
+                super_key: false,
+            };
+            encode_key(&input, TermMode::APP_CURSOR).unwrap()
+        };
+        assert_eq!(option(NamedKey::ArrowLeft, false), b"\x1bb");
+        assert_eq!(option(NamedKey::ArrowRight, false), b"\x1bf");
+        assert_eq!(option(NamedKey::Backspace, false), b"\x1b\x7f");
+        // Other keys and combinations keep their encoding.
+        assert_eq!(option(NamedKey::ArrowUp, false), b"\x1bOA");
+        assert_eq!(option(NamedKey::ArrowLeft, true), b"\x1b[1;2D");
+    }
+
+    #[test]
     fn legacy_keys_send_nothing_on_release() {
         let key = Key::Character("a".into());
         let input = KeyInput {
@@ -576,6 +617,7 @@ mod tests {
             shift: false,
             ctrl: false,
             meta: false,
+            option: false,
             super_key: false,
         };
         assert_eq!(encode_key(&input, TermMode::empty()), None);
@@ -594,6 +636,7 @@ mod tests {
             shift: false,
             ctrl: true,
             meta: false,
+            option: false,
             super_key: false,
         };
         assert_eq!(encode_key(&input, TermMode::empty()).unwrap(), [0x03]);

@@ -232,7 +232,7 @@ While the bar is shown, nuntio samples the system and redraws once per second. W
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `option_as_meta` | string | `"none"` | Which Option keys act as Meta (sending `Esc` + key) instead of typing special characters: `"none"`, `"left"`, `"right"` or `"both"`. |
+| `option_as_meta` | string | `"none"` | Which Option keys act as Meta (sending `Esc` + key) instead of typing special characters: `"none"`, `"left"`, `"right"` or `"both"`. Option keys that don't act as Meta still move by word with <kbd>Opt</kbd><kbd>←</kbd>/<kbd>→</kbd> and delete a word with <kbd>Opt</kbd><kbd>⌫</kbd>, as in Terminal.app. |
 
 ### Shell
 
