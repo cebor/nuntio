@@ -95,16 +95,41 @@ impl GpuContext {
         }
         config.present_mode = wgpu::PresentMode::AutoVsync;
         config.desired_maximum_frame_latency = 1;
-        surface.configure(&device, &config);
 
-        Ok(Self {
+        let context = Self {
             surface,
             device,
             queue,
             config,
             transparent,
             reconfigure: false,
-        })
+        };
+        context.configure();
+        Ok(context)
+    }
+
+    fn configure(&self) {
+        self.surface.configure(&self.device, &self.config);
+        #[cfg(target_os = "macos")]
+        self.match_srgb();
+    }
+
+    /// Have macOS convert the frames from sRGB, which the theme colors are,
+    /// to the display's colors. wgpu leaves the Metal layer without a color
+    /// space, and then the values go to the display unconverted: sRGB red
+    /// shows as the more saturated Display P3 red on Mac displays.
+    #[cfg(target_os = "macos")]
+    fn match_srgb(&self) {
+        use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
+
+        // SAFETY: the layer is only read and given a color space; the
+        // surface stays owned by wgpu.
+        let Some(surface) = (unsafe { self.surface.as_hal::<wgpu::hal::api::Metal>() }) else {
+            return;
+        };
+        // SAFETY: a constant CoreGraphics provides.
+        let srgb = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }));
+        surface.render_layer().lock().setColorspace(srgb.as_deref());
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -113,7 +138,7 @@ impl GpuContext {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        self.configure();
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -136,7 +161,7 @@ impl GpuContext {
     /// Get the next surface texture, or the reason to skip this frame.
     pub(crate) fn acquire(&mut self) -> Result<wgpu::SurfaceTexture, FrameStatus> {
         if std::mem::take(&mut self.reconfigure) {
-            self.surface.configure(&self.device, &self.config);
+            self.configure();
         }
         match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => Ok(frame),
@@ -146,7 +171,7 @@ impl GpuContext {
                 Ok(frame)
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(&self.device, &self.config);
+                self.configure();
                 Err(FrameStatus::Skipped)
             }
             wgpu::CurrentSurfaceTexture::Lost => Err(FrameStatus::Lost),
