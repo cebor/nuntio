@@ -34,6 +34,7 @@ pub enum Action {
     ZoomPane,
     /// Open the find bar.
     Search,
+    ToggleFullscreen,
 }
 
 impl Action {
@@ -62,6 +63,7 @@ impl Action {
             "split_horizontal" => SplitHorizontal,
             "zoom_pane" => ZoomPane,
             "search" => Search,
+            "toggle_fullscreen" => ToggleFullscreen,
             "focus_pane_left" => FocusPane(Direction::Left),
             "focus_pane_right" => FocusPane(Direction::Right),
             "focus_pane_up" => FocusPane(Direction::Up),
@@ -157,6 +159,8 @@ impl Bindings {
             bindings.push(char('d', cmd, SplitVertical));
             bindings.push(char('d', cmd | shift, SplitHorizontal));
             bindings.push(named(NamedKey::Enter, cmd | shift, ZoomPane));
+            // The standard shortcut of macOS apps.
+            bindings.push(char('f', cmd | ModifiersState::CONTROL, ToggleFullscreen));
             // Like iTerm2: Cmd+Opt+Arrow focuses, Cmd+Ctrl+Arrow resizes.
             (cmd | ModifiersState::ALT, cmd | ModifiersState::CONTROL)
         } else {
@@ -168,6 +172,11 @@ impl Bindings {
             bindings.push(char('d', ctrl | shift, SplitVertical));
             bindings.push(char('e', ctrl | shift, SplitHorizontal));
             bindings.push(named(NamedKey::Enter, ctrl | shift, ZoomPane));
+            bindings.push(named(
+                NamedKey::F11,
+                ModifiersState::empty(),
+                ToggleFullscreen,
+            ));
             let ctrl_alt = ctrl | ModifiersState::ALT;
             (ctrl_alt, ctrl_alt | shift)
         };
@@ -464,6 +473,10 @@ mod tests {
         assert_eq!(
             b.lookup(&Key::Named(NamedKey::ArrowLeft), cmd | ModifiersState::ALT),
             Some(Action::FocusPane(Direction::Left))
+        );
+        assert_eq!(
+            b.lookup(&ch("f"), cmd | ModifiersState::CONTROL),
+            Some(Action::ToggleFullscreen)
         );
     }
 }

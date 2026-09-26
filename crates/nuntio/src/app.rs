@@ -20,7 +20,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersKeyState, ModifiersState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{
-    CursorIcon, ResizeDirection, Theme as WindowTheme, Window, WindowAttributes, WindowId,
+    CursorIcon, Fullscreen, ResizeDirection, Theme as WindowTheme, Window, WindowAttributes,
+    WindowId,
 };
 
 use crate::actions::{Action, Bindings};
@@ -1114,6 +1115,12 @@ impl App {
                     term.clear_selection();
                     bar.set_query(text, term);
                 }
+            }
+            Action::ToggleFullscreen => {
+                // Borderless is the native full screen (its own Space) on macOS.
+                let fullscreen = state.window.fullscreen().is_some();
+                let target = (!fullscreen).then_some(Fullscreen::Borderless(None));
+                state.window.set_fullscreen(target);
             }
             Action::ZoomPane => {
                 let content = state.content_mut();

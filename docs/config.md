@@ -369,6 +369,7 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `resize_pane_left`, `resize_pane_right`, `resize_pane_up`, `resize_pane_down` | Move the focused pane's divider |
 | `zoom_pane` | Toggle between the focused pane filling the tab and the split layout |
 | `search` | Open the find bar |
+| `toggle_fullscreen` | Enter or leave full screen |
 | `scroll_page_up`, `scroll_page_down` | Scroll by a page |
 | `scroll_line_up`, `scroll_line_down` | Scroll by a line |
 | `increase_font_size`, `decrease_font_size`, `reset_font_size` | Change the font size for this session |

@@ -347,8 +347,11 @@ impl WindowState {
         if !self.bar_visible(config) {
             return None;
         }
+        // macOS hides the window buttons in full screen.
         let left_inset = match self.chrome {
-            Chrome::TitlebarInset { left } => (left * self.scale()) as f32,
+            Chrome::TitlebarInset { left } if self.window.fullscreen().is_none() => {
+                (left * self.scale()) as f32
+            }
             _ => 0.0,
         };
         Some(TabBar::new(

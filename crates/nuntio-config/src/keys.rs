@@ -218,6 +218,7 @@ pub static ACTIONS: &[Variant] = &[
         "Toggle between the focused pane filling the tab and the split layout",
     ),
     action("search", "Open the find bar"),
+    action("toggle_fullscreen", "Enter or leave full screen"),
     action("scroll_page_up", "Scroll up by a page"),
     action("scroll_page_down", "Scroll down by a page"),
     action("scroll_line_up", "Scroll up by a line"),
