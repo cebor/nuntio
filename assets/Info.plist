@@ -7,7 +7,7 @@
   <key>CFBundleDisplayName</key>
   <string>nuntio</string>
   <key>CFBundleIdentifier</key>
-  <string>org.nuntio.Nuntio</string>
+  <string>io.github.cebor.nuntio</string>
   <key>CFBundleExecutable</key>
   <string>nuntio</string>
   <key>CFBundleIconFile</key>
@@ -52,5 +52,17 @@
   <string>A program running in nuntio wants to use the microphone.</string>
   <key>NSLocationUsageDescription</key>
   <string>A program running in nuntio wants to know your location.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>A program running in nuntio wants to connect to devices on your local network.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>A program running in nuntio wants to use Bluetooth.</string>
+  <key>NSContactsUsageDescription</key>
+  <string>A program running in nuntio wants to access your contacts.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>A program running in nuntio wants to access your calendars.</string>
+  <key>NSRemindersUsageDescription</key>
+  <string>A program running in nuntio wants to access your reminders.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>A program running in nuntio wants to access your photos.</string>
 </dict>
 </plist>
