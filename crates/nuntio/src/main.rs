@@ -163,6 +163,7 @@ fn restrict_dll_search() {
 
 fn main() -> Result<()> {
     let mut args = parse_args()?;
+    nuntio_render::preload_fonts();
 
     let filter = match &args.log_level {
         Some(level) => EnvFilter::try_new(level)?,

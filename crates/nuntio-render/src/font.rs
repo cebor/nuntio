@@ -48,6 +48,31 @@ pub struct Fonts {
     small_metrics: CellMetrics,
 }
 
+/// The font database being loaded by `preload_fonts`.
+static PRELOADED: std::sync::Mutex<Option<std::thread::JoinHandle<FontSystem>>> =
+    std::sync::Mutex::new(None);
+
+/// Start loading the installed fonts on another thread, so that it runs
+/// while the window and the GPU are set up. Scanning the fonts takes
+/// tens of milliseconds (hundreds of faces on macOS).
+pub fn preload_fonts() {
+    let spawned = std::thread::Builder::new()
+        .name("font preload".into())
+        .spawn(FontSystem::new);
+    match spawned {
+        Ok(handle) => *PRELOADED.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle),
+        Err(err) => tracing::debug!("fonts load on the main thread: {err}"),
+    }
+}
+
+/// The preloaded font database, or a new one.
+fn font_system() -> FontSystem {
+    let preloaded = PRELOADED.lock().unwrap_or_else(|e| e.into_inner()).take();
+    preloaded
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_else(FontSystem::new)
+}
+
 /// Size of small UI text (the status bar) relative to the terminal font.
 pub const SMALL_TEXT_SCALE: f32 = 0.9;
 
@@ -164,7 +189,7 @@ impl Fonts {
         size_points: f32,
         scale_factor: f64,
     ) -> (Self, Option<String>) {
-        let mut system = FontSystem::new();
+        let mut system = font_system();
         let installed = system
             .db()
             .faces()
