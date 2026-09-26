@@ -25,7 +25,7 @@ Custom themes go in a `themes/` directory next to the config file, for example `
 
 ## Editing in the terminal
 
-Run `nuntio-config` in a nuntio tab to change settings without editing TOML by hand. The command exists only inside nuntio, and it edits the config file this nuntio uses, including one given with `--config`.
+Run `nuntio-config` in a nuntio tab to change settings without editing TOML by hand, or open it in a new tab with <kbd>Cmd</kbd><kbd>,</kbd> on macOS (the `open_settings` action). The command exists only inside nuntio, and it edits the config file this nuntio uses, including one given with `--config`.
 
 - Settings are grouped by section. Choices offer only valid values: the variants of an option, your installed themes (with a color preview) and monospace fonts, and the keybinding actions. Numbers stay within their range.
 - Every change is written right away and applied by hot reload, so you see it in the window as you go. A change that would make the file invalid is refused with the reason.
@@ -375,4 +375,5 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `increase_font_size`, `decrease_font_size`, `reset_font_size` | Change the font size for this session |
 | `clear_scrollback` | Clear the history of the focused pane |
 | `reload_config` | Reload the config file |
+| `open_settings` | Open `nuntio-config` in a new tab |
 | `none` | Unbind the key combination |

@@ -786,14 +786,14 @@ impl App {
         }
     }
 
-    /// Start a shell in the focused pane's directory for a new tab or
-    /// split. Failures are shown in a banner.
-    fn spawn_in_focused_cwd(&mut self) -> Option<Pane> {
+    /// Start a shell, or `command`, in the focused pane's directory for a
+    /// new tab or split. Failures are shown in a banner.
+    fn spawn_in_focused_cwd(&mut self, command: Option<Vec<String>>) -> Option<Pane> {
         let cwd = self
             .state
             .as_ref()
             .and_then(|s| s.term().working_directory());
-        self.spawn_pane(cwd, None)
+        self.spawn_pane(cwd, command)
             .inspect_err(|err| {
                 self.notify(Banner::new(
                     Severity::Error,
@@ -804,8 +804,9 @@ impl App {
             .ok()
     }
 
-    fn new_tab(&mut self) {
-        let Some(pane) = self.spawn_in_focused_cwd() else {
+    /// Open a tab with a shell, or with `command` instead.
+    fn new_tab(&mut self, command: Option<Vec<String>>) {
+        let Some(pane) = self.spawn_in_focused_cwd(command) else {
             return;
         };
         let Some(state) = self.state.as_mut() else {
@@ -821,7 +822,7 @@ impl App {
 
     /// Split the focused pane; the new pane starts in the same directory.
     fn split(&mut self, axis: Axis) {
-        let Some(pane) = self.spawn_in_focused_cwd() else {
+        let Some(pane) = self.spawn_in_focused_cwd(None) else {
             return;
         };
         let Some(state) = self.state.as_mut() else {
@@ -1059,7 +1060,15 @@ impl App {
             Action::FontIncrease => self.set_font_size(self.font_size + 1.0),
             Action::FontDecrease => self.set_font_size(self.font_size - 1.0),
             Action::FontReset => self.set_font_size(self.config.font.size),
-            Action::NewTab => self.new_tab(),
+            Action::NewTab => self.new_tab(None),
+            Action::OpenSettings => match crate::pane_env::helper() {
+                Some(helper) => self.new_tab(Some(vec![helper.to_string_lossy().into_owned()])),
+                None => self.notify(Banner::new(
+                    Severity::Warning,
+                    "Settings",
+                    vec!["nuntio-config is not installed next to nuntio".into()],
+                )),
+            },
             Action::CloseTab => {
                 let id = state.content().focused;
                 self.request_close(CloseTarget::Tab(id));
@@ -1373,7 +1382,7 @@ impl App {
                         });
                     }
                     BarHit::Close(index) => self.request_close_tab(index),
-                    BarHit::NewTab => self.new_tab(),
+                    BarHit::NewTab => self.new_tab(None),
                     BarHit::Empty => {
                         // Double click maximizes, like a title bar.
                         let now = Instant::now();

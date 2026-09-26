@@ -88,6 +88,7 @@ On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts a
 | Scroll a page | <kbd>Shift</kbd><kbd>PgUp</kbd> / <kbd>Shift</kbd><kbd>PgDn</kbd> | <kbd>Shift</kbd><kbd>PgUp</kbd> / <kbd>Shift</kbd><kbd>PgDn</kbd> |
 | Scroll a line | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>↑</kbd> / <kbd>↓</kbd> | <kbd>Cmd</kbd><kbd>↑</kbd> / <kbd>↓</kbd> |
 | Reload config | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>,</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>,</kbd> |
+| Open `nuntio-config` | – | <kbd>Cmd</kbd><kbd>,</kbd> |
 
 In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>Enter</kbd> to the previous one, <kbd>Alt</kbd><kbd>R</kbd> toggles regex mode and <kbd>Esc</kbd> closes the bar.
 

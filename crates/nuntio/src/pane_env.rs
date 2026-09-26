@@ -74,6 +74,18 @@ fn macos_locale() -> Option<(String, String)> {
     })
 }
 
+/// The directory with `nuntio-config`, if it is installed with nuntio.
+fn installed_helper_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = helper_dir(&exe, Path::is_file)?;
+    Some(dir.canonicalize().unwrap_or(dir))
+}
+
+/// The `nuntio-config` program installed with nuntio.
+pub fn helper() -> Option<PathBuf> {
+    installed_helper_dir().map(|dir| dir.join(helper_name()))
+}
+
 /// Variables to add for new panes. Shells in WSL get none: Windows paths
 /// mean nothing there.
 pub fn pane_env(config_path: Option<&Path>, wsl: bool) -> Vec<(String, String)> {
@@ -86,12 +98,8 @@ pub fn pane_env(config_path: Option<&Path>, wsl: bool) -> Vec<(String, String)> 
     if let Some(path) = config_path.and_then(Path::to_str) {
         env.push((CONFIG_ENV.to_owned(), path.to_owned()));
     }
-    let dir = std::env::current_exe()
-        .ok()
-        .and_then(|exe| helper_dir(&exe, Path::is_file));
-    match dir {
+    match installed_helper_dir() {
         Some(dir) => {
-            let dir = dir.canonicalize().unwrap_or(dir);
             if let Some(path) = prepend_path(&dir, std::env::var_os("PATH")) {
                 env.push(("PATH".to_owned(), path));
             }

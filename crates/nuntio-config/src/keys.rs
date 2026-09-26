@@ -237,6 +237,7 @@ pub static ACTIONS: &[Variant] = &[
     ),
     action("clear_scrollback", "Clear the history of the focused pane"),
     action("reload_config", "Reload the config file"),
+    action("open_settings", "Open nuntio-config in a new tab"),
     action(
         "none",
         "Unbind the key combination; it goes to the terminal",

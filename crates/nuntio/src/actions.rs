@@ -35,6 +35,8 @@ pub enum Action {
     /// Open the find bar.
     Search,
     ToggleFullscreen,
+    /// Open `nuntio-config` in a new tab.
+    OpenSettings,
 }
 
 impl Action {
@@ -58,6 +60,7 @@ impl Action {
             "next_tab" => NextTab,
             "previous_tab" => PreviousTab,
             "reload_config" => ReloadConfig,
+            "open_settings" => OpenSettings,
             "close_pane" => ClosePane,
             "split_vertical" => SplitVertical,
             "split_horizontal" => SplitHorizontal,
@@ -159,8 +162,9 @@ impl Bindings {
             bindings.push(char('d', cmd, SplitVertical));
             bindings.push(char('d', cmd | shift, SplitHorizontal));
             bindings.push(named(NamedKey::Enter, cmd | shift, ZoomPane));
-            // The standard shortcut of macOS apps.
+            // The standard shortcuts of macOS apps.
             bindings.push(char('f', cmd | ModifiersState::CONTROL, ToggleFullscreen));
+            bindings.push(char(',', cmd, OpenSettings));
             // Like iTerm2: Cmd+Opt+Arrow focuses, Cmd+Ctrl+Arrow resizes.
             (cmd | ModifiersState::ALT, cmd | ModifiersState::CONTROL)
         } else {
@@ -477,6 +481,11 @@ mod tests {
         assert_eq!(
             b.lookup(&ch("f"), cmd | ModifiersState::CONTROL),
             Some(Action::ToggleFullscreen)
+        );
+        assert_eq!(b.lookup(&ch(","), cmd), Some(Action::OpenSettings));
+        assert_eq!(
+            b.lookup(&ch(","), cmd | ModifiersState::SHIFT),
+            Some(Action::ReloadConfig)
         );
     }
 }
