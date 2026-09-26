@@ -297,20 +297,83 @@ fn paste_warning(text: &str) -> Option<String> {
     })
 }
 
+/// How the shell in a pane reads a dropped file's path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathSyntax {
+    /// Backslash escapes (sh, bash, zsh, fish).
+    Posix,
+    /// Double quotes (PowerShell, cmd).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Windows,
+    /// A Windows path, seen from inside WSL.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Wsl,
+}
+
 /// A dropped file's path as a shell word, with a space after it like in
-/// Terminal.app, so several files line up as arguments. Characters a
-/// shell treats specially get a backslash.
-fn dropped_path(path: &Path) -> String {
+/// Terminal.app, so several files line up as arguments.
+fn dropped_path(path: &str, syntax: PathSyntax) -> String {
+    let mut word = match syntax {
+        PathSyntax::Posix => posix_word(path),
+        PathSyntax::Windows => {
+            let plain = path
+                .chars()
+                .all(|c| c.is_alphanumeric() || "\\/:._-".contains(c));
+            // Windows paths can't contain `"`.
+            if plain {
+                path.to_owned()
+            } else {
+                format!("\"{path}\"")
+            }
+        }
+        PathSyntax::Wsl => posix_word(&wsl_path(path)),
+    };
+    word.push(' ');
+    word
+}
+
+/// `s` with a backslash before each character a POSIX shell treats
+/// specially.
+fn posix_word(s: &str) -> String {
     let mut word = String::new();
-    for c in path.to_string_lossy().chars() {
+    for c in s.chars() {
         let plain = c.is_alphanumeric() || "/._-+,:@%=".contains(c);
         if !plain {
             word.push('\\');
         }
         word.push(c);
     }
-    word.push(' ');
     word
+}
+
+/// Where WSL sees a Windows path: `C:\x` is `/mnt/c/x`, and a file in a
+/// distribution (`\\wsl.localhost\Ubuntu\home\x`) is `/home/x`.
+fn wsl_path(path: &str) -> String {
+    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+    let slashed = |rest: &str| rest.replace('\\', "/");
+    let mut chars = path.chars();
+    if let (Some(drive), Some(':')) = (chars.next(), chars.next())
+        && drive.is_ascii_alphabetic()
+    {
+        let rest = slashed(chars.as_str());
+        return format!("/mnt/{}{rest}", drive.to_ascii_lowercase());
+    }
+    for host in [r"\\wsl.localhost\", r"\\wsl$\"] {
+        if let Some(rest) = path
+            .get(..host.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(host))
+            .map(|_| &path[host.len()..])
+        {
+            // Skip the distribution's name.
+            let inside = rest.find('\\').map_or("", |i| &rest[i..]);
+            return if inside.is_empty() {
+                "/".into()
+            } else {
+                slashed(inside)
+            };
+        }
+    }
+    slashed(path)
 }
 
 /// Asks to confirm closing `target`, in which the programs `running` run
@@ -671,7 +734,7 @@ impl App {
         let term = TermHandle::spawn(options, size, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));
         })?;
-        Ok(Pane::new(id, term))
+        Ok(Pane::new(id, term, wsl))
     }
 
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState> {
@@ -1962,7 +2025,15 @@ impl ApplicationHandler<UserEvent> for App {
                 {
                     state.focus_pane(id);
                 }
-                state.term().paste(&dropped_path(&path));
+                let syntax = if !cfg!(windows) {
+                    PathSyntax::Posix
+                } else if state.content().focused_pane().wsl {
+                    PathSyntax::Wsl
+                } else {
+                    PathSyntax::Windows
+                };
+                let path = path.to_string_lossy();
+                state.term().paste(&dropped_path(&path, syntax));
                 state.window.request_redraw();
             }
             WindowEvent::Occluded(occluded) => {
@@ -2050,15 +2121,36 @@ mod tests {
 
     #[test]
     fn dropped_paths_are_shell_words() {
-        assert_eq!(dropped_path(Path::new("/tmp/a.txt")), "/tmp/a.txt ");
+        let posix = |path| dropped_path(path, PathSyntax::Posix);
+        assert_eq!(posix("/tmp/a.txt"), "/tmp/a.txt ");
         assert_eq!(
-            dropped_path(Path::new("/Users/me/My Files/it's (1).pdf")),
+            posix("/Users/me/My Files/it's (1).pdf"),
             "/Users/me/My\\ Files/it\\'s\\ \\(1\\).pdf "
         );
+        assert_eq!(posix("/tmp/Übung $x"), "/tmp/Übung\\ \\$x ");
+    }
+
+    #[test]
+    fn dropped_windows_paths_are_quoted_when_needed() {
+        let windows = |path| dropped_path(path, PathSyntax::Windows);
+        assert_eq!(windows(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
         assert_eq!(
-            dropped_path(Path::new("/tmp/Übung $x")),
-            "/tmp/Übung\\ \\$x "
+            windows(r"C:\Users\me\My Files\a&b.txt"),
+            r#""C:\Users\me\My Files\a&b.txt" "#
         );
+    }
+
+    #[test]
+    fn dropped_paths_in_wsl_are_translated() {
+        let wsl = |path| dropped_path(path, PathSyntax::Wsl);
+        assert_eq!(
+            wsl(r"C:\Users\me\My Files\a.txt"),
+            "/mnt/c/Users/me/My\\ Files/a.txt "
+        );
+        assert_eq!(wsl(r"D:\"), "/mnt/d/ ");
+        assert_eq!(wsl(r"\\wsl.localhost\Ubuntu\home\me\x"), "/home/me/x ");
+        assert_eq!(wsl(r"\\wsl$\Debian\etc"), "/etc ");
+        assert_eq!(wsl(r"\\?\C:\a"), "/mnt/c/a ");
     }
 
     #[test]

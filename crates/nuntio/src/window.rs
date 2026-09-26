@@ -86,6 +86,8 @@ impl Reveal {
 pub struct Pane {
     pub id: PaneId,
     pub term: TermHandle,
+    /// The shell runs in WSL, so it takes Linux paths.
+    pub wsl: bool,
     /// Title set by the application (OSC 0/2).
     pub title: Option<String>,
     /// Current grid size, to skip redundant resizes.
@@ -113,10 +115,11 @@ impl CachedTitle {
 }
 
 impl Pane {
-    pub fn new(id: PaneId, term: TermHandle) -> Self {
+    pub fn new(id: PaneId, term: TermHandle, wsl: bool) -> Self {
         Self {
             id,
             term,
+            wsl,
             title: None,
             size: None,
             title_cache: None,
