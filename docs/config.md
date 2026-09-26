@@ -44,6 +44,7 @@ Run `nuntio-config` in a nuntio tab to change settings without editing TOML by h
 | <kbd>d</kbd> | Reset to the default (in keybindings: delete the entry) |
 | <kbd>a</kbd> | Add a keybinding |
 | <kbd>/</kbd> | Search all settings |
+| <kbd>e</kbd> | Open the file in your editor: `$VISUAL`, else `$EDITOR`, else `vi` (Notepad on Windows) |
 | <kbd>u</kbd> | Undo |
 | <kbd>R</kbd> | Restore the file as it was when `nuntio-config` started |
 | <kbd>q</kbd> | Quit |
@@ -52,7 +53,7 @@ In a list of choices, typing filters it; moving through themes or fonts previews
 
 A key combination for a keybinding is typed as text, like `Ctrl+Shift+Enter` (see [Key syntax](#key-syntax)), because a terminal can't report every combination reliably. The editor checks it as you type and warns when the combination is already bound.
 
-If you edit the file in another editor while `nuntio-config` is open, it reloads the file before the next change. On Windows, shells that `shell.wsl` starts in a WSL distribution don't get the command. nuntio running inside WSL itself (WSLg) is not affected.
+If you edit the file in another editor while `nuntio-config` is open, it reloads the file before the next change. After <kbd>e</kbd> it reloads as soon as the editor exits, and <kbd>u</kbd> undoes the edit. On Windows, shells that `shell.wsl` starts in a WSL distribution don't get the command. nuntio running inside WSL itself (WSLg) is not affected.
 
 ## Reloading
 

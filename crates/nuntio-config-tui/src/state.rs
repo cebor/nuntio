@@ -256,6 +256,9 @@ pub struct App {
     pub focus: Focus,
     pub mode: Mode,
     pub quit: bool,
+    /// Set by `e`: the caller suspends the UI, opens the file in an editor
+    /// and calls [`App::reload`] afterwards.
+    pub open_editor: bool,
 }
 
 fn serialize(config: &Config) -> toml::Value {
@@ -348,6 +351,7 @@ impl App {
             focus: Focus::Rows,
             mode: Mode::Normal,
             quit: false,
+            open_editor: false,
         };
         app.revalidate();
         Ok(app)
@@ -386,6 +390,22 @@ impl App {
     /// Reload if the file was changed by someone else. Returns `false` then,
     /// so the change the user just made isn't applied to stale contents.
     fn in_sync(&mut self) -> bool {
+        self.reread("The file was changed elsewhere and has been reloaded.")
+    }
+
+    /// Pick up the file after it was edited in an external editor. The
+    /// edit can be undone like a change made here.
+    pub fn reload(&mut self) {
+        self.message = None;
+        let before = self.source.clone();
+        if !self.reread("Reloaded the file after editing.") && self.source != before {
+            self.undo.push(before);
+        }
+    }
+
+    /// Reread the file; if it changed, load it and show `message`.
+    /// Returns whether it was unchanged.
+    fn reread(&mut self, message: &str) -> bool {
         let current = match self.store.read() {
             Ok(current) => current.unwrap_or_default(),
             Err(err) => {
@@ -401,10 +421,7 @@ impl App {
                 self.doc = doc;
                 self.source = current;
                 self.revalidate();
-                self.message = Some((
-                    Tone::Warn,
-                    "The file was changed elsewhere and has been reloaded.".into(),
-                ));
+                self.message = Some((Tone::Warn, message.into()));
             }
             Err(err) => self.message = Some((Tone::Error, err)),
         }
@@ -791,6 +808,7 @@ impl App {
             Key::Char('q') => self.quit = true,
             Key::Char('u') => self.undo(),
             Key::Char('R') => self.restore_original(),
+            Key::Char('e') => self.open_editor = true,
             Key::Char('/') => {
                 self.mode = Mode::Search {
                     input: TextInput::default(),
@@ -2172,6 +2190,22 @@ mod tests {
         assert_eq!(app.config.scrollback, 7);
         app.key(Key::Right);
         assert_eq!(memory.text(), "scrollback = 1007\n");
+    }
+
+    #[test]
+    fn edits_in_an_editor_are_reloaded() {
+        let (mut app, memory) = app(Some("scrollback = 5\n"));
+        app.key(Key::Char('e'));
+        assert!(app.open_editor);
+        app.open_editor = false;
+        app.reload();
+        assert_eq!(app.message, None, "nothing changed");
+        memory.set("scrollback = 7\n");
+        app.reload();
+        assert_eq!(app.config.scrollback, 7);
+        assert!(app.message.is_some());
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 5\n");
     }
 
     #[test]

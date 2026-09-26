@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use nuntio_config::ThemeSet;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::state::{App, Key, Sources, Store};
+use crate::state::{App, Key, Sources, Store, Tone};
 
 /// Set by nuntio in its panes: the config file it uses.
 const CONFIG_ENV: &str = "NUNTIO_CONFIG";
@@ -92,6 +92,36 @@ fn installed_fonts() -> Vec<String> {
     families
 }
 
+/// `$VISUAL`, else `$EDITOR`, else a default editor, split into the
+/// program and its arguments (`code --wait`).
+fn editor_command() -> Vec<String> {
+    ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .map(|value| {
+            value
+                .to_string_lossy()
+                .split_whitespace()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .find(|command| !command.is_empty())
+        .unwrap_or_else(|| vec![if cfg!(windows) { "notepad" } else { "vi" }.into()])
+}
+
+/// Run the editor on `path` and wait for it. The caller leaves and
+/// re-enters the TUI around it.
+fn run_editor(path: &Path) -> Result<()> {
+    let command = editor_command();
+    let status = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .arg(path)
+        .status()
+        .with_context(|| format!("can't start the editor `{}`", command[0]))?;
+    anyhow::ensure!(status.success(), "the editor `{}` {status}", command[0]);
+    Ok(())
+}
+
 fn map_key(event: KeyEvent) -> Option<Key> {
     if event.kind == KeyEventKind::Release {
         return None;
@@ -147,6 +177,16 @@ pub fn main() -> Result<()> {
                 && let Some(key) = map_key(key)
             {
                 app.key(key);
+            }
+            if app.open_editor {
+                app.open_editor = false;
+                ratatui::restore();
+                let edited = run_editor(&path);
+                terminal = ratatui::init();
+                match edited {
+                    Ok(()) => app.reload(),
+                    Err(err) => app.message = Some((Tone::Error, format!("{err:#}"))),
+                }
             }
         }
         Ok(())
