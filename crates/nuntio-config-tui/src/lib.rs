@@ -92,33 +92,50 @@ fn installed_fonts() -> Vec<String> {
     families
 }
 
-/// `$VISUAL`, else `$EDITOR`, else a default editor, split into the
-/// program and its arguments (`code --wait`).
-fn editor_command() -> Vec<String> {
+/// `$VISUAL`, else `$EDITOR`, else a default editor. A shell command
+/// like `code --wait` or `"C:\Program Files\…\code.exe" --wait`.
+fn editor() -> String {
     ["VISUAL", "EDITOR"]
         .iter()
         .filter_map(std::env::var_os)
-        .map(|value| {
-            value
-                .to_string_lossy()
-                .split_whitespace()
-                .map(String::from)
-                .collect::<Vec<_>>()
-        })
-        .find(|command| !command.is_empty())
-        .unwrap_or_else(|| vec![if cfg!(windows) { "notepad" } else { "vi" }.into()])
+        .map(|value| value.to_string_lossy().trim().to_owned())
+        .find(|editor| !editor.is_empty())
+        .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.into())
+}
+
+/// The process that runs `editor` on `path`: through the shell, like git
+/// does, so quoted paths and arguments in the variable work and Windows
+/// finds `code.cmd`.
+fn editor_process(editor: &str, path: &Path) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // `/S` strips just the outer quotes. Windows paths can't contain `"`.
+        let mut command = std::process::Command::new("cmd");
+        command.raw_arg(format!("/S /C \"{editor} \"{}\"\"", path.display()));
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!("{editor} \"$@\""))
+            .arg("sh")
+            .arg(path);
+        command
+    }
 }
 
 /// Run the editor on `path` and wait for it. The caller leaves and
 /// re-enters the TUI around it.
 fn run_editor(path: &Path) -> Result<()> {
-    let command = editor_command();
-    let status = std::process::Command::new(&command[0])
-        .args(&command[1..])
-        .arg(path)
+    let editor = editor();
+    let status = editor_process(&editor, path)
         .status()
-        .with_context(|| format!("can't start the editor `{}`", command[0]))?;
-    anyhow::ensure!(status.success(), "the editor `{}` {status}", command[0]);
+        .with_context(|| format!("can't start the editor `{editor}`"))?;
+    anyhow::ensure!(status.success(), "the editor `{editor}` {status}");
     Ok(())
 }
 
@@ -193,4 +210,24 @@ pub fn main() -> Result<()> {
     })();
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn editor_runs_through_the_shell() {
+        let dir = std::env::temp_dir().join(format!("nuntio-editor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("my config.toml");
+        std::fs::write(&path, "").unwrap();
+        let runs = |editor: &str| editor_process(editor, &path).status().unwrap().success();
+        // Quoted programs, arguments, and a path with a space.
+        assert!(runs("'/bin/sh' -c 'test -f \"$1\"' sh"));
+        assert!(runs("test -f"));
+        assert!(!runs("test -d"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
