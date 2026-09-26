@@ -125,10 +125,10 @@ fn load_config(path: Option<&Path>, mut warnings: Vec<String>) -> (Config, Optio
     }
 }
 
-/// Log file for runs without a terminal: `~/.cache/nuntio/nuntio.log` (the
-/// platform's cache directory). The previous run's log is kept as
-/// `nuntio.old.log`, so starting a second window doesn't wipe the first
-/// one's log.
+/// Log file for runs without a terminal: `nuntio/nuntio.log` in the
+/// platform's cache directory (`~/.cache` on Linux, `~/Library/Caches` on
+/// macOS). The previous run's log is kept as `nuntio.old.log`, so starting
+/// a second window doesn't wipe the first one's log.
 fn log_file() -> Option<std::fs::File> {
     let dir = dirs::cache_dir()?.join("nuntio");
     std::fs::create_dir_all(&dir).ok()?;

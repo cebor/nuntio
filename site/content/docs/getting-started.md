@@ -107,4 +107,4 @@ nuntio [options] [[-e] <command> [<args>...]]
 | `-V`, `--version` | Print the version |
 | `-h`, `--help` | Print the options |
 
-When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux (the previous run's log is kept as `nuntio.old.log`). If something goes wrong, that's the first place to look, and the log is welcome in a [bug report](https://github.com/cebor/nuntio/issues).
+When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux or `~/Library/Caches/nuntio/nuntio.log` on macOS (the previous run's log is kept as `nuntio.old.log`). If something goes wrong, that's the first place to look, and the log is welcome in a [bug report](https://github.com/cebor/nuntio/issues).
