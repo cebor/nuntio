@@ -285,6 +285,22 @@ fn paste_warning(text: &str) -> Option<String> {
     })
 }
 
+/// A dropped file's path as a shell word, with a space after it like in
+/// Terminal.app, so several files line up as arguments. Characters a
+/// shell treats specially get a backslash.
+fn dropped_path(path: &Path) -> String {
+    let mut word = String::new();
+    for c in path.to_string_lossy().chars() {
+        let plain = c.is_alphanumeric() || "/._-+,:@%=".contains(c);
+        if !plain {
+            word.push('\\');
+        }
+        word.push(c);
+    }
+    word.push(' ');
+    word
+}
+
 /// Asks to confirm closing `target`, in which the programs `running` run
 /// (one name per pane).
 fn close_message(running: &[String], target: CloseTarget) -> String {
@@ -1904,6 +1920,16 @@ impl ApplicationHandler<UserEvent> for App {
                 ..
             } => self.mouse_input(button, button_state == ElementState::Pressed),
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
+            WindowEvent::DroppedFile(path) => {
+                // Into the pane under the pointer, as its text.
+                if let Some(pos) = state.mouse.position
+                    && let Some(id) = state.pane_at(&self.config, pos)
+                {
+                    state.focus_pane(id);
+                }
+                state.term().paste(&dropped_path(&path));
+                state.window.request_redraw();
+            }
             WindowEvent::Occluded(occluded) => {
                 // Frames are paused while occluded; catch up once visible.
                 if !occluded {
@@ -1980,6 +2006,19 @@ mod tests {
         assert_eq!(
             paste_warning("cd /tmp\r\nls\n\nmake\n").as_deref(),
             Some("3 lines would run at once; paste again to run them")
+        );
+    }
+
+    #[test]
+    fn dropped_paths_are_shell_words() {
+        assert_eq!(dropped_path(Path::new("/tmp/a.txt")), "/tmp/a.txt ");
+        assert_eq!(
+            dropped_path(Path::new("/Users/me/My Files/it's (1).pdf")),
+            "/Users/me/My\\ Files/it\\'s\\ \\(1\\).pdf "
+        );
+        assert_eq!(
+            dropped_path(Path::new("/tmp/Übung $x")),
+            "/tmp/Übung\\ \\$x "
         );
     }
 
