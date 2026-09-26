@@ -186,6 +186,20 @@ fn alt_is_meta(mods: &Modifiers, option_as_meta: OptionAsMeta) -> bool {
     }
 }
 
+/// Tells macOS which Option keys act as Alt, so they don't start
+/// composing dead keys like Option+U (¨) while nuntio sends Meta.
+#[cfg(target_os = "macos")]
+fn option_as_alt(option_as_meta: OptionAsMeta) -> winit::platform::macos::OptionAsAlt {
+    use winit::platform::macos::OptionAsAlt;
+
+    match option_as_meta {
+        OptionAsMeta::None => OptionAsAlt::None,
+        OptionAsMeta::Left => OptionAsAlt::OnlyLeft,
+        OptionAsMeta::Right => OptionAsAlt::OnlyRight,
+        OptionAsMeta::Both => OptionAsAlt::Both,
+    }
+}
+
 fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
     match direction {
         ResizeDirection::East => CursorIcon::EResize,
@@ -525,6 +539,12 @@ impl App {
         }
 
         if let Some(state) = self.state.as_mut() {
+            #[cfg(target_os = "macos")]
+            if old.macos.option_as_meta != self.config.macos.option_as_meta {
+                use winit::platform::macos::WindowExtMacOS;
+                let option = option_as_alt(self.config.macos.option_as_meta);
+                state.window.set_option_as_alt(option);
+            }
             if old.font.family != self.config.font.family {
                 warnings.extend(
                     state
@@ -633,6 +653,11 @@ impl App {
         let (attrs, chrome) = chrome(event_loop, &self.config, attrs);
         let transparent = wants_transparency(chrome, &self.config);
         let attrs = attrs.with_transparent(transparent);
+        #[cfg(target_os = "macos")]
+        let attrs = winit::platform::macos::WindowAttributesExtMacOS::with_option_as_alt(
+            attrs,
+            option_as_alt(self.config.macos.option_as_meta),
+        );
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
