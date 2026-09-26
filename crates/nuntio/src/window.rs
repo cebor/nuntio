@@ -34,6 +34,9 @@ const RESIZE_BORDER: f64 = 5.0;
 /// Radius of the window's corners where nuntio rounds them itself (Linux),
 /// in logical pixels, as GNOME's.
 const WINDOW_RADIUS: f64 = 12.0;
+/// Height of the macOS title bar that holds the traffic lights, in logical
+/// pixels. A tab bar in it must be at least as high to keep them centered.
+const TITLEBAR_HEIGHT: f64 = 28.0;
 /// Extra grab area around pane dividers, in logical pixels.
 const DIVIDER_SLOP: f64 = 3.0;
 /// Time between steps while a selection drag scrolls the pane.
@@ -348,18 +351,19 @@ impl WindowState {
             return None;
         }
         // macOS hides the window buttons in full screen.
-        let left_inset = match self.chrome {
-            Chrome::TitlebarInset { left } if self.window.fullscreen().is_none() => {
-                (left * self.scale()) as f32
+        let (left_inset, min_height) = match self.chrome {
+            Chrome::TitlebarInset { left } if left > 0.0 && self.window.fullscreen().is_none() => {
+                (left * self.scale(), TITLEBAR_HEIGHT * self.scale())
             }
-            _ => 0.0,
+            _ => (0.0, 0.0),
         };
         Some(TabBar::new(
             self.window.inner_size().width as f32,
             self.tabs.len(),
             self.renderer.cell_metrics(),
             self.scale(),
-            left_inset,
+            left_inset as f32,
+            min_height as f32,
             self.chrome == Chrome::Undecorated,
         ))
     }

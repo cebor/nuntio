@@ -73,6 +73,8 @@ pub struct TabBar {
     pub height: f32,
     width: f32,
     padding: f32,
+    /// Top of the text row, which is centered in the bar.
+    top: f32,
     /// Vertical inset of the pills, and horizontal margin of the tab row.
     inset: f32,
     gap: f32,
@@ -88,7 +90,8 @@ pub struct TabBar {
 
 impl TabBar {
     /// Lay out `count` tabs across a bar of `width` pixels. `left_inset`
-    /// keeps room free at the left edge (macOS window buttons);
+    /// keeps room free at the left edge (macOS window buttons), and the bar
+    /// is at least `min_height` high (the macOS title bar they sit in);
     /// `window_controls` adds minimize/maximize/close at the right edge.
     pub fn new(
         width: f32,
@@ -96,12 +99,14 @@ impl TabBar {
         cell: CellMetrics,
         scale: f64,
         left_inset: f32,
+        min_height: f32,
         window_controls: bool,
     ) -> Self {
         let logical = |px: f64| (px * scale).round() as f32;
         let padding = logical(BAR_PADDING);
         let inset = logical(PILL_INSET);
-        let height = cell.height as f32 + 2.0 * padding;
+        let height = (cell.height as f32 + 2.0 * padding).max(min_height.round());
+        let top = ((height - cell.height as f32) / 2.0).floor();
         let control_width = if window_controls {
             logical(CONTROL_WIDTH)
         } else {
@@ -125,6 +130,7 @@ impl TabBar {
             height,
             width,
             padding,
+            top,
             inset,
             gap,
             radius: logical(PILL_RADIUS),
@@ -157,11 +163,7 @@ impl TabBar {
     /// Square area of the close button inside a tab.
     fn close_rect(&self, slot: Slot) -> (f32, f32, f32) {
         let size = self.cell.height as f32;
-        (
-            slot.x + slot.width - self.padding - size,
-            self.padding,
-            size,
-        )
+        (slot.x + slot.width - self.padding - size, self.top, size)
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<BarHit> {
@@ -266,7 +268,7 @@ impl TabBar {
             };
             texts.push(UiText {
                 x: (text_x0 + (text_width - title_cells * cw) / 2.0).floor(),
-                y: self.padding,
+                y: self.top,
                 text: title,
                 color,
                 bold: false,
@@ -277,7 +279,7 @@ impl TabBar {
             if label.bell {
                 texts.push(UiText {
                     x: indicator_x,
-                    y: self.padding,
+                    y: self.top,
                     text: "●".into(),
                     color: BELL_COLOR,
                     bold: false,
@@ -286,7 +288,7 @@ impl TabBar {
             } else if label.activity {
                 texts.push(UiText {
                     x: indicator_x,
-                    y: self.padding,
+                    y: self.top,
                     text: "•".into(),
                     color: inactive_text,
                     bold: false,
@@ -505,21 +507,21 @@ mod tests {
 
     #[test]
     fn tabs_share_the_width_up_to_a_maximum() {
-        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
+        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, 0.0, false);
         assert_eq!(bar.slots[0].x, 4.0, "margin at the left edge");
         assert_eq!(bar.slots[0].width, 280.0, "capped at 28 cells");
         assert_eq!(bar.slots[1].x, 284.0);
 
         // 4px margin on both sides and the 30px "+" button leave 962px
         // for 8 tabs.
-        let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, false);
+        let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, 0.0, false);
         assert_eq!(bar.slots[0].width, 120.0);
         assert_eq!(bar.height, 34.0);
     }
 
     #[test]
     fn hit_testing() {
-        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
+        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, 0.0, false);
         assert_eq!(bar.hit(10.0, 10.0), Some(BarHit::Tab(0)));
         assert_eq!(bar.hit(290.0, 10.0), Some(BarHit::Tab(1)));
         // Close button: 20px square, 7px from the tab's right edge.
@@ -532,7 +534,7 @@ mod tests {
     #[test]
     fn narrow_tabs_have_no_close_button() {
         // 30 tabs leave 33px each: too narrow for the close button.
-        let bar = TabBar::new(1000.0, 30, CELL, 1.0, 0.0, false);
+        let bar = TabBar::new(1000.0, 30, CELL, 1.0, 0.0, 0.0, false);
         let slot = bar.slots[0];
         let (cx, cy, _) = bar.close_rect(slot);
         assert_eq!(bar.hit(cx + 1.0, cy + 1.0), Some(BarHit::Tab(0)));
@@ -540,27 +542,37 @@ mod tests {
 
     #[test]
     fn drops_beyond_the_row_go_to_its_ends() {
-        let bar = TabBar::new(1000.0, 3, CELL, 1.0, 80.0, false);
+        let bar = TabBar::new(1000.0, 3, CELL, 1.0, 80.0, 0.0, false);
         assert_eq!(bar.drop_index(10.0), Some(0));
         assert_eq!(bar.drop_index(90.0), Some(0));
         assert_eq!(bar.drop_index(400.0), Some(1));
         assert_eq!(bar.drop_index(990.0), Some(2));
         assert_eq!(
-            TabBar::new(1000.0, 0, CELL, 1.0, 0.0, false).drop_index(5.0),
+            TabBar::new(1000.0, 0, CELL, 1.0, 0.0, 0.0, false).drop_index(5.0),
             None
         );
     }
 
     #[test]
+    fn short_bars_grow_to_the_minimum_height_centered() {
+        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 80.0, 0.0, false);
+        let tall = TabBar::new(1000.0, 2, CELL, 1.0, 80.0, bar.height + 10.0, false);
+        assert_eq!(tall.height, bar.height + 10.0);
+        assert_eq!(tall.top, bar.top + 5.0);
+        let short = TabBar::new(1000.0, 2, CELL, 1.0, 80.0, bar.height - 10.0, false);
+        assert_eq!(short.height, bar.height);
+    }
+
+    #[test]
     fn left_inset_is_respected() {
-        let bar = TabBar::new(1000.0, 1, CELL, 1.0, 80.0, false);
+        let bar = TabBar::new(1000.0, 1, CELL, 1.0, 80.0, 0.0, false);
         assert_eq!(bar.hit(40.0, 10.0), Some(BarHit::Empty));
         assert_eq!(bar.hit(90.0, 10.0), Some(BarHit::Tab(0)));
     }
 
     #[test]
     fn window_controls_take_the_right_edge() {
-        let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, true);
+        let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, 0.0, true);
         // 3 × 46px of controls, the margins and the "+" button leave 824px
         // for 8 tabs.
         assert_eq!(bar.slots[0].width, 103.0);
@@ -573,7 +585,7 @@ mod tests {
     #[test]
     fn new_tab_button_follows_the_last_tab() {
         // Two 280px tabs end at 564; the button takes the next 30px.
-        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
+        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, 0.0, false);
         assert_eq!(bar.hit(563.0, 10.0), Some(BarHit::Tab(1)));
         assert_eq!(bar.hit(564.0, 10.0), Some(BarHit::NewTab));
         assert_eq!(bar.hit(593.0, 10.0), Some(BarHit::NewTab));
@@ -582,14 +594,14 @@ mod tests {
         assert_eq!(bar.drop_index(570.0), Some(1));
 
         // With many tabs the button still fits before the window controls.
-        let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, true);
+        let bar = TabBar::new(1000.0, 8, CELL, 1.0, 0.0, 0.0, true);
         assert_eq!(bar.hit(830.0, 10.0), Some(BarHit::NewTab));
         assert_eq!(bar.hit(870.0, 10.0), Some(BarHit::Minimize));
     }
 
     #[test]
     fn hovered_new_tab_button_is_highlighted() {
-        let bar = TabBar::new(1000.0, 1, CELL, 1.0, 0.0, false);
+        let bar = TabBar::new(1000.0, 1, CELL, 1.0, 0.0, 0.0, false);
         let labels = [TabLabel {
             title: "~".into(),
             active: true,
@@ -606,7 +618,7 @@ mod tests {
 
     #[test]
     fn hovered_close_button_is_highlighted() {
-        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, false);
+        let bar = TabBar::new(1000.0, 2, CELL, 1.0, 0.0, 0.0, false);
         let labels = [true, false].map(|active| TabLabel {
             title: "~".into(),
             active,
