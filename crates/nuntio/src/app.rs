@@ -586,6 +586,7 @@ impl App {
         let proxy = self.proxy.clone();
         let config_shell = self.config.shell.as_ref().filter(|_| command.is_none());
         let wsl = config_shell.is_some_and(|s| s.is_wsl());
+        let login_shell = command.is_none();
         let shell = match command {
             Some(mut argv) => Some(Shell {
                 program: argv.remove(0),
@@ -598,6 +599,7 @@ impl App {
         };
         let options = SpawnOptions {
             shell,
+            login_shell,
             // `wsl.exe --cd ~` picks the directory; a Windows one would be ignored.
             working_directory: cwd.filter(|_| !wsl),
             term: term_options(&self.config),

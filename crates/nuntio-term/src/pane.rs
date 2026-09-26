@@ -64,6 +64,11 @@ pub struct TermOptions {
 pub struct SpawnOptions {
     /// `None` spawns the user's default shell.
     pub shell: Option<Shell>,
+    /// `shell` is the user's shell rather than a one-off command. On macOS
+    /// it then runs as a login shell through `login(1)`, as the default
+    /// shell does and as in Terminal.app: launched from the Dock, nuntio
+    /// inherits no PATH from a profile.
+    pub login_shell: bool,
     pub working_directory: Option<PathBuf>,
     pub term: TermOptions,
     pub palette: Palette,
@@ -185,7 +190,12 @@ pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
     listener: Listener,
     sender: EventLoopSender,
-    shell_pid: Option<u32>,
+    /// The process nuntio started: the shell, or `login` running it.
+    child_pid: Option<u32>,
+    /// `child_pid` is `login`; the shell is its child.
+    via_login: bool,
+    /// The shell's pid, once known.
+    shell_pid: OnceLock<u32>,
     shell_name: String,
 }
 
@@ -229,8 +239,17 @@ impl TermHandle {
             "WSLENV".into(),
             wslenv(std::env::var("WSLENV").ok().as_deref()),
         );
+        // Without a shell, alacritty runs the default one through `login`
+        // on macOS as well.
+        let via_login =
+            cfg!(target_os = "macos") && (options.shell.is_none() || options.login_shell);
+        let shell = match options.shell {
+            #[cfg(target_os = "macos")]
+            Some(shell) if options.login_shell => Some(login_command(&shell)),
+            shell => shell,
+        };
         let pty_options = tty::Options {
-            shell: options.shell.map(|s| tty::Shell::new(s.program, s.args)),
+            shell: shell.map(|s| tty::Shell::new(s.program, s.args)),
             working_directory: options.working_directory,
             drain_on_exit: true,
             env,
@@ -239,9 +258,9 @@ impl TermHandle {
         };
         let pty = tty::new(&pty_options, size.window_size(), 0).map_err(SpawnError::Pty)?;
         #[cfg(unix)]
-        let shell_pid = Some(pty.child().id());
+        let child_pid = Some(pty.child().id());
         #[cfg(windows)]
-        let shell_pid = pty.child_watcher().pid().map(|pid| pid.get());
+        let child_pid = pty.child_watcher().pid().map(|pid| pid.get());
         let shell_name = Path::new(&shell_program)
             .file_stem()
             .map_or(shell_program.clone(), |s| s.to_string_lossy().into_owned());
@@ -256,9 +275,32 @@ impl TermHandle {
             term,
             listener,
             sender,
-            shell_pid,
+            child_pid,
+            via_login,
+            shell_pid: OnceLock::new(),
             shell_name,
         })
+    }
+
+    /// The shell's pid. Behind `login`, that's `login` itself until it
+    /// has started the shell.
+    fn shell_pid(&self) -> Option<u32> {
+        if let Some(&pid) = self.shell_pid.get() {
+            return Some(pid);
+        }
+        let child = self.child_pid?;
+        #[cfg(target_os = "macos")]
+        let shell = if self.via_login {
+            process::login_child(child)
+        } else {
+            Some(child)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let shell = Some(child);
+        match shell {
+            Some(pid) => Some(*self.shell_pid.get_or_init(|| pid)),
+            None => Some(child),
+        }
     }
 
     /// Send user input to the shell.
@@ -339,19 +381,19 @@ impl TermHandle {
 
     /// Name of the foreground process, or the shell's name if unknown.
     pub fn process_name(&self) -> String {
-        self.shell_pid
+        self.shell_pid()
             .and_then(process::foreground_name)
             .unwrap_or_else(|| self.shell_name.clone())
     }
 
     /// Whether the shell waits at its prompt, if it can be determined.
     pub fn foreground_is_shell(&self) -> Option<bool> {
-        self.shell_pid.and_then(process::foreground_is_shell)
+        self.shell_pid().and_then(process::foreground_is_shell)
     }
 
     /// Working directory of the foreground process, if it can be determined.
     pub fn working_directory(&self) -> Option<PathBuf> {
-        self.shell_pid.and_then(process::working_directory)
+        self.shell_pid().and_then(process::working_directory)
     }
 
     /// Change the terminal options. Less scrollback drops the oldest
@@ -497,6 +539,57 @@ fn default_shell_name() -> String {
     }
 }
 
+/// Run `shell` as a login shell the way alacritty runs the default one:
+/// through `login -flp`, which registers the session, with `exec -a` giving
+/// the shell a `-` in front of its name (`-l` keeps `login` from doing
+/// that, and from changing to the home directory).
+#[cfg(target_os = "macos")]
+fn login_command(shell: &Shell) -> Shell {
+    let user = std::env::var("USER").unwrap_or_default();
+    if user.is_empty() {
+        tracing::debug!("USER is not set, starting the shell without login");
+        return shell.clone();
+    }
+    // `login` looks for `.hushlogin` in the current directory only.
+    let hush =
+        std::env::var_os("HOME").is_some_and(|home| Path::new(&home).join(".hushlogin").exists());
+    let flags = if hush { "-qflp" } else { "-flp" };
+    Shell {
+        program: "/usr/bin/login".into(),
+        args: vec![
+            flags.into(),
+            user,
+            "/bin/zsh".into(),
+            "-fc".into(),
+            exec_as_login(shell),
+        ],
+    }
+}
+
+/// The zsh command that starts `shell` with `-<name>` as `argv[0]`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn exec_as_login(shell: &Shell) -> String {
+    let name = Path::new(&shell.program)
+        .file_name()
+        .map_or(shell.program.clone(), |n| n.to_string_lossy().into_owned());
+    let mut command = format!(
+        "exec -a {} {}",
+        sh_quote(&format!("-{name}")),
+        sh_quote(&shell.program)
+    );
+    for arg in &shell.args {
+        command.push(' ');
+        command.push_str(&sh_quote(arg));
+    }
+    command
+}
+
+/// `s` as one single-quoted shell word.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// `WSLENV` that also passes our terminal variables into WSL, keeping
 /// entries the user already has.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -543,6 +636,18 @@ mod tests {
         assert_eq!(
             wslenv(Some("TERM/u:FOO")),
             "TERM/u:FOO:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION"
+        );
+    }
+
+    #[test]
+    fn login_shells_keep_their_arguments_quoted() {
+        let shell = Shell {
+            program: "/opt/homebrew/bin/fish".into(),
+            args: vec!["--init-command".into(), "echo 'hi' $HOME".into()],
+        };
+        assert_eq!(
+            exec_as_login(&shell),
+            r#"exec -a '-fish' '/opt/homebrew/bin/fish' '--init-command' 'echo '\''hi'\'' $HOME'"#
         );
     }
 

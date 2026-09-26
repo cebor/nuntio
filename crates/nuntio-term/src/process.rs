@@ -31,6 +31,13 @@ pub fn working_directory(shell_pid: u32) -> Option<PathBuf> {
     sys::cwd(foreground_pid(shell_pid)).or_else(|| sys::cwd(shell_pid))
 }
 
+/// The shell that `login` (see `pane::login_command`) started as its
+/// child, once it exists.
+#[cfg(target_os = "macos")]
+pub fn login_child(login_pid: u32) -> Option<u32> {
+    sys::children(login_pid).into_iter().next()
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn foreground_name(_shell_pid: u32) -> Option<String> {
     None
@@ -98,6 +105,23 @@ mod sys {
         let len = unsafe { libc::proc_name(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
         let len = usize::try_from(len).ok().filter(|&len| len > 0)?;
         Some(String::from_utf8_lossy(&buffer[..len.min(buffer.len())]).into_owned())
+    }
+
+    /// The processes whose parent is `pid`.
+    pub fn children(pid: u32) -> Vec<u32> {
+        let Ok(pid) = c_int::try_from(pid) else {
+            return Vec::new();
+        };
+        let mut pids = [0 as libc::pid_t; 16];
+        let size = c_int::try_from(size_of_val(&pids)).expect("small buffer");
+        // SAFETY: the pointer and size describe `pids`.
+        let written = unsafe { libc::proc_listchildpids(pid, pids.as_mut_ptr().cast(), size) };
+        // Returns the number of pids, not bytes (unlike `proc_listpids`).
+        let count = usize::try_from(written).unwrap_or(0).min(pids.len());
+        pids[..count]
+            .iter()
+            .filter_map(|&pid| u32::try_from(pid).ok().filter(|&pid| pid > 0))
+            .collect()
     }
 
     pub fn cwd(pid: u32) -> Option<PathBuf> {

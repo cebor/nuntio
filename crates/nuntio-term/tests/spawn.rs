@@ -43,6 +43,7 @@ fn spawn_with(
             program: "/bin/sh".into(),
             args: vec!["-c".into(), script.into()],
         }),
+        login_shell: false,
         working_directory: None,
         term,
         palette: Default::default(),
@@ -192,6 +193,50 @@ fn foreground_process_and_directory() {
         handle.working_directory().as_deref(),
         Some(std::path::Path::new("/tmp"))
     );
+}
+
+/// On macOS the user's shell runs behind `login`, which is the process
+/// nuntio started; the shell at its prompt still counts as idle.
+#[test]
+#[cfg(target_os = "macos")]
+fn login_shell_is_seen_behind_login() {
+    let (tx, _rx) = mpsc::channel();
+    let options = SpawnOptions {
+        shell: Some(Shell {
+            program: "/bin/zsh".into(),
+            args: vec!["-f".into()],
+        }),
+        login_shell: true,
+        working_directory: Some("/tmp".into()),
+        term: OPTIONS,
+        palette: Default::default(),
+        env: Vec::new(),
+    };
+    let handle = TermHandle::spawn(options, SIZE, move |event| {
+        let _ = tx.send(event);
+    })
+    .expect("spawn");
+    let wait_until = |done: &dyn Fn() -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !done() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    wait_until(&|| handle.foreground_is_shell() == Some(true));
+    assert_eq!(handle.foreground_is_shell(), Some(true));
+    assert_eq!(handle.process_name(), "zsh");
+    assert_eq!(
+        handle
+            .working_directory()
+            .map(|dir| dir.canonicalize().unwrap()),
+        Some(std::path::PathBuf::from("/private/tmp"))
+    );
+
+    handle.write(&b"sleep 5\r"[..]);
+    wait_until(&|| handle.process_name() == "sleep");
+    assert_eq!(handle.process_name(), "sleep");
+    assert_eq!(handle.foreground_is_shell(), Some(false));
 }
 
 #[test]
