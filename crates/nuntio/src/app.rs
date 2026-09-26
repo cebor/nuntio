@@ -171,6 +171,18 @@ fn round_corners(window: &Window) {
     }
 }
 
+/// Center the window on its screen.
+#[cfg(target_os = "macos")]
+fn center(window: &Window) {
+    let Some(monitor) = window.current_monitor() else {
+        return;
+    };
+    let (screen, origin, size) = (monitor.size(), monitor.position(), window.outer_size());
+    let x = origin.x + (screen.width.saturating_sub(size.width) / 2) as i32;
+    let y = origin.y + (screen.height.saturating_sub(size.height) / 2) as i32;
+    window.set_outer_position(PhysicalPosition::new(x, y));
+}
+
 /// Whether Alt should act as Meta (ESC prefix). On macOS Option composes
 /// characters unless Option-as-Meta is enabled for the pressed side.
 fn alt_is_meta(mods: &Modifiers, option_as_meta: OptionAsMeta) -> bool {
@@ -665,7 +677,10 @@ impl App {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState> {
         let attrs = Window::default_attributes()
             .with_title(DEFAULT_TITLE)
-            .with_inner_size(LogicalSize::new(900.0, 600.0));
+            .with_inner_size(LogicalSize::new(900.0, 600.0))
+            // Shown once it has the size of the configured grid, which is
+            // only known with the font (where the platform allows hiding).
+            .with_visible(false);
         // App id / WM_CLASS, matching the .desktop file (Wayland and X11).
         #[cfg(target_os = "linux")]
         let attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
@@ -728,6 +743,10 @@ impl App {
         if let Some(size) = state.window.request_inner_size(size) {
             state.renderer.resize(size.width, size.height);
         }
+        // macOS centered the window at its first size.
+        #[cfg(target_os = "macos")]
+        center(&state.window);
+        state.window.set_visible(true);
         state.resize_terms(&self.config);
         Ok(state)
     }
