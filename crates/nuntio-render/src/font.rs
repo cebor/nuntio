@@ -172,6 +172,11 @@ impl Fonts {
         if let Some(name) = default_monospace(installed, DEFAULT_MONOSPACE) {
             system.db_mut().set_monospace_family(name);
         }
+        // cosmic-text finds no match for fontdb's default sans-serif family
+        // on macOS and logs a miss on every fallback lookup.
+        if cfg!(target_os = "macos") {
+            system.db_mut().set_sans_serif_family("Helvetica");
+        }
         let px_size = points_to_pixels(size_points, scale_factor);
         let buffer = new_buffer(&mut system, px_size);
         let small_buffer = new_buffer(&mut system, px_size * SMALL_TEXT_SCALE);
