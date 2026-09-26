@@ -1152,7 +1152,6 @@ impl App {
         };
     }
 
-    /// The edit that choosing `pick` makes.
     /// Whether `program` is one of the shells found on this system.
     fn is_detected_shell(&self, program: &str) -> bool {
         self.shells
@@ -1161,6 +1160,7 @@ impl App {
             .any(|f| f.value.eq_ignore_ascii_case(program))
     }
 
+    /// The edit that choosing `pick` makes.
     fn pick_edit(&self, target: &PickTarget, pick: Pick) -> Box<dyn FnOnce(&mut ConfigDoc)> {
         match (target, pick) {
             (&PickTarget::Setting(s), Pick::Unset) => Box::new(|doc| doc.unset(s.path)),
