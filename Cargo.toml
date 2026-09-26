@@ -52,6 +52,8 @@ sysinfo = { version = "0.39", default-features = false, features = ["system", "n
 starship-battery = "0.11"
 # Process info on macOS (proc_pidinfo).
 libc = "0.2"
+# The macOS language and region, for LANG in panes.
+sys-locale = "0.3"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_System_Registry"] }
 
 [workspace.lints.rust]

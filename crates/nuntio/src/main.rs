@@ -160,7 +160,7 @@ fn restrict_dll_search() {
 }
 
 fn main() -> Result<()> {
-    let args = parse_args()?;
+    let mut args = parse_args()?;
 
     let filter = match &args.log_level {
         Some(level) => EnvFilter::try_new(level)?,
@@ -177,6 +177,15 @@ fn main() -> Result<()> {
     }
     #[cfg(windows)]
     restrict_dll_search();
+    // Started from the Finder or Dock, nuntio runs in `/`. Start the first
+    // shell at home instead, like Terminal.app (`login`, which runs the
+    // shell, stays in the current directory).
+    if cfg!(target_os = "macos")
+        && args.startup.working_directory.is_none()
+        && std::env::current_dir().is_ok_and(|dir| dir == Path::new("/"))
+    {
+        args.startup.working_directory = dirs::home_dir();
+    }
 
     let mut warnings = Vec::new();
     let config_path = args.config.or_else(|| {

@@ -1932,6 +1932,7 @@ dependencies = [
  "open",
  "percent-encoding",
  "starship-battery",
+ "sys-locale",
  "sysinfo",
  "tracing",
  "tracing-subscriber",
