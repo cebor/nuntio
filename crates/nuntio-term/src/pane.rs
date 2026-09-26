@@ -434,6 +434,15 @@ impl TermHandle {
         Snapshot::capture(&term, &palette, &[], None)
     }
 
+    /// Let the next output send a wakeup without taking a snapshot, for a
+    /// pane whose output is awaited rather than drawn.
+    pub fn ack_wakeup(&self) {
+        self.listener
+            .inner
+            .wakeup_pending
+            .store(false, Ordering::Release);
+    }
+
     /// Like [`snapshot`](Self::snapshot), with the matches of `search`
     /// highlighted.
     pub fn search_snapshot(&self, search: &mut Search) -> Snapshot {

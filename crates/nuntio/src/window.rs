@@ -45,6 +45,43 @@ pub const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(50);
 const AUTOSCROLL_MAX_LINES: i32 = 5;
 /// How long a tab title is reused before the process info is read again.
 const TITLE_REFRESH: Duration = Duration::from_millis(250);
+/// A new pane is shown once its output has paused this long, so the shell's
+/// startup output (a greeting, the prompt) appears in one frame.
+const REVEAL_QUIET: Duration = Duration::from_millis(20);
+/// Latest time a new pane is shown, however busy or silent its shell is.
+const REVEAL_MAX: Duration = Duration::from_millis(300);
+
+/// Holds back frames after a new tab or split opens, until its shell has
+/// drawn its first screen. Otherwise the window flashes the empty pane and
+/// then the startup output line by line, as each read of the pty is drawn.
+#[derive(Debug, Clone, Copy)]
+pub struct Reveal {
+    pane: PaneId,
+    /// Show the pane by then even if the shell is still busy.
+    deadline: Instant,
+    /// Output has arrived; show the pane unless more comes before then.
+    settle: Option<Instant>,
+}
+
+impl Reveal {
+    fn new(pane: PaneId, now: Instant) -> Self {
+        Self {
+            pane,
+            deadline: now + REVEAL_MAX,
+            settle: None,
+        }
+    }
+
+    /// Output from the held pane pushes the reveal back.
+    fn output(&mut self, now: Instant) {
+        self.settle = Some(now + REVEAL_QUIET);
+    }
+
+    /// When the pane is shown.
+    pub fn due(&self) -> Instant {
+        self.settle.map_or(self.deadline, |s| s.min(self.deadline))
+    }
+}
 
 pub struct Pane {
     pub id: PaneId,
@@ -267,6 +304,8 @@ pub struct WindowState {
     /// A frame showed cached tab titles; redraw once they expire so they
     /// catch up with the processes.
     pub title_refresh: Option<Instant>,
+    /// A new pane waiting for its shell's first screen; frames are held.
+    pub reveal: Option<Reveal>,
     /// Cell the IME candidate window was last anchored to.
     ime_cell: Option<(u32, u32)>,
     /// The status bar as of the last new sample, to skip redraws that
@@ -302,6 +341,7 @@ impl WindowState {
             },
             skipped_frames: 0,
             title_refresh: None,
+            reveal: None,
             ime_cell: None,
             status_drawn: None,
             title: String::new(),
@@ -335,6 +375,40 @@ impl WindowState {
             cell_width: 1,
             cell_height: 1,
         })
+    }
+
+    /// Keep showing the current frame until `pane`, the new focused pane,
+    /// has drawn its first screen.
+    pub fn hold_reveal(&mut self, pane: PaneId, now: Instant) {
+        self.reveal = Some(Reveal::new(pane, now));
+    }
+
+    /// Output from `pane`. True if it is the held pane, which is then
+    /// ready for the next wakeup without being drawn.
+    pub fn reveal_output(&mut self, pane: PaneId, now: Instant) -> bool {
+        match &mut self.reveal {
+            Some(reveal) if reveal.pane == pane => {
+                reveal.output(now);
+                if let Some(p) = self.content().pane(pane) {
+                    p.term.ack_wakeup();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether frames are still held back. Ends the hold once it is due,
+    /// or once the held pane is no longer the focused one.
+    pub fn reveal_holds(&mut self, now: Instant) -> bool {
+        let Some(reveal) = self.reveal else {
+            return false;
+        };
+        let holds = now < reveal.due() && self.content().focused == reveal.pane;
+        if !holds {
+            self.reveal = None;
+        }
+        holds
     }
 
     fn scale(&self) -> f64 {
@@ -1037,6 +1111,22 @@ mod tests {
         stroke: 1,
         strikeout_y: 10,
     };
+
+    #[test]
+    fn reveal_waits_for_output_to_pause_but_not_forever() {
+        let now = Instant::now();
+        let mut reveal = Reveal::new(PaneId(1), now);
+        assert_eq!(reveal.due(), now + REVEAL_MAX, "silent shell");
+
+        let ms = Duration::from_millis;
+        reveal.output(now + ms(50));
+        assert_eq!(reveal.due(), now + ms(50) + REVEAL_QUIET);
+        reveal.output(now + ms(60));
+        assert_eq!(reveal.due(), now + ms(60) + REVEAL_QUIET, "more output");
+
+        reveal.output(now + REVEAL_MAX - ms(1));
+        assert_eq!(reveal.due(), now + REVEAL_MAX, "busy shell");
+    }
 
     #[test]
     fn cached_titles_expire_and_follow_the_mode() {

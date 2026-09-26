@@ -851,8 +851,10 @@ impl App {
         let Some(state) = self.state.as_mut() else {
             return;
         };
+        let id = pane.id;
         state.send_focus(false);
         state.tabs.open(TabContent::new(pane));
+        state.hold_reveal(id, Instant::now());
         state.reset_focus_state();
         // The first extra tab may show the tab bar and shrink the grid.
         state.resize_terms(&self.config);
@@ -877,6 +879,7 @@ impl App {
         }
         content.panes.push(pane);
         state.focus_pane(new);
+        state.hold_reveal(new, Instant::now());
         state.resize_terms(&self.config);
     }
 
@@ -1747,7 +1750,10 @@ impl App {
         match event {
             TermEvent::Wakeup => {
                 if active {
-                    state.window.request_redraw();
+                    // A held new pane is drawn once its output pauses.
+                    if !state.reveal_output(pane, Instant::now()) {
+                        state.window.request_redraw();
+                    }
                 } else if let Some(tab) = state.tabs.get_mut(index)
                     && !tab.activity
                 {
@@ -1816,8 +1822,12 @@ impl ApplicationHandler<UserEvent> for App {
             });
             state.window.request_redraw();
         }
+        if state.reveal.is_some() && !state.reveal_holds(now) {
+            state.window.request_redraw();
+        }
         // Sleep until the next timer, or until an event if there is none.
         let deadline = [
+            state.reveal.map(|reveal| reveal.due()),
             state.blink.active.then_some(state.blink.next_toggle),
             state.title_refresh,
             state.mouse.autoscroll.map(|scroll| scroll.next),
@@ -1877,11 +1887,14 @@ impl ApplicationHandler<UserEvent> for App {
             // Minimized on Windows: keep the grids, don't reflow to 1x1.
             WindowEvent::Resized(size) if size.width == 0 || size.height == 0 => {}
             WindowEvent::Resized(size) => {
+                // A resized window needs a fresh frame right away.
+                state.reveal = None;
                 state.renderer.resize(size.width, size.height);
                 state.resize_terms(&self.config);
                 state.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                state.reveal = None;
                 state.renderer.set_font_size(self.font_size, scale_factor);
                 state.invalidate_ime_area();
                 state.resize_terms(&self.config);
@@ -1976,6 +1989,10 @@ impl ApplicationHandler<UserEvent> for App {
                 let Some(state) = self.state.as_mut() else {
                     return;
                 };
+                // The previous frame stays up while a new pane starts.
+                if state.reveal_holds(Instant::now()) {
+                    return;
+                }
                 let status = state.redraw(&self.config, &self.stats, self.banner.as_ref());
                 if status == FrameStatus::Skipped {
                     state.skipped_frames += 1;
