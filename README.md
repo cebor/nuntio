@@ -108,6 +108,8 @@ nuntio [options] [[-e] <command> [<args>...]]
 
 When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux or `~/Library/Caches/nuntio/nuntio.log` on macOS. The previous run's log is kept as `nuntio.old.log`.
 
+On a system with several GPUs, nuntio skips an adapter that can't draw to the window. To choose one yourself, set `WGPU_ADAPTER_NAME` to part of its name (for example `WGPU_ADAPTER_NAME=nvidia`) or `WGPU_POWER_PREF=high`; with `--log-level debug` the log lists the adapters found.
+
 ## Configuration
 
 nuntio reads `~/.config/nuntio/config.toml` (or `$XDG_CONFIG_HOME/nuntio/config.toml`) or, if that doesn't exist, `~/.nuntio.toml`. The paths are the same on Linux, macOS and Windows, so one dotfiles repo works everywhere. Without a config file, nuntio runs with the defaults.
