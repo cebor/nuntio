@@ -384,6 +384,7 @@ impl WindowState {
             stats,
             datetime,
             self.renderer.small_cell_metrics(),
+            self.renderer.cell_metrics(),
             self.scale(),
         ))
     }

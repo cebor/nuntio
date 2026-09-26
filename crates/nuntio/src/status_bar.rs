@@ -88,6 +88,8 @@ pub struct StatusBar {
     padding: f32,
     scale: f32,
     cell: CellMetrics,
+    /// Cells of the terminal font, which is a bit larger.
+    font_cell: CellMetrics,
     /// Items that fit, left to right.
     slots: Vec<Slot>,
 }
@@ -117,7 +119,9 @@ impl StatusBar {
 
     /// Lay out `items` in a bar of `width` pixels whose top edge is at
     /// `top`. Springs share the free space. Items without data to show
-    /// (no battery) are left out.
+    /// (no battery) are left out. `cell` is the small UI font the bar is
+    /// laid out in, `font_cell` the terminal font.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         width: f32,
         top: f32,
@@ -125,6 +129,7 @@ impl StatusBar {
         stats: &Stats,
         datetime: &str,
         cell: CellMetrics,
+        font_cell: CellMetrics,
         scale: f64,
     ) -> Self {
         let padding = (BAR_PADDING * scale).round() as f32;
@@ -164,6 +169,7 @@ impl StatusBar {
             padding,
             scale: scale as f32,
             cell,
+            font_cell,
             slots,
         }
     }
@@ -248,15 +254,31 @@ impl StatusBar {
                 text(after_graph, format!("{value:>5}"), colors.value, out);
             }
             StatusItem::Network => {
+                // Download left of the graph, upload right of it.
+                let graph = CONTENT + 6;
+                let up_x = graph + GRAPH_CELLS + 1;
                 self.network_icon(out, x, colors);
-                self.network_graph(out, graph_x, stats, colors);
+                self.network_graph(out, x + graph as f32 * cw, stats, colors);
                 let (down, up) = latest.network.map_or(("--".into(), "--".into()), |net| {
                     (format_rate(net.down), format_rate(net.up))
                 });
-                text(after_graph, "↓".into(), colors.label, out);
-                text(after_graph + 1, format!("{down:>4}"), colors.value, out);
-                text(after_graph + 6, "↑".into(), colors.label, out);
-                text(after_graph + 7, format!("{up:>4}"), colors.value, out);
+                // The arrows are small in the UI font: take the terminal
+                // font, centered in their cell and on the same baseline.
+                let arrow = |cells: usize, text: &str, out: &mut Output| {
+                    let overhang = (self.font_cell.width as f32 - cw) / 2.0;
+                    out.texts.push(UiText {
+                        x: (x + cells as f32 * cw - overhang).floor(),
+                        y: text_y + self.cell.baseline as f32 - self.font_cell.baseline as f32,
+                        text: text.into(),
+                        color: colors.label,
+                        bold: false,
+                        small: false,
+                    });
+                };
+                arrow(CONTENT, "↓", out);
+                text(CONTENT + 1, format!("{down:>4}"), colors.value, out);
+                arrow(up_x, "↑", out);
+                text(up_x + 1, format!("{up:>4}"), colors.value, out);
             }
             StatusItem::Battery => {
                 let Some(battery) = latest.battery else {
@@ -550,7 +572,7 @@ fn item_cells(item: StatusItem, datetime: &str) -> usize {
         StatusItem::Cpu => CONTENT + GRAPH_CELLS + 1 + 4,
         // icon graph " 12.3G"
         StatusItem::Memory => CONTENT + GRAPH_CELLS + 1 + 5,
-        // icon graph " ↓1.2M ↑ 30K"
+        // icon "↓1.2M " graph " ↑ 30K"
         StatusItem::Network => CONTENT + GRAPH_CELLS + 1 + 5 + 1 + 5,
         // icon " 100%" "⚡"
         StatusItem::Battery => CONTENT + 4 + 2,
@@ -620,19 +642,23 @@ fn layout(width: f32, margin: f32, gap: f32, pieces: &[Piece]) -> Vec<Option<f32
     out
 }
 
-/// A rate in at most four characters: `999B`, `1.2K`, `34M`.
+/// A rate in at most four characters: `0K`, `0.5K`, `1.2K`, `34M`.
+/// Anything under 0.1 K counts as nothing.
 fn format_rate(bytes_per_sec: f64) -> String {
-    const UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
-    let mut value = bytes_per_sec.max(0.0);
+    const UNITS: [&str; 4] = ["K", "M", "G", "T"];
+    if bytes_per_sec < 102.4 {
+        return "0K".into();
+    }
+    let mut value = bytes_per_sec / 1024.0;
     let mut unit = 0;
     while value >= 999.5 && unit < UNITS.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
-    match unit {
-        0 => format!("{value:.0}B"),
-        _ if value < 9.95 => format!("{value:.1}{}", UNITS[unit]),
-        _ => format!("{value:.0}{}", UNITS[unit]),
+    if value < 9.95 {
+        format!("{value:.1}{}", UNITS[unit])
+    } else {
+        format!("{value:.0}{}", UNITS[unit])
     }
 }
 
@@ -758,8 +784,11 @@ mod tests {
 
     #[test]
     fn rates_and_sizes_fit_their_columns() {
-        assert_eq!(format_rate(0.0), "0B");
-        assert_eq!(format_rate(999.0), "999B");
+        assert_eq!(format_rate(0.0), "0K");
+        assert_eq!(format_rate(100.0), "0K");
+        assert_eq!(format_rate(102.4), "0.1K");
+        assert_eq!(format_rate(512.0), "0.5K");
+        assert_eq!(format_rate(999.0), "1.0K");
         assert_eq!(format_rate(1000.0), "1.0K");
         assert_eq!(format_rate(30.0 * 1024.0), "30K");
         assert_eq!(format_rate(1.25 * 1024.0 * 1024.0), "1.2M");
@@ -791,13 +820,13 @@ mod tests {
     #[test]
     fn missing_battery_is_left_out() {
         let items = arranged(&[StatusItem::Cpu, StatusItem::Battery, StatusItem::Datetime]);
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(false), "12:34", CELL, 1.0);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(false), "12:34", CELL, CELL, 1.0);
         let shown: Vec<_> = bar.slots.iter().map(|s| s.item).collect();
         assert_eq!(shown, [StatusItem::Cpu, StatusItem::Datetime]);
         // Icon, space and "12:34" (8 cells) sit at the right margin of one cell.
         assert_eq!(bar.slots[1].x, 1000.0 - 10.0 - 80.0);
 
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", CELL, 1.0);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", CELL, CELL, 1.0);
         assert_eq!(bar.slots.len(), 3);
     }
 
@@ -811,7 +840,16 @@ mod tests {
             StatusItem::Datetime,
         ];
         let stats = stats(true);
-        let bar = StatusBar::new(1200.0, 500.0, &arranged(&items), &stats, "12:34", CELL, 1.0);
+        let bar = StatusBar::new(
+            1200.0,
+            500.0,
+            &arranged(&items),
+            &stats,
+            "12:34",
+            CELL,
+            CELL,
+            1.0,
+        );
         assert_eq!(bar.height, 28.0);
         let (bg, fg) = (
             Rgb { r: 0, g: 0, b: 0 },
@@ -823,7 +861,7 @@ mod tests {
         );
         let (rects, texts) = bar.draw(&stats, "12:34", bg, fg);
         let texts: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
-        for expected in [" 50%", " 4.0G", "2.0K", "  0B", " 80%", "⚡", "12:34"] {
+        for expected in [" 50%", " 4.0G", "2.0K", "  0K", " 80%", "⚡", "12:34"] {
             assert!(texts.contains(&expected), "{expected:?} in {texts:?}");
         }
         for r in &rects {
@@ -847,7 +885,7 @@ mod tests {
         let separator = mix(bar_background(bg), fg, 0.15);
         let count = |items: &[StatusItem]| {
             let stats = stats(false);
-            let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", CELL, 1.0);
+            let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", CELL, CELL, 1.0);
             let (rects, _) = bar.draw(&stats, "12:34", bg, fg);
             rects.iter().filter(|r| r.color == separator).count()
         };
