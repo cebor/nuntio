@@ -71,10 +71,15 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     // AltGr, which Windows reports as Ctrl+Alt, types text; it isn't a
     // Ctrl+Alt combination.
     let altgr = altgr_text(input);
+    // Option that doesn't act as Meta still has nothing to compose on keys
+    // like ←, → and ⌫, so it is reported as Alt there, as the legacy
+    // encoding sends word movement for it.
+    let option_alt =
+        input.option && matches!(input.key, Key::Named(_)) && printable(input).is_none();
     let (ctrl, alt) = if altgr.is_some() {
         (false, false)
     } else {
-        (input.ctrl, input.meta)
+        (input.ctrl, input.meta || option_alt)
     };
     let mut mods = [
         (input.shift, SHIFT),
@@ -375,6 +380,7 @@ mod tests {
         shift: bool,
         ctrl: bool,
         meta: bool,
+        option: bool,
         super_key: bool,
     }
 
@@ -394,6 +400,7 @@ mod tests {
             shift: false,
             ctrl: false,
             meta: false,
+            option: false,
             super_key: false,
         }
     }
@@ -426,6 +433,10 @@ mod tests {
             self.meta = true;
             self
         }
+        fn option(mut self) -> Self {
+            self.option = true;
+            self
+        }
         fn at(mut self, location: KeyLocation, code: KeyCode) -> Self {
             self.location = location;
             self.physical = PhysicalKey::Code(code);
@@ -450,7 +461,7 @@ mod tests {
                 shift: self.shift,
                 ctrl: self.ctrl,
                 meta: self.meta,
-                option: false,
+                option: self.option,
                 super_key: self.super_key,
             };
             encode(&input, mode).map(|bytes| String::from_utf8(bytes).unwrap())
@@ -497,6 +508,20 @@ mod tests {
         assert_eq!(named(NamedKey::Delete).sends(m), "\x1b[3~");
         assert_eq!(named(NamedKey::F13).sends(m), "\x1b[57376u");
         assert_eq!(named(NamedKey::ContextMenu).sends(m), "\x1b[57363u");
+    }
+
+    #[test]
+    fn option_without_meta() {
+        let m = DISAMBIGUATE;
+        assert_eq!(named(NamedKey::ArrowLeft).option().sends(m), "\x1b[1;3D");
+        assert_eq!(named(NamedKey::ArrowRight).option().sends(m), "\x1b[1;3C");
+        assert_eq!(named(NamedKey::Backspace).option().sends(m), "\x1b[127;3u");
+        // Text that Option composes is sent as it is.
+        let at = Press {
+            unmodified: Key::Character("l".into()),
+            ..ch("@").option()
+        };
+        assert_eq!(at.sends(m), "@");
     }
 
     #[test]
