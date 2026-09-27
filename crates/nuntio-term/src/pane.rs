@@ -127,6 +127,9 @@ struct ListenerInner {
     size: Mutex<WindowSize>,
     /// Coalesces wakeups: only one is in flight until the next snapshot.
     wakeup_pending: AtomicBool,
+    /// File stem of the program nuntio started, to recognize conhost's
+    /// default title.
+    shell_name: String,
 }
 
 impl ListenerInner {
@@ -146,6 +149,11 @@ impl EventListener for Listener {
                     return;
                 }
                 TermEvent::Wakeup
+            }
+            // ConPTY announces the program's path as the title at startup;
+            // that's no title of its own, so the tab keeps its fallback.
+            Event::Title(title) if is_console_default_title(&title, &inner.shell_name) => {
+                TermEvent::ResetTitle
             }
             Event::Title(title) => TermEvent::Title(title),
             Event::ResetTitle => TermEvent::ResetTitle,
@@ -207,6 +215,15 @@ impl TermHandle {
         size: TermSize,
         callback: impl Fn(TermEvent) + Send + Sync + 'static,
     ) -> Result<Self, SpawnError> {
+        let shell_program = options
+            .shell
+            .as_ref()
+            .map(|s| s.program.clone())
+            .unwrap_or_else(default_shell_name);
+        let shell_name = Path::new(&shell_program)
+            .file_stem()
+            .map_or(shell_program.clone(), |s| s.to_string_lossy().into_owned());
+
         let listener = Listener {
             inner: Arc::new(ListenerInner {
                 callback: Box::new(callback),
@@ -214,17 +231,13 @@ impl TermHandle {
                 palette: RwLock::new(options.palette),
                 size: Mutex::new(size.window_size()),
                 wakeup_pending: AtomicBool::new(false),
+                shell_name: shell_name.clone(),
             }),
         };
 
         let config = term_config(options.term);
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
 
-        let shell_program = options
-            .shell
-            .as_ref()
-            .map(|s| s.program.clone())
-            .unwrap_or_else(default_shell_name);
         let mut env = HashMap::from([
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
@@ -262,9 +275,6 @@ impl TermHandle {
         let child_pid = Some(pty.child().id());
         #[cfg(windows)]
         let child_pid = pty.child_watcher().pid().map(|pid| pid.get());
-        let shell_name = Path::new(&shell_program)
-            .file_stem()
-            .map_or(shell_program.clone(), |s| s.to_string_lossy().into_owned());
 
         let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)
             .map_err(SpawnError::EventLoop)?;
@@ -618,6 +628,25 @@ fn wslenv(existing: Option<&str>) -> String {
     entries.join(":")
 }
 
+/// Whether `title` is conhost's default console title: the absolute path of
+/// the program nuntio started (`C:\WINDOWS\system32\wsl.exe`), which ConPTY
+/// sends at startup. Parsed by hand so it behaves the same on every OS.
+fn is_console_default_title(title: &str, program: &str) -> bool {
+    let bytes = title.as_bytes();
+    let absolute = title.starts_with(r"\\")
+        || (bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && &bytes[1..3] == br":\");
+    let Some((_, file)) = title.rsplit_once('\\') else {
+        return false;
+    };
+    let stem = match file.len().checked_sub(4) {
+        Some(dot) if file.is_char_boundary(dot) && file[dot..].eq_ignore_ascii_case(".exe") => {
+            &file[..dot]
+        }
+        _ => file,
+    };
+    absolute && !program.is_empty() && stem.eq_ignore_ascii_case(program)
+}
+
 /// Paste payload: with bracketed paste the text is wrapped in markers, with
 /// every ESC removed so no end marker can be smuggled in (removing only
 /// `ESC [201~` once would turn `ESC [20ESC [201~1~` into a new one); without
@@ -647,6 +676,27 @@ mod tests {
             wslenv(Some("TERM/u:FOO")),
             "TERM/u:FOO:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION"
         );
+    }
+
+    #[test]
+    fn conhost_default_title_is_recognized() {
+        assert!(is_console_default_title(
+            r"C:\WINDOWS\system32\wsl.exe",
+            "wsl"
+        ));
+        assert!(is_console_default_title(
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "pwsh"
+        ));
+        assert!(is_console_default_title(r"\\server\share\Tool.EXE", "tool"));
+        assert!(!is_console_default_title("felix@box: ~", "wsl"));
+        assert!(!is_console_default_title(r"C:\Users\felix", "wsl"));
+        assert!(!is_console_default_title("wsl.exe", "wsl"));
+        assert!(!is_console_default_title(
+            r"C:\WINDOWS\system32\cmd.exe",
+            "wsl"
+        ));
+        assert!(!is_console_default_title("/usr/bin/wsl", "wsl"));
     }
 
     #[test]
