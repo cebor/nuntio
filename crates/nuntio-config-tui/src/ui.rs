@@ -543,8 +543,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// The text of the `e` hint: the editor's name if the footer still fits
-/// in `width` with it, else the generic `editor`.
+/// The text of the `e` hint: the editor's name, unless the footer doesn't
+/// fit in `width` with it and the generic `editor` is shorter.
 fn editor_hint<'a>(hints: &[(&str, &'a str)], name: &'a str, width: u16) -> &'a str {
     // A leading space, and two spaces between hints.
     let needed: usize = hints
@@ -556,7 +556,9 @@ fn editor_hint<'a>(hints: &[(&str, &'a str)], name: &'a str, width: u16) -> &'a 
         .sum::<usize>()
         - 1;
     match hints.iter().find(|&&(key, _)| key == "e") {
-        Some(&(_, generic)) if needed > usize::from(width) => generic,
+        Some(&(_, generic)) if needed > usize::from(width) && generic.width() < name.width() => {
+            generic
+        }
         _ => name,
     }
 }
@@ -583,7 +585,8 @@ mod tests {
         // " / search  e editor  q quit" is 27 columns.
         assert_eq!(editor_hint(&hints, "notepad", 28), "notepad");
         assert_eq!(editor_hint(&hints, "notepad", 27), "editor");
-        assert_eq!(editor_hint(&hints, "vim", 24), "vim");
+        // Short names never become the longer `editor`.
+        assert_eq!(editor_hint(&hints, "vim", 10), "vim");
         assert_eq!(editor_hint(&[("q", "quit")], "vim", 1), "vim");
     }
 
