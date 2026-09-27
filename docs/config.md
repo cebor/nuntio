@@ -123,6 +123,7 @@ enabled = false
 position = "bottom"
 items = ["cpu", "memory", "network", "battery", "datetime"]
 datetime_format = "%a %d %b %H:%M"
+rainbow = false
 
 [mouse]
 copy_on_select = false
@@ -195,6 +196,7 @@ A bar with live system graphs and the date and time, as in iTerm2. It is off by 
 | `position` | string | `"bottom"` | `"bottom"`: at the bottom edge of the window. `"top"`: right below the tab bar. |
 | `items` | list of strings | `["cpu", "memory", "network", "battery", "datetime"]` | What the bar shows, in this order, and springs (`"<->"`) between them. See [Springs](#springs). Leave an item out to hide it; each may appear only once. |
 | `datetime_format` | string | `"%a %d %b %H:%M"` | Format of the date and time in [strftime syntax](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). The default shows `Fri 25 Sep 10:50`; `"%d.%m.%Y %H:%M"` shows `25.09.2026 10:50`. |
+| `rainbow` | bool | `false` | Give each item its own color, spread evenly around the color wheel, as iTerm2\'s auto-rainbow does. The colors are lighter on dark themes and darker on light ones. Separators and graph tracks stay neutral. |
 
 Each item starts with an icon:
 

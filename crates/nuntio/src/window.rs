@@ -489,9 +489,15 @@ impl WindowState {
                 b: 255,
             },
         );
-        let drawn = self
-            .status_bar(config, stats, &datetime)
-            .map(|bar| bar.draw(stats, &datetime, background, foreground));
+        let drawn = self.status_bar(config, stats, &datetime).map(|bar| {
+            bar.draw(
+                stats,
+                &datetime,
+                background,
+                foreground,
+                config.status_bar.rainbow,
+            )
+        });
         if drawn == self.status_drawn {
             return false;
         }
@@ -694,7 +700,13 @@ impl WindowState {
         if config.status_bar.visible() {
             let datetime = datetime(config);
             if let Some(bar) = self.status_bar(config, stats, &datetime) {
-                let (bar_rects, bar_texts) = bar.draw(stats, &datetime, background, foreground);
+                let (bar_rects, bar_texts) = bar.draw(
+                    stats,
+                    &datetime,
+                    background,
+                    foreground,
+                    config.status_bar.rainbow,
+                );
                 rects.extend(bar_rects);
                 texts.extend(bar_texts);
             }

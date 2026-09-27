@@ -186,12 +186,15 @@ impl StatusBar {
         }
     }
 
+    /// With `rainbow`, each item gets its own hue; separators and graph
+    /// tracks stay neutral.
     pub fn draw(
         &self,
         stats: &Stats,
         datetime: &str,
         background: Rgb,
         foreground: Rgb,
+        rainbow: bool,
     ) -> (Vec<UiRect>, Vec<UiText>) {
         let bar_bg = bar_background(background);
         // Muted, so the bar stays in the background.
@@ -222,7 +225,13 @@ impl StatusBar {
                 colors.separator,
             ));
         }
-        for slot in &self.slots {
+        let n = self.slots.len();
+        for (i, slot) in self.slots.iter().enumerate() {
+            let colors = if rainbow {
+                colors.rainbow(i, n)
+            } else {
+                colors
+            };
             self.draw_item(&mut out, slot.item, slot.x, stats, datetime, &colors);
         }
         (out.rects, out.texts)
@@ -541,6 +550,7 @@ impl StatusBar {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Colors {
     background: Rgb,
     label: Rgb,
@@ -549,6 +559,28 @@ struct Colors {
     graph: Rgb,
     graph_alt: Rgb,
     separator: Rgb,
+}
+
+impl Colors {
+    /// The colors of item `i` of `n` with its own hue, spread evenly
+    /// around the color wheel from red. Light on a dark bar, dark on a
+    /// light one.
+    fn rainbow(&self, i: usize, n: usize) -> Self {
+        let hue = 360.0 * i as f32 / n.max(1) as f32;
+        let dark = luminance(self.background) < 0.5;
+        let color = if dark {
+            hsl(hue, 0.65, 0.70)
+        } else {
+            hsl(hue, 0.70, 0.38)
+        };
+        Self {
+            label: color,
+            value: color,
+            graph: color,
+            graph_alt: mix(self.background, color, 0.6),
+            ..*self
+        }
+    }
 }
 
 struct Output {
@@ -564,6 +596,33 @@ fn rect(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> UiRect {
         height,
         color,
         radius: 0.0,
+    }
+}
+
+/// Perceived brightness, 0.0 (black) to 1.0 (white).
+fn luminance(c: Rgb) -> f32 {
+    (0.2126 * c.r as f32 + 0.7152 * c.g as f32 + 0.0722 * c.b as f32) / 255.0
+}
+
+/// A color from hue (degrees), saturation and lightness (0.0 to 1.0).
+fn hsl(hue: f32, saturation: f32, lightness: f32) -> Rgb {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let h = hue.rem_euclid(360.0) / 60.0;
+    let x = chroma * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let m = lightness - chroma / 2.0;
+    let channel = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Rgb {
+        r: channel(r),
+        g: channel(g),
+        b: channel(b),
     }
 }
 
@@ -888,7 +947,7 @@ mod tests {
                 b: 255,
             },
         );
-        let (rects, texts) = bar.draw(&stats, "12:34", bg, fg);
+        let (rects, texts) = bar.draw(&stats, "12:34", bg, fg, false);
         let texts: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
         for expected in [" 50%", " 4.0G", "2.0K", "  0K", " 80%", "⚡", "12:34"] {
             assert!(texts.contains(&expected), "{expected:?} in {texts:?}");
@@ -912,14 +971,61 @@ mod tests {
             },
         );
         let separator = mix(bar_background(bg), fg, 0.15);
-        let count = |items: &[StatusItem]| {
-            let stats = stats(false);
-            let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", CELL, CELL, 1.0);
-            let (rects, _) = bar.draw(&stats, "12:34", bg, fg);
-            rects.iter().filter(|r| r.color == separator).count()
-        };
-        assert_eq!(count(&[Cpu, Memory, Spring, Datetime]), 1);
-        assert_eq!(count(&[Cpu, Memory, Datetime]), 2);
-        assert_eq!(count(&[Spring, Cpu, Spring, Datetime, Spring]), 0);
+        for rainbow in [false, true] {
+            let count = |items: &[StatusItem]| {
+                let stats = stats(false);
+                let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", CELL, CELL, 1.0);
+                let (rects, _) = bar.draw(&stats, "12:34", bg, fg, rainbow);
+                rects.iter().filter(|r| r.color == separator).count()
+            };
+            assert_eq!(count(&[Cpu, Memory, Spring, Datetime]), 1);
+            assert_eq!(count(&[Cpu, Memory, Datetime]), 2);
+            assert_eq!(count(&[Spring, Cpu, Spring, Datetime, Spring]), 0);
+        }
+    }
+
+    #[test]
+    fn hsl_hits_the_primaries() {
+        let rgb = |r, g, b| Rgb { r, g, b };
+        assert_eq!(hsl(0.0, 1.0, 0.5), rgb(255, 0, 0));
+        assert_eq!(hsl(120.0, 1.0, 0.5), rgb(0, 255, 0));
+        assert_eq!(hsl(240.0, 1.0, 0.5), rgb(0, 0, 255));
+        assert_eq!(hsl(360.0, 1.0, 0.5), rgb(255, 0, 0));
+        assert_eq!(hsl(60.0, 0.0, 1.0), rgb(255, 255, 255));
+    }
+
+    /// Colors of the value texts, left to right.
+    fn value_colors(bg: Rgb, fg: Rgb, rainbow: bool) -> Vec<Rgb> {
+        use StatusItem::*;
+        let stats = stats(false);
+        let items = [Cpu, Memory, Datetime];
+        let bar = StatusBar::new(1200.0, 0.0, &items, &stats, "12:34", CELL, CELL, 1.0);
+        let (_, texts) = bar.draw(&stats, "12:34", bg, fg, rainbow);
+        texts.iter().map(|t| t.color).collect()
+    }
+
+    #[test]
+    fn rainbow_gives_each_item_its_own_color() {
+        let (black, white) = (
+            Rgb { r: 0, g: 0, b: 0 },
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        );
+        let plain = value_colors(black, white, false);
+        assert!(plain.windows(2).all(|w| w[0] == w[1]), "{plain:?}");
+        let colors = value_colors(black, white, true);
+        assert_eq!(colors.len(), 3);
+        for (i, c) in colors.iter().enumerate() {
+            assert_ne!(*c, plain[0]);
+            assert!(!colors[..i].contains(c), "{colors:?}");
+        }
+        // Light on a dark bar, dark on a light one.
+        let light = value_colors(white, black, true);
+        for (dark_bar, light_bar) in colors.iter().zip(&light) {
+            assert!(luminance(*dark_bar) > luminance(*light_bar));
+        }
     }
 }

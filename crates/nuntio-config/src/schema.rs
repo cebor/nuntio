@@ -428,6 +428,13 @@ pub static SETTINGS: &[Setting] = &[
         "Format of the date and time in strftime syntax, e.g. \"%d.%m.%Y %H:%M\".",
     ),
     setting(
+        "status_bar.rainbow",
+        Section::StatusBar,
+        "Rainbow",
+        Kind::Bool,
+        "Give each item its own color, spread around the color wheel.",
+    ),
+    setting(
         "mouse.copy_on_select",
         Section::Mouse,
         "Copy on select",

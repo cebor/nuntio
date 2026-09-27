@@ -287,6 +287,8 @@ pub struct StatusBar {
     pub items: Vec<StatusItem>,
     /// strftime format of the date and time.
     pub datetime_format: String,
+    /// Each item in its own color, spread around the color wheel.
+    pub rainbow: bool,
 }
 
 impl StatusBar {
@@ -325,6 +327,7 @@ impl Default for StatusBar {
                 StatusItem::Datetime,
             ],
             datetime_format: "%a %d %b %H:%M".into(),
+            rainbow: false,
         }
     }
 }
@@ -517,6 +520,7 @@ enabled = true
 position = "top"
 items = ["datetime", "cpu"]
 datetime_format = "%H:%M:%S"
+rainbow = true
 
 [theme]
 light = "Solarized Light"
@@ -549,6 +553,7 @@ action = "split_horizontal"
             [StatusItem::Datetime, StatusItem::Cpu]
         );
         assert_eq!(cfg.status_bar.datetime_format, "%H:%M:%S");
+        assert!(cfg.status_bar.rainbow);
         assert_eq!(
             cfg.theme,
             ThemeSelection::Auto {
