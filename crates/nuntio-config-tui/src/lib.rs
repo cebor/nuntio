@@ -212,12 +212,11 @@ pub fn main() -> Result<()> {
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(unix)]
     fn editor_runs_through_the_shell() {
         let dir = std::env::temp_dir().join(format!("nuntio-editor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
