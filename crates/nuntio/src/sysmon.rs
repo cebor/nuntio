@@ -14,8 +14,9 @@ use winit::event_loop::EventLoopProxy;
 use crate::event::UserEvent;
 
 const INTERVAL: Duration = Duration::from_secs(1);
-/// The charge level changes slowly; reading it costs more than the rest.
-const BATTERY_INTERVAL: Duration = Duration::from_secs(30);
+/// Reading the battery costs more than the rest, but plugging in the power
+/// cable should show up within a few seconds.
+const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
 
 /// One reading; `None` for sources that aren't sampled or not available.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -44,7 +45,9 @@ pub struct Throughput {
 pub struct Battery {
     /// Charge level, 0–100.
     pub level: f32,
-    pub charging: bool,
+    /// On external power, whether it is charging or not (full, or held
+    /// below full by the OS).
+    pub plugged_in: bool,
 }
 
 /// The sampling thread; it stops when this is dropped.
@@ -181,7 +184,7 @@ fn read_battery(manager: &starship_battery::Manager) -> Option<Battery> {
     let battery = manager.batteries().ok()?.flatten().next()?;
     Some(Battery {
         level: battery.state_of_charge().get::<percent>().clamp(0.0, 100.0),
-        charging: battery.state() == State::Charging,
+        plugged_in: battery.state() != State::Discharging,
     })
 }
 
