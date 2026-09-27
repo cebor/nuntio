@@ -103,6 +103,34 @@ fn editor() -> String {
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.into())
 }
 
+/// A short name for the editor command, for the footer: the program's file
+/// name without directory, extension and arguments (`"C:\…\Code.exe" --wait`
+/// is `Code`). Names longer than 10 characters become `editor`, so the
+/// footer's length stays predictable.
+fn editor_name(command: &str) -> String {
+    let command = command.trim_start();
+    let program = match command.chars().next() {
+        Some(quote @ ('"' | '\'')) => command[1..].split(quote).next(),
+        _ => command.split_whitespace().next(),
+    }
+    .unwrap_or_default();
+    let file = program.rsplit(['/', '\\']).next().unwrap_or_default();
+    let name = match file.rsplit_once('.') {
+        Some((stem, ext))
+            if ["exe", "cmd", "bat", "com"]
+                .iter()
+                .any(|e| ext.eq_ignore_ascii_case(e)) =>
+        {
+            stem
+        }
+        _ => file,
+    };
+    match name.chars().count() {
+        1..=10 => name.into(),
+        _ => "editor".into(),
+    }
+}
+
 /// The process that runs `editor` on `path`: through the shell, like git
 /// does, so quoted paths and arguments in the variable work and Windows
 /// finds `code.cmd`.
@@ -183,6 +211,7 @@ pub fn main() -> Result<()> {
     )
     .map_err(anyhow::Error::msg)?;
     app.set_theme_warnings(theme_warnings);
+    app.editor_name = editor_name(&editor());
 
     let mut view = ui::View::default();
     let mut terminal = ratatui::init();
@@ -212,10 +241,33 @@ pub fn main() -> Result<()> {
     result
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn editor_names() {
+        for (command, name) in [
+            ("vim", "vim"),
+            ("hx", "hx"),
+            ("  /usr/bin/nvim -p", "nvim"),
+            ("code --wait", "code"),
+            (
+                r#""C:\Program Files\Microsoft VS Code\Code.exe" --wait"#,
+                "Code",
+            ),
+            ("'/opt/my editor/kak'", "kak"),
+            ("code.cmd", "code"),
+            ("notepad", "notepad"),
+            ("emacsclient -t", "editor"),
+            ("", "editor"),
+            ("\"\"", "editor"),
+        ] {
+            assert_eq!(editor_name(command), name, "{command}");
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn editor_runs_through_the_shell() {
         let dir = std::env::temp_dir().join(format!("nuntio-editor-{}", std::process::id()));

@@ -259,6 +259,8 @@ pub struct App {
     /// Set by `e`: the caller suspends the UI, opens the file in an editor
     /// and calls [`App::reload`] afterwards.
     pub open_editor: bool,
+    /// What the footer calls the editor that `e` opens.
+    pub editor_name: String,
 }
 
 fn serialize(config: &Config) -> toml::Value {
@@ -352,6 +354,7 @@ impl App {
             mode: Mode::Normal,
             quit: false,
             open_editor: false,
+            editor_name: "editor".into(),
         };
         app.revalidate();
         Ok(app)

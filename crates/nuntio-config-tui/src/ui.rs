@@ -533,12 +533,32 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("Esc", "cancel"),
         ],
     };
+    let editor = editor_hint(hints, &app.editor_name, area.width);
     let mut spans = vec![Span::raw(" ")];
-    for (key, what) in hints {
-        spans.push(Span::raw(*key).fg(ACCENT));
+    for &(key, what) in hints {
+        let what = if key == "e" { editor } else { what };
+        spans.push(Span::raw(key).fg(ACCENT));
         spans.push(Span::styled(format!(" {what}  "), tone(Tone::Dim)));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The text of the `e` hint: the editor's name if the footer still fits
+/// in `width` with it, else the generic `editor`.
+fn editor_hint<'a>(hints: &[(&str, &'a str)], name: &'a str, width: u16) -> &'a str {
+    // A leading space, and two spaces between hints.
+    let needed: usize = hints
+        .iter()
+        .map(|&(key, what)| {
+            let what = if key == "e" { name } else { what };
+            key.width() + 1 + what.width() + 2
+        })
+        .sum::<usize>()
+        - 1;
+    match hints.iter().find(|&&(key, _)| key == "e") {
+        Some(&(_, generic)) if needed > usize::from(width) => generic,
+        _ => name,
+    }
 }
 
 #[cfg(test)]
@@ -555,6 +575,16 @@ mod tests {
         assert_eq!(rows_offset(10, 20, 21, false), 10);
         // Elsewhere the list keeps its position.
         assert_eq!(rows_offset(10, 20, 23, false), 10);
+    }
+
+    #[test]
+    fn editor_name_only_when_the_footer_fits() {
+        let hints = [("/", "search"), ("e", "editor"), ("q", "quit")];
+        // " / search  e editor  q quit" is 27 columns.
+        assert_eq!(editor_hint(&hints, "notepad", 28), "notepad");
+        assert_eq!(editor_hint(&hints, "notepad", 27), "editor");
+        assert_eq!(editor_hint(&hints, "vim", 24), "vim");
+        assert_eq!(editor_hint(&[("q", "quit")], "vim", 1), "vim");
     }
 
     #[test]
