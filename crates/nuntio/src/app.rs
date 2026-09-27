@@ -351,9 +351,12 @@ fn paste_warning(text: &str) -> Option<String> {
 enum PathSyntax {
     /// Backslash escapes (sh, bash, zsh, fish).
     Posix,
-    /// Double quotes (PowerShell, cmd).
+    /// Single quotes, in which PowerShell expands nothing.
     #[cfg_attr(not(windows), allow(dead_code))]
-    Windows,
+    PowerShell,
+    /// Double quotes, with `%` outside them so it can be escaped.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Cmd,
     /// A Windows path, seen from inside WSL.
     #[cfg_attr(not(windows), allow(dead_code))]
     Wsl,
@@ -362,19 +365,30 @@ enum PathSyntax {
 /// A dropped file's path as a shell word, with a space after it like in
 /// Terminal.app, so several files line up as arguments.
 fn dropped_path(path: &str, syntax: PathSyntax) -> String {
+    // Windows paths can't contain `"`.
+    let plain = || {
+        path.chars()
+            .all(|c| c.is_alphanumeric() || "\\/:._-".contains(c))
+    };
     let mut word = match syntax {
         PathSyntax::Posix => posix_word(path),
-        PathSyntax::Windows => {
-            let plain = path
-                .chars()
-                .all(|c| c.is_alphanumeric() || "\\/:._-".contains(c));
-            // Windows paths can't contain `"`.
-            if plain {
-                path.to_owned()
-            } else {
-                format!("\"{path}\"")
+        PathSyntax::PowerShell if plain() => path.to_owned(),
+        PathSyntax::PowerShell => {
+            // PowerShell also closes single quotes with the typographic
+            // ones; each is escaped by doubling it.
+            let mut word = String::from("'");
+            for c in path.chars() {
+                if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+                    word.push(c);
+                }
+                word.push(c);
             }
+            word.push('\'');
+            word
         }
+        PathSyntax::Cmd if plain() => path.to_owned(),
+        // cmd expands `%VAR%` even in quotes, where `^` is no escape.
+        PathSyntax::Cmd => format!("\"{}\"", path.replace('%', "\"^%\"")),
         PathSyntax::Wsl => posix_word(&wsl_path(path)),
     };
     word.push(' ');
@@ -2084,8 +2098,10 @@ impl ApplicationHandler<UserEvent> for App {
                     PathSyntax::Posix
                 } else if state.content().focused_pane().wsl {
                     PathSyntax::Wsl
+                } else if state.term().process_name().eq_ignore_ascii_case("cmd") {
+                    PathSyntax::Cmd
                 } else {
-                    PathSyntax::Windows
+                    PathSyntax::PowerShell
                 };
                 let path = path.to_string_lossy();
                 state.term().paste(&dropped_path(&path, syntax));
@@ -2188,12 +2204,22 @@ mod tests {
 
     #[test]
     fn dropped_windows_paths_are_quoted_when_needed() {
-        let windows = |path| dropped_path(path, PathSyntax::Windows);
-        assert_eq!(windows(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
+        let powershell = |path| dropped_path(path, PathSyntax::PowerShell);
+        assert_eq!(powershell(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
         assert_eq!(
-            windows(r"C:\Users\me\My Files\a&b.txt"),
-            r#""C:\Users\me\My Files\a&b.txt" "#
+            powershell(r"C:\Users\me\My Files\a&b.txt"),
+            r"'C:\Users\me\My Files\a&b.txt' "
         );
+        assert_eq!(
+            powershell(r"C:\tmp\a$(calc)`n.txt"),
+            r"'C:\tmp\a$(calc)`n.txt' "
+        );
+        assert_eq!(powershell(r"C:\it's ‘x’"), r"'C:\it''s ‘‘x’’' ");
+
+        let cmd = |path| dropped_path(path, PathSyntax::Cmd);
+        assert_eq!(cmd(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
+        assert_eq!(cmd(r"C:\My Files\a&b.txt"), r#""C:\My Files\a&b.txt" "#);
+        assert_eq!(cmd(r"C:\100%PATH%.txt"), r#""C:\100"^%"PATH"^%".txt" "#);
     }
 
     #[test]
