@@ -50,4 +50,3 @@ Keep pure logic (tabs, pane tree, tab bar layout, key/mouse encoding, config par
 - WSLg's Weston crashes on winit's client-side decorations. nuntio detects WSLg and runs undecorated; the tab bar then provides window dragging, resize edges and min/max/close buttons.
 - If nuntio "crashes" under WSLg, check `/mnt/wslg/stderr.log` for a Weston segfault first.
 - Started without a terminal, logs go to `~/.cache/nuntio/nuntio.log` (`~/Library/Caches/nuntio/nuntio.log` on macOS).
-- macOS and Windows code paths can't be run locally, but they can be checked: `cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings` (or `x86_64-pc-windows-gnu`) once the rustup target is installed. For Windows, `build.rs` needs `x86_64-w64-mingw32-windres` on PATH; a stub that writes an empty `-o` file is enough to check. Runtime behavior is only tested by CI or on a real machine.
