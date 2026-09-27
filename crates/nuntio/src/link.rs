@@ -94,7 +94,10 @@ fn file_path(url: &str, local_host: &str) -> Result<Option<PathBuf>, String> {
     if !is_file {
         return Ok(None);
     }
+    // The opener drops a query and fragment, so the check must too:
+    // `Calc.app#x` would otherwise pass as a missing file.
     let rest = &url[scheme.len()..];
+    let rest = &rest[..rest.find(['?', '#']).unwrap_or(rest.len())];
     let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let local = host.is_empty()
         || host.eq_ignore_ascii_case("localhost")
@@ -239,6 +242,9 @@ mod tests {
         assert_eq!(path("mailto:me@example.com"), None);
         assert_eq!(path("file:///tmp/a%20b"), Some(PathBuf::from("/tmp/a b")));
         assert_eq!(path("FILE:///tmp"), Some(PathBuf::from("/tmp")));
+        assert_eq!(path("file:///tmp/a#x"), Some(PathBuf::from("/tmp/a")));
+        assert_eq!(path("file:///tmp/a?q=1#x"), Some(PathBuf::from("/tmp/a")));
+        assert_eq!(path("file:///tmp/a%23b"), Some(PathBuf::from("/tmp/a#b")));
         // `ls --hyperlink` names the host.
         assert_eq!(path("file://box/etc"), Some(PathBuf::from("/etc")));
         assert_eq!(path("file://localhost/etc"), Some(PathBuf::from("/etc")));
@@ -272,6 +278,8 @@ mod tests {
             check(&url(&exe)),
             check(&url(&dir.join("Evil.app"))),
             check(&url(&dir.join("missing.exe"))),
+            check(&format!("{}#x", url(&dir.join("Evil.app")))),
+            check(&format!("{}?x", url(&exe))),
         ];
         #[cfg(unix)]
         let script = {
@@ -288,6 +296,8 @@ mod tests {
         assert!(results[2].is_err(), "exe");
         assert!(results[3].is_err(), "app bundle");
         assert!(results[4].is_ok(), "missing file");
+        assert!(results[5].is_err(), "app bundle with a fragment");
+        assert!(results[6].is_err(), "exe with a query");
         #[cfg(unix)]
         assert!(script.is_err(), "executable");
         assert!(check("https://example.com/x.exe").is_ok());
