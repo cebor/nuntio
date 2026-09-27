@@ -182,6 +182,8 @@ impl Bindings {
                 ModifiersState::empty(),
                 ToggleFullscreen,
             ));
+            // The settings shortcut of Windows Terminal and VS Code.
+            bindings.push(char(',', ctrl, OpenSettings));
             let ctrl_alt = ctrl | ModifiersState::ALT;
             (ctrl_alt, ctrl_alt | shift)
         };
@@ -443,6 +445,8 @@ mod tests {
             Some(Action::SplitHorizontal)
         );
         assert_eq!(b.lookup(&ch("w"), ctrl_shift), Some(Action::ClosePane));
+        assert_eq!(b.lookup(&ch(","), ctrl), Some(Action::OpenSettings));
+        assert_eq!(b.lookup(&ch(","), ctrl_shift), Some(Action::ReloadConfig));
         let ctrl_alt = ctrl | ModifiersState::ALT;
         assert_eq!(
             b.lookup(&Key::Named(NamedKey::ArrowLeft), ctrl_alt),

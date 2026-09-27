@@ -25,7 +25,7 @@ Custom themes go in a `themes/` directory next to the config file, for example `
 
 ## Editing in the terminal
 
-Run `nuntio-config` in a nuntio tab to change settings without editing TOML by hand, or open it in a new tab with <kbd>Cmd</kbd><kbd>,</kbd> on macOS (the `open_settings` action). The command exists only inside nuntio, and it edits the config file this nuntio uses, including one given with `--config`.
+Run `nuntio-config` in a nuntio tab to change settings without editing TOML by hand, or open it in a new tab with <kbd>Ctrl</kbd><kbd>,</kbd> (<kbd>Cmd</kbd><kbd>,</kbd> on macOS, the `open_settings` action). The command exists only inside nuntio, and it edits the config file this nuntio uses, including one given with `--config`.
 
 - Settings are grouped by section. Choices offer only valid values: the variants of an option, your installed themes (with a color preview) and monospace fonts, and the keybinding actions. Numbers stay within their range.
 - Every change is written right away and applied by hot reload, so you see it in the window as you go. A change that would make the file invalid is refused with the reason.
