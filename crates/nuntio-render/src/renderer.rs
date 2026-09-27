@@ -675,7 +675,8 @@ impl Renderer {
         let queue = &self.gpu.queue;
         let mut sprites = Vec::new();
 
-        // Box-drawing and block characters are drawn to fill the cell exactly.
+        // Box-drawing and block characters are drawn to fill the cell exactly,
+        // like a few symbols that fonts rarely cover (see `box_drawing`).
         if let GlyphKey::Char(c, _) | GlyphKey::Small(c, _) = key
             && let Some(mask) =
                 box_drawing::rasterize(c, metrics.width, metrics.height, metrics.stroke)

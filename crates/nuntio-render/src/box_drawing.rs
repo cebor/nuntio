@@ -1,6 +1,8 @@
 //! Procedurally drawn box-drawing and block characters (U+2500–U+259F) and
 //! the Powerline arrows (U+E0B0–U+E0B3), so lines and prompt segments
-//! connect seamlessly across cells regardless of the font's metrics.
+//! connect seamlessly across cells regardless of the font's metrics. Also the
+//! media control symbols (U+23F4–U+23FA, such as `⏵` and `⏸`), which few
+//! fonts cover.
 
 /// Line weight of one arm of a box-drawing character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +125,7 @@ pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Vec<u8
         }
         0x2580..=0x259F => draw_block(&mut canvas, c)?,
         0xE0B0..=0xE0B3 => draw_powerline(&mut canvas, c, light),
+        0x23F4..=0x23FA => draw_media(&mut canvas, c),
         _ => return None,
     }
     Some(canvas.data)
@@ -432,6 +435,39 @@ fn draw_powerline(canvas: &mut Canvas, c: char, stroke: i32) {
     }
 }
 
+/// Media control symbols `⏴⏵⏶⏷⏸⏹⏺`, filled shapes in a square centered in
+/// the cell.
+fn draw_media(canvas: &mut Canvas, c: char) {
+    let (cx, cy) = (canvas.width as f32 / 2.0, canvas.height as f32 / 2.0);
+    let half = 0.35 * canvas.width.min(canvas.height) as f32;
+    // Signed distance to an axis-aligned rectangle around (bx, by).
+    let rect = |x: f32, y: f32, bx: f32, by: f32, hw: f32, hh: f32| {
+        ((x - bx).abs() - hw).max((y - by).abs() - hh)
+    };
+    match c {
+        '⏸' => canvas.shape(0.0, |x, y| {
+            let offset = half * 2.0 / 3.0;
+            let bar = |bx| rect(x, y, bx, cy, half / 3.0, half);
+            bar(cx - offset).min(bar(cx + offset))
+        }),
+        '⏹' => canvas.shape(0.0, |x, y| rect(x, y, cx, cy, half, half)),
+        '⏺' => canvas.shape(0.0, |x, y| (x - cx).hypot(y - cy) - half),
+        // Triangles ⏴⏵⏶⏷: `u` runs towards the tip, `v` across it.
+        _ => canvas.shape(0.0, |x, y| {
+            let (u, v) = match c {
+                '⏴' => (cx - x, y - cy),
+                '⏵' => (x - cx, y - cy),
+                '⏶' => (cy - y, x - cx),
+                _ => (y - cy, x - cx), // ⏷
+            };
+            let back = -half - u;
+            // The slanted edges run from (-half, ±half) to the tip (half, 0).
+            let slant = (v.abs() + u / 2.0 - half / 2.0) / 1.25f32.sqrt();
+            back.max(slant)
+        }),
+    }
+}
+
 fn draw_block(canvas: &mut Canvas, c: char) -> Option<()> {
     let (w, h) = (canvas.width as i32, canvas.height as i32);
     let eighth_h = |n: i32| h * n / 8;
@@ -636,6 +672,47 @@ mod tests {
         assert_eq!(at(&thin, 0, H / 2), 0, "hollow");
         assert!(at(&thin, W - 1, H / 2) > 0);
         assert!(render('\u{E0B3}').iter().any(|&p| p > 0));
+    }
+
+    #[test]
+    fn media_triangles_point_the_right_way() {
+        let right = render('⏵');
+        assert_eq!(at(&right, W / 2, H / 2), 255, "center");
+        assert_eq!(at(&right, 2, H / 2), 255, "back edge");
+        assert_eq!(at(&right, 8, 7), 0, "beside the tip");
+        assert_eq!(at(&right, 0, 0), 0);
+        assert_eq!(at(&right, W - 1, H - 1), 0);
+
+        let left = render('⏴');
+        let mirrored: Vec<u8> = (0..H)
+            .flat_map(|y| (0..W).rev().map(move |x| (x, y)))
+            .map(|(x, y)| at(&right, x, y))
+            .collect();
+        assert_eq!(left, mirrored);
+
+        let up = render('⏶');
+        assert_eq!(at(&up, W / 2, 9), 255, "below the tip");
+        assert_eq!(at(&up, 2, 7), 0, "beside the tip");
+        assert_eq!(at(&up, 3, 12), 255, "back edge");
+        let down = render('⏷');
+        assert_eq!(at(&down, 3, 8), 255, "back edge");
+        assert_eq!(at(&down, 2, 13), 0, "beside the tip");
+    }
+
+    #[test]
+    fn media_pause_stop_record() {
+        let pause = render('⏸');
+        assert_eq!(at(&pause, W / 2, H / 2), 0, "gap between the bars");
+        assert_eq!(at(&pause, 2, H / 2), 255);
+        assert_eq!(at(&pause, 7, H / 2), 255);
+
+        let stop = render('⏹');
+        assert_eq!(at(&stop, 2, 7), 255, "corner of the square");
+        assert_eq!(at(&stop, 0, H / 2), 0);
+
+        let record = render('⏺');
+        assert_eq!(at(&record, W / 2, H / 2), 255);
+        assert_eq!(at(&record, 1, 6), 0, "outside the circle");
     }
 
     #[test]
