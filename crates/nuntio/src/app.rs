@@ -171,16 +171,65 @@ fn round_corners(window: &Window) {
     }
 }
 
-/// Center the window on its screen.
+/// The AppKit view winit draws the window's content in.
+#[cfg(target_os = "macos")]
+fn ns_view(window: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSView>> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    // SAFETY: `ns_view` is winit's live NSView; retaining it keeps it valid.
+    unsafe { objc2::rc::Retained::retain(handle.ns_view.as_ptr().cast()) }
+}
+
+/// Center the window on its screen the way macOS does: in the area left
+/// by the menu bar and the Dock, a bit above the middle.
 #[cfg(target_os = "macos")]
 fn center(window: &Window) {
-    let Some(monitor) = window.current_monitor() else {
-        return;
+    if let Some(ns_window) = ns_view(window).and_then(|view| view.window()) {
+        ns_window.center();
+    }
+}
+
+/// Where the mouse pointer is in the window, asked from the system. Needed
+/// for drops: while something is dragged, the window gets no pointer moves.
+#[cfg(target_os = "macos")]
+fn cursor_position(window: &Window) -> Option<PhysicalPosition<f64>> {
+    let view = ns_view(window)?;
+    let in_window = view.window()?.mouseLocationOutsideOfEventStream();
+    let point = view.convertPoint_fromView(in_window, None);
+    // AppKit counts y from the bottom unless the view is flipped.
+    let y = if view.isFlipped() {
+        point.y
+    } else {
+        view.bounds().size.height - point.y
     };
-    let (screen, origin, size) = (monitor.size(), monitor.position(), window.outer_size());
-    let x = origin.x + (screen.width.saturating_sub(size.width) / 2) as i32;
-    let y = origin.y + (screen.height.saturating_sub(size.height) / 2) as i32;
-    window.set_outer_position(PhysicalPosition::new(x, y));
+    Some(winit::dpi::LogicalPosition::new(point.x, y).to_physical(window.scale_factor()))
+}
+
+#[cfg(windows)]
+fn cursor_position(window: &Window) -> Option<PhysicalPosition<f64>> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    let mut point = POINT { x: 0, y: 0 };
+    // SAFETY: `hwnd` is our live window and `point` outlives the calls.
+    let found = unsafe {
+        GetCursorPos(&mut point) != 0 && ScreenToClient(handle.hwnd.get() as _, &mut point) != 0
+    };
+    found.then(|| PhysicalPosition::new(f64::from(point.x), f64::from(point.y)))
+}
+
+/// Elsewhere the last pointer position is used.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn cursor_position(_window: &Window) -> Option<PhysicalPosition<f64>> {
+    None
 }
 
 /// Whether Alt should act as Meta (ESC prefix). On macOS Option composes
@@ -2026,7 +2075,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
             WindowEvent::DroppedFile(path) => {
                 // Into the pane under the pointer, as its text.
-                if let Some(pos) = state.mouse.position
+                if let Some(pos) = cursor_position(&state.window).or(state.mouse.position)
                     && let Some(id) = state.pane_at(&self.config, pos)
                 {
                     state.focus_pane(id);
