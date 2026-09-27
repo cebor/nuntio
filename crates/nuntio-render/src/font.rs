@@ -43,6 +43,9 @@ pub struct Fonts {
     /// Shapes the smaller UI text (see [`SMALL_TEXT_SCALE`]).
     small_buffer: Buffer,
     family: Option<String>,
+    /// Monochrome symbol font for text-presentation emoji (see
+    /// [`prefers_text_presentation`]).
+    symbol_family: Option<&'static str>,
     px_size: f32,
     metrics: CellMetrics,
     small_metrics: CellMetrics,
@@ -170,8 +173,86 @@ const DEFAULT_MONOSPACE: &[&str] = if cfg!(target_os = "macos") {
     ]
 };
 
+/// Monochrome fonts with symbols that the platform's fallback list would
+/// otherwise take from the color emoji font, like ✳ (U+2733) from Segoe UI
+/// Emoji on Windows.
+const TEXT_SYMBOL_FAMILIES: &[&str] = if cfg!(target_os = "macos") {
+    &["Apple Symbols"]
+} else if cfg!(windows) {
+    &["Segoe UI Symbol"]
+} else {
+    &["DejaVu Sans", "Noto Sans Symbols 2", "Noto Sans Symbols"]
+};
+
+/// Characters below U+1F000 that default to emoji presentation
+/// (`Emoji_Presentation=Yes` in Unicode's emoji-data.txt).
+const EMOJI_PRESENTATION: &[(char, char)] = &[
+    ('\u{231A}', '\u{231B}'),
+    ('\u{23E9}', '\u{23EC}'),
+    ('\u{23F0}', '\u{23F0}'),
+    ('\u{23F3}', '\u{23F3}'),
+    ('\u{25FD}', '\u{25FE}'),
+    ('\u{2614}', '\u{2615}'),
+    ('\u{2648}', '\u{2653}'),
+    ('\u{267F}', '\u{267F}'),
+    ('\u{2693}', '\u{2693}'),
+    ('\u{26A1}', '\u{26A1}'),
+    ('\u{26AA}', '\u{26AB}'),
+    ('\u{26BD}', '\u{26BE}'),
+    ('\u{26C4}', '\u{26C5}'),
+    ('\u{26CE}', '\u{26CE}'),
+    ('\u{26D4}', '\u{26D4}'),
+    ('\u{26EA}', '\u{26EA}'),
+    ('\u{26F2}', '\u{26F3}'),
+    ('\u{26F5}', '\u{26F5}'),
+    ('\u{26FA}', '\u{26FA}'),
+    ('\u{26FD}', '\u{26FD}'),
+    ('\u{2705}', '\u{2705}'),
+    ('\u{270A}', '\u{270B}'),
+    ('\u{2728}', '\u{2728}'),
+    ('\u{274C}', '\u{274C}'),
+    ('\u{274E}', '\u{274E}'),
+    ('\u{2753}', '\u{2755}'),
+    ('\u{2757}', '\u{2757}'),
+    ('\u{2795}', '\u{2797}'),
+    ('\u{27B0}', '\u{27B0}'),
+    ('\u{27BF}', '\u{27BF}'),
+    ('\u{2B1B}', '\u{2B1C}'),
+    ('\u{2B50}', '\u{2B50}'),
+    ('\u{2B55}', '\u{2B55}'),
+];
+
+/// Whether a grapheme should be drawn as a monochrome symbol rather than a
+/// color emoji. Symbols like ✳ default to text presentation unless followed
+/// by VS16 (U+FE0F). Everything from U+1F000 up is treated as emoji.
+fn prefers_text_presentation(grapheme: &str) -> bool {
+    if grapheme.contains('\u{FE0E}') {
+        return true;
+    }
+    if grapheme.contains('\u{FE0F}') {
+        return false;
+    }
+    let Some(c) = grapheme.chars().next() else {
+        return true;
+    };
+    if c >= '\u{1F000}' {
+        return false;
+    }
+    EMOJI_PRESENTATION
+        .binary_search_by(|&(lo, hi)| {
+            if hi < c {
+                std::cmp::Ordering::Less
+            } else if lo > c {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_err()
+}
+
 /// The first of `candidates` that is installed.
-fn default_monospace<'a>(
+fn first_installed<'a>(
     installed: impl IntoIterator<Item = &'a str>,
     candidates: &[&'static str],
 ) -> Option<&'static str> {
@@ -194,9 +275,14 @@ impl Fonts {
             .db()
             .faces()
             .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()));
-        if let Some(name) = default_monospace(installed, DEFAULT_MONOSPACE) {
+        if let Some(name) = first_installed(installed, DEFAULT_MONOSPACE) {
             system.db_mut().set_monospace_family(name);
         }
+        let installed = system
+            .db()
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()));
+        let symbol_family = first_installed(installed, TEXT_SYMBOL_FAMILIES);
         // cosmic-text finds no match for fontdb's default sans-serif family
         // on macOS and logs a miss on every fallback lookup.
         if cfg!(target_os = "macos") {
@@ -219,6 +305,7 @@ impl Fonts {
             buffer,
             small_buffer,
             family: None,
+            symbol_family,
             px_size,
             metrics: placeholder,
             small_metrics: placeholder,
@@ -288,10 +375,11 @@ impl Fonts {
         self.small_metrics
     }
 
-    fn attrs(&self, style: FaceStyle) -> Attrs<'_> {
-        let family = match &self.family {
-            Some(name) => Family::Name(name),
-            None => Family::Monospace,
+    fn attrs(&self, style: FaceStyle, symbols: bool) -> Attrs<'_> {
+        let family = match (&self.family, self.symbol_family) {
+            (_, Some(name)) if symbols => Family::Name(name),
+            (Some(name), _) => Family::Name(name),
+            (None, _) => Family::Monospace,
         };
         Attrs::new()
             .family(family)
@@ -315,8 +403,9 @@ impl Fonts {
         }
     }
 
-    fn shape(&mut self, text: &str, style: FaceStyle, small: bool) {
-        let attrs = self.attrs(style);
+    /// Shape `text`; `symbols` puts the monochrome symbol font first.
+    fn shape(&mut self, text: &str, style: FaceStyle, small: bool, symbols: bool) {
+        let attrs = self.attrs(style, symbols);
         // `attrs` borrows `self.family`; clone it out so the buffer can be borrowed mutably.
         let attrs = cosmic_text::AttrsOwned::new(&attrs);
         let buffer = if small {
@@ -336,6 +425,7 @@ impl Fonts {
                 italic: false,
             },
             small,
+            false,
         );
         let px_size = if small {
             self.px_size * SMALL_TEXT_SCALE
@@ -384,7 +474,29 @@ impl Fonts {
 
     /// Shape one grapheme (with fallback) and rasterize its glyphs.
     pub fn rasterize(&mut self, text: &str, style: FaceStyle, small: bool) -> Vec<RasterGlyph> {
-        self.shape(text, style, small);
+        let glyphs = self.rasterize_with(text, style, small, false);
+        // The fallback list may prefer the color emoji font for symbols
+        // that default to text presentation; take them from a symbol font.
+        if glyphs.iter().any(|g| g.color)
+            && self.symbol_family.is_some()
+            && prefers_text_presentation(text)
+        {
+            let symbols = self.rasterize_with(text, style, small, true);
+            if !symbols.is_empty() && !symbols.iter().any(|g| g.color) {
+                return symbols;
+            }
+        }
+        glyphs
+    }
+
+    fn rasterize_with(
+        &mut self,
+        text: &str,
+        style: FaceStyle,
+        small: bool,
+        symbols: bool,
+    ) -> Vec<RasterGlyph> {
+        self.shape(text, style, small, symbols);
         let buffer = if small {
             &self.small_buffer
         } else {
@@ -454,13 +566,32 @@ mod tests {
     ];
 
     #[test]
-    fn default_monospace_takes_the_first_installed_candidate() {
+    fn first_installed_takes_the_first_installed_candidate() {
         let candidates = ["Menlo", "DejaVu Sans Mono", "Liberation Mono"];
         assert_eq!(
-            default_monospace(INSTALLED, &candidates),
+            first_installed(INSTALLED, &candidates),
             Some("DejaVu Sans Mono")
         );
-        assert_eq!(default_monospace(INSTALLED, &["Menlo"]), None);
+        assert_eq!(first_installed(INSTALLED, &["Menlo"]), None);
+    }
+
+    #[test]
+    fn text_presentation() {
+        assert!(prefers_text_presentation("\u{2733}"));
+        assert!(prefers_text_presentation("\u{2764}"));
+        assert!(prefers_text_presentation("\u{2705}\u{FE0E}"));
+        assert!(prefers_text_presentation("a"));
+        assert!(!prefers_text_presentation("\u{2733}\u{FE0F}"));
+        assert!(!prefers_text_presentation("\u{2705}"));
+        assert!(!prefers_text_presentation("\u{2B50}"));
+        assert!(!prefers_text_presentation("\u{231A}"));
+        assert!(!prefers_text_presentation("\u{1F600}"));
+    }
+
+    #[test]
+    fn emoji_presentation_ranges_are_sorted() {
+        assert!(EMOJI_PRESENTATION.iter().all(|(lo, hi)| lo <= hi));
+        assert!(EMOJI_PRESENTATION.windows(2).all(|w| w[0].1 < w[1].0));
     }
 
     #[test]
