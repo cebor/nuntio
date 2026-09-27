@@ -333,8 +333,12 @@ fn dropped_path(path: &str, syntax: PathSyntax) -> String {
 }
 
 /// `s` with a backslash before each character a POSIX shell treats
-/// specially.
+/// specially. A line break after a backslash would continue the line
+/// instead, so names with control characters are single-quoted.
 fn posix_word(s: &str) -> String {
+    if s.chars().any(char::is_control) {
+        return format!("'{}'", s.replace('\'', r"'\''"));
+    }
     let mut word = String::new();
     for c in s.chars() {
         let plain = c.is_alphanumeric() || "/._-+,:@%=".contains(c);
@@ -2130,6 +2134,7 @@ mod tests {
             "/Users/me/My\\ Files/it\\'s\\ \\(1\\).pdf "
         );
         assert_eq!(posix("/tmp/Übung $x"), "/tmp/Übung\\ \\$x ");
+        assert_eq!(posix("/tmp/a\nb's"), "'/tmp/a\nb'\\''s' ");
     }
 
     #[test]
