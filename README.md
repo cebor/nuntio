@@ -60,6 +60,7 @@ Download the package for your platform from the [latest release](https://github.
 | Linux (Debian / Ubuntu) | `nuntio_<version>-1_amd64.deb` | `sudo apt install ./nuntio_<version>-1_amd64.deb` |
 | Linux (any distribution) | `nuntio-<version>-x86_64-linux.AppImage` | `chmod +x` it and run it |
 | Linux (any distribution) | `nuntio-<version>-x86_64-linux.tar.gz` | Unpack it; it contains `bin/`, a desktop file and icons |
+| Windows | `nuntio-<version>-x86_64-windows-setup.exe` | Run the installer; it needs no admin rights and adds nuntio to the Start menu |
 | Windows | `nuntio-<version>-x86_64-windows.zip` | Unpack it and run `nuntio.exe` |
 
 The packages are not signed yet. On macOS, the first start is blocked: allow it in **System Settings** → **Privacy & Security** → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/nuntio.app` (right-click → **Open** no longer works since macOS 15). On Windows, SmartScreen may ask you to confirm with **More info** → **Run anyway**.
@@ -89,7 +90,7 @@ cargo run -r
 |---|---|
 | Linux | `.tar.gz`, plus `.deb` if [`cargo-deb`](https://crates.io/crates/cargo-deb) is installed and `.AppImage` if `appimagetool` is available |
 | macOS | universal (Intel + Apple Silicon) `.app` in a `.dmg` |
-| Windows | `.zip` |
+| Windows | `.zip`, plus a setup `.exe` if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed |
 
 ### Command line
 

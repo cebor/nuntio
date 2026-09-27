@@ -78,6 +78,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # For the installer; a no-op where the runner image already has it.
+      - run: choco install innosetup -y --no-progress
       - run: cargo xtask package
       - uses: actions/upload-artifact@v4
         with:

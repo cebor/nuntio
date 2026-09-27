@@ -4,7 +4,7 @@
 //!   committed under `assets/icons/`.
 //! - `package`: build a release and package it for the host platform into
 //!   `dist/`: tar.gz, .deb and AppImage on Linux, a universal .app in a .dmg
-//!   on macOS, a .zip on Windows.
+//!   on macOS, a .zip and an Inno Setup installer on Windows.
 //! - `changelog [<range>]`: release notes in Markdown from the `Changelog:`
 //!   commit trailers (see CONTRIBUTING.md), e.g. `v0.1.0..HEAD`.
 //! - `site [serve]`: generate the website's derived files and build it with
@@ -509,7 +509,46 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
         .arg(stage.parent().expect("stage has a parent"))
         .arg(stage.file_name().expect("stage has a name")))?;
     eprintln!("package written to {}", zip.display());
+
+    // Installer, if Inno Setup is installed (or $ISCC points to ISCC.exe).
+    if let Some(iscc) = find_iscc() {
+        run(Command::new(iscc)
+            .arg(format!("/DVersion={version}"))
+            .arg(format!("/DStage={}", stage.display()))
+            .arg(format!("/DOutputDir={}", dist.display()))
+            .arg(format!(
+                "/DOutputBase={NAME}-{version}-{}-windows-setup",
+                std::env::consts::ARCH
+            ))
+            .arg(root().join("assets/nuntio.iss")))?;
+        eprintln!("installer written to {}", dist.display());
+    } else {
+        eprintln!("Inno Setup not found, skipping installer (winget install JRSoftware.InnoSetup)");
+    }
     Ok(())
+}
+
+/// The Inno Setup compiler: `$ISCC`, `ISCC.exe` on PATH, or the default
+/// install locations. ISCC has no `--version`, so `available` can't be used.
+fn find_iscc() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("ISCC") {
+        return Some(path.into());
+    }
+    let on_path = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|dir| dir.join("ISCC.exe"));
+    let installed = ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .flat_map(|dir| {
+            let dir = PathBuf::from(dir);
+            [
+                dir.join("Inno Setup 6/ISCC.exe"),
+                dir.join("Programs/Inno Setup 6/ISCC.exe"),
+            ]
+        });
+    on_path.chain(installed).find(|path| path.is_file())
 }
 
 #[cfg(test)]

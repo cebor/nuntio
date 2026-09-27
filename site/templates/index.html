@@ -150,10 +150,12 @@ dark = <span class="c-y">"Tokyo Night"</span></code></pre>
         </div>
         <div class="dl-panel" data-os="windows">
           <div class="dl-files">
-            {{ <download assets={release.assets} ext=".zip" label="Zip archive" primary={true} /> }}
+            {{ <download assets={release.assets} ext=".exe" label="Installer" primary={true} /> }}
+            {{ <download assets={release.assets} ext=".zip" label="Zip archive" /> }}
             <p class="dl-hint">x86_64</p>
           </div>
-          <pre class="pane"><span class="c-c"># Unpack the archive and run nuntio.exe.</span>
+          <pre class="pane"><span class="c-c"># Run the installer (no admin rights needed), or</span>
+<span class="c-c"># unpack the archive and run nuntio.exe.</span>
 <span class="c-g">❯</span> Expand-Archive {{ <asset_name assets={release.assets} ext=".zip" /> }}
 
 <span class="c-c"># Not signed yet: SmartScreen may ask you to</span>
