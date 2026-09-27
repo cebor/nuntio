@@ -163,7 +163,6 @@ fn restrict_dll_search() {
 
 fn main() -> Result<()> {
     let mut args = parse_args()?;
-    nuntio_render::preload_fonts();
 
     let filter = match &args.log_level {
         Some(level) => EnvFilter::try_new(level)?,
@@ -178,6 +177,8 @@ fn main() -> Result<()> {
             .init(),
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
     }
+    // After the logger, so the font thread's warnings are kept.
+    nuntio_render::preload_fonts();
     #[cfg(windows)]
     restrict_dll_search();
     // Started from the Finder or Dock, nuntio runs in `/`. Start the first
