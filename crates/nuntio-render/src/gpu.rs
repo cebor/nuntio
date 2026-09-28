@@ -59,7 +59,7 @@ impl GpuContext {
         let mut failure = None;
         // A system with several GPUs may offer an adapter that can't present
         // to the window after all; fall back to the next one.
-        for adapter in adapters(&instance, &surface)? {
+        for adapter in adapters(&instance, &surface, transparent)? {
             let info = adapter.get_info();
             match setup(&adapter, &surface, width, height, transparent) {
                 Ok((device, queue, config, transparent)) => {
@@ -163,11 +163,13 @@ impl GpuContext {
 }
 
 /// The adapters that claim to support `surface`, best first: those named by
-/// `WGPU_ADAPTER_NAME`, then the one wgpu picks for the power preference
-/// (`WGPU_POWER_PREF`, low power by default), then the rest.
+/// `WGPU_ADAPTER_NAME`, then on Windows DX12 ones (see below), then the GPU
+/// wgpu picks for the power preference (`WGPU_POWER_PREF`, low power by
+/// default), then the rest.
 fn adapters(
     instance: &wgpu::Instance,
     surface: &wgpu::Surface<'_>,
+    transparent: bool,
 ) -> Result<Vec<wgpu::Adapter>, GpuError> {
     let preferred = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference:
@@ -192,22 +194,27 @@ fn adapters(
     let wanted = std::env::var("WGPU_ADAPTER_NAME")
         .ok()
         .map(|name| name.to_lowercase());
+    // wgpu lists Vulkan before DX12 on Windows. Presenting a window through
+    // Vulkan there flashes the whole desktop white now and then (seen on AMD
+    // GPUs); DX12's flip-model swapchain is composed by DWM like any other
+    // window. Its HWND swapchain has no alpha, though, so transparent windows
+    // keep Vulkan. `WGPU_BACKEND` limits the backends and decides by itself.
+    let prefer_dx12 = cfg!(windows) && !transparent && std::env::var_os("WGPU_BACKEND").is_none();
     let rank = |adapter: &wgpu::Adapter| {
         let info = adapter.get_info();
-        if wanted
+        let named = wanted
             .as_deref()
-            .is_some_and(|name| info.name.to_lowercase().contains(name))
-        {
-            0
-        } else if preferred.as_ref() == Some(&info) {
-            1
-        } else {
-            2
-        }
+            .is_some_and(|name| info.name.to_lowercase().contains(name));
+        let other_backend = prefer_dx12 && info.backend != wgpu::Backend::Dx12;
+        // The same GPU under another backend counts as preferred too.
+        let preferred = preferred.as_ref().is_some_and(|p| {
+            (p.vendor, p.device, &p.name) == (info.vendor, info.device, &info.name)
+        });
+        (!named, other_backend, !preferred)
     };
     adapters.sort_by_key(rank);
     if let Some(name) = &wanted
-        && adapters.first().is_none_or(|adapter| rank(adapter) != 0)
+        && adapters.first().is_none_or(|adapter| rank(adapter).0)
     {
         tracing::warn!("no GPU adapter matches WGPU_ADAPTER_NAME={name:?}");
     }
