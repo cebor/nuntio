@@ -41,55 +41,66 @@ pub enum Action {
     CheckForUpdates,
 }
 
+/// Every action by its name in the config (`nuntio_config::ACTIONS`
+/// documents them).
+const NAMES: &[(&str, Action)] = {
+    use Action::*;
+    use Direction::{Down, Left, Right, Up};
+    &[
+        ("copy", Copy),
+        ("paste", Paste),
+        ("scroll_page_up", ScrollPageUp),
+        ("scroll_page_down", ScrollPageDown),
+        ("scroll_line_up", ScrollLineUp),
+        ("scroll_line_down", ScrollLineDown),
+        ("increase_font_size", FontIncrease),
+        ("decrease_font_size", FontDecrease),
+        ("reset_font_size", FontReset),
+        ("clear_scrollback", ClearScrollback),
+        ("new_tab", NewTab),
+        ("close_tab", CloseTab),
+        ("next_tab", NextTab),
+        ("previous_tab", PreviousTab),
+        ("select_tab_1", SelectTab(0)),
+        ("select_tab_2", SelectTab(1)),
+        ("select_tab_3", SelectTab(2)),
+        ("select_tab_4", SelectTab(3)),
+        ("select_tab_5", SelectTab(4)),
+        ("select_tab_6", SelectTab(5)),
+        ("select_tab_7", SelectTab(6)),
+        ("select_tab_8", SelectTab(7)),
+        ("select_tab_9", SelectTab(8)),
+        ("reload_config", ReloadConfig),
+        ("open_settings", OpenSettings),
+        ("check_for_updates", CheckForUpdates),
+        ("close_pane", ClosePane),
+        ("split_vertical", SplitVertical),
+        ("split_horizontal", SplitHorizontal),
+        ("zoom_pane", ZoomPane),
+        ("search", Search),
+        ("toggle_fullscreen", ToggleFullscreen),
+        ("focus_pane_left", FocusPane(Left)),
+        ("focus_pane_right", FocusPane(Right)),
+        ("focus_pane_up", FocusPane(Up)),
+        ("focus_pane_down", FocusPane(Down)),
+        ("resize_pane_left", ResizePane(Left)),
+        ("resize_pane_right", ResizePane(Right)),
+        ("resize_pane_up", ResizePane(Up)),
+        ("resize_pane_down", ResizePane(Down)),
+    ]
+};
+
 impl Action {
     /// Parse an action name from the config; `"none"` gives `None`.
     pub(crate) fn from_name(name: &str) -> Result<Option<Self>, String> {
-        use Action::*;
-        let action = match name {
-            "none" => return Ok(None),
-            "copy" => Copy,
-            "paste" => Paste,
-            "scroll_page_up" => ScrollPageUp,
-            "scroll_page_down" => ScrollPageDown,
-            "scroll_line_up" => ScrollLineUp,
-            "scroll_line_down" => ScrollLineDown,
-            "increase_font_size" => FontIncrease,
-            "decrease_font_size" => FontDecrease,
-            "reset_font_size" => FontReset,
-            "clear_scrollback" => ClearScrollback,
-            "new_tab" => NewTab,
-            "close_tab" => CloseTab,
-            "next_tab" => NextTab,
-            "previous_tab" => PreviousTab,
-            "reload_config" => ReloadConfig,
-            "open_settings" => OpenSettings,
-            "check_for_updates" => CheckForUpdates,
-            "close_pane" => ClosePane,
-            "split_vertical" => SplitVertical,
-            "split_horizontal" => SplitHorizontal,
-            "zoom_pane" => ZoomPane,
-            "search" => Search,
-            "toggle_fullscreen" => ToggleFullscreen,
-            "focus_pane_left" => FocusPane(Direction::Left),
-            "focus_pane_right" => FocusPane(Direction::Right),
-            "focus_pane_up" => FocusPane(Direction::Up),
-            "focus_pane_down" => FocusPane(Direction::Down),
-            "resize_pane_left" => ResizePane(Direction::Left),
-            "resize_pane_right" => ResizePane(Direction::Right),
-            "resize_pane_up" => ResizePane(Direction::Up),
-            "resize_pane_down" => ResizePane(Direction::Down),
-            _ => {
-                let tab = name
-                    .strip_prefix("select_tab_")
-                    .and_then(|n| n.parse::<usize>().ok())
-                    .filter(|n| (1..=9).contains(n));
-                match tab {
-                    Some(n) => SelectTab(n - 1),
-                    None => return Err(format!("unknown action `{name}`")),
-                }
-            }
-        };
-        Ok(Some(action))
+        if name == "none" {
+            return Ok(None);
+        }
+        NAMES
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|&(_, action)| Some(action))
+            .ok_or_else(|| format!("unknown action `{name}`"))
     }
 }
 
@@ -374,10 +385,17 @@ mod tests {
             Ok(Some(Action::FocusPane(Direction::Up)))
         );
         assert!(Action::from_name("select_tab_0").is_err());
-        for action in nuntio_config::ACTIONS {
-            assert!(Action::from_name(action.value).is_ok(), "{}", action.value);
-        }
         assert!(Action::from_name("split_sideways").is_err());
+    }
+
+    #[test]
+    fn the_config_documents_exactly_these_actions() {
+        let mut documented: Vec<&str> = nuntio_config::ACTIONS.iter().map(|a| a.value).collect();
+        let mut known: Vec<&str> = NAMES.iter().map(|&(name, _)| name).collect();
+        known.push("none");
+        documented.sort_unstable();
+        known.sort_unstable();
+        assert_eq!(documented, known);
     }
 
     #[test]
