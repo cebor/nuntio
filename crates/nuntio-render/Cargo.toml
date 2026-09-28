@@ -26,5 +26,8 @@ unicode-width.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-graphics.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
 [lints]
 workspace = true

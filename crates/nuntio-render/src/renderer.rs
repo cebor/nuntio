@@ -291,6 +291,7 @@ impl Renderer {
         self.encode_pass(&mut encoder, &view, frame);
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu.queue.present(surface_texture);
+        self.gpu.presented();
         FrameStatus::Presented
     }
 

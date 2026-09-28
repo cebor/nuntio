@@ -57,6 +57,9 @@ pub struct GpuContext {
     reconfigure: bool,
     /// The adapter renders on the CPU.
     software: bool,
+    /// The visual the surface was created from, if it wasn't the HWND.
+    #[cfg(windows)]
+    layer: Option<crate::dcomp::Layer>,
 }
 
 impl GpuContext {
@@ -69,14 +72,47 @@ impl GpuContext {
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
+        let instance = wgpu::Instance::new(
+            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
+        );
+        // On Windows, DX12 presents through a DirectComposition visual of
+        // our own. A swap chain made from the HWND looks like a game to
+        // overlays such as NVIDIA's, which then announce themselves on every
+        // start; and the layer lets a successor replace this context without
+        // the window going blank in between (see `dcomp`).
+        #[cfg(windows)]
+        if let Some(layer) = composition_layer(&window, options.transparent) {
+            // SAFETY: the visual is valid; the surface keeps its own reference.
+            let context = unsafe { instance.create_surface_unsafe(layer.surface_target()) }
+                .map_err(GpuError::from)
+                .and_then(|surface| {
+                    Self::with_surface(instance.clone(), surface, width, height, options)
+                });
+            match context {
+                Ok(mut context) => {
+                    context.layer = Some(layer);
+                    context.configured();
+                    return Ok(context);
+                }
+                Err(err) => tracing::warn!("no DirectComposition surface, using the HWND: {err}"),
+            }
+        }
+        let surface = instance.create_surface(window)?;
+        Self::with_surface(instance, surface, width, height, options)
+    }
+
+    /// Create the context on `surface`, with the first adapter that works.
+    fn with_surface(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        options: GpuOptions,
+    ) -> Result<Self, GpuError> {
         let GpuOptions {
             transparent,
             software,
         } = options;
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
-        );
-        let surface = instance.create_surface(window)?;
         let mut failure = None;
         // A system with several GPUs may offer an adapter that can't present
         // to the window after all; fall back to the next one.
@@ -94,6 +130,8 @@ impl GpuContext {
                         transparent,
                         reconfigure: false,
                         software: info.device_type == wgpu::DeviceType::Cpu,
+                        #[cfg(windows)]
+                        layer: None,
                     };
                     #[cfg(target_os = "macos")]
                     context.match_srgb();
@@ -108,13 +146,30 @@ impl GpuContext {
         Err(failure.unwrap_or(GpuError::UnsupportedSurface))
     }
 
-    fn configure(&self) {
+    fn configure(&mut self) {
         let Some(surface) = &self.surface else {
             return;
         };
         surface.configure(&self.device, &self.config);
+        self.configured();
+    }
+
+    /// The surface was (re)configured.
+    fn configured(&mut self) {
+        #[cfg(windows)]
+        if let Some(layer) = &mut self.layer {
+            layer.configured();
+        }
         #[cfg(target_os = "macos")]
         self.match_srgb();
+    }
+
+    /// A frame was presented.
+    pub(crate) fn presented(&mut self) {
+        #[cfg(windows)]
+        if let Some(layer) = &mut self.layer {
+            layer.presented();
+        }
     }
 
     /// Give up the window's surface. A window takes only one swapchain at a
@@ -145,12 +200,18 @@ impl GpuContext {
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
     {
+        #[cfg(windows)]
+        let surface = match &self.layer {
+            // SAFETY: the visual is valid; the surface keeps its own reference.
+            Some(layer) => unsafe { self.instance.create_surface_unsafe(layer.surface_target()) }?,
+            None => self.instance.create_surface(window)?,
+        };
+        #[cfg(not(windows))]
         let surface = self.instance.create_surface(window)?;
         configure_checked(&surface, &self.device, &self.config)?;
         self.surface = Some(surface);
         self.reconfigure = false;
-        #[cfg(target_os = "macos")]
-        self.match_srgb();
+        self.configured();
         Ok(())
     }
 
@@ -280,8 +341,9 @@ fn adapters(
     // wgpu lists Vulkan before DX12 on Windows. Presenting a window through
     // Vulkan there flashes the whole desktop white now and then (seen on AMD
     // GPUs); DX12's flip-model swapchain is composed by DWM like any other
-    // window. Its HWND swapchain has no alpha, though, so transparent windows
-    // keep Vulkan. `WGPU_BACKEND` limits the backends and decides by itself.
+    // window. Its HWND swapchain has no alpha, though, and transparent
+    // windows get no DirectComposition layer (see `composition_layer`), so
+    // they keep Vulkan. `WGPU_BACKEND` limits the backends and decides by itself.
     let prefer_dx12 = cfg!(windows) && !transparent && std::env::var_os("WGPU_BACKEND").is_none();
     let rank = |adapter: &wgpu::Adapter| {
         let info = adapter.get_info();
@@ -303,6 +365,27 @@ fn adapters(
         tracing::warn!("no GPU adapter matches WGPU_ADAPTER_NAME={name:?}");
     }
     Ok(adapters)
+}
+
+/// A DirectComposition layer for `window`, if DX12 is to present through
+/// one: not for transparent windows, which keep Vulkan (see `adapters`), and
+/// not when `WGPU_BACKEND` chooses the backends.
+#[cfg(windows)]
+fn composition_layer(
+    window: &impl HasWindowHandle,
+    transparent: bool,
+) -> Option<crate::dcomp::Layer> {
+    use wgpu::rwh::RawWindowHandle;
+
+    if transparent || std::env::var_os("WGPU_BACKEND").is_some() {
+        return None;
+    }
+    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+    crate::dcomp::Layer::new(handle.hwnd.get())
+        .inspect_err(|err| tracing::warn!("no DirectComposition layer: {err}"))
+        .ok()
 }
 
 /// Create a device on `adapter` and configure `surface` for it. Errors

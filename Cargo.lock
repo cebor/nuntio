@@ -2181,6 +2181,7 @@ dependencies = [
  "tracing",
  "unicode-width",
  "wgpu",
+ "windows",
 ]
 
 [[package]]

@@ -2,6 +2,8 @@
 
 mod atlas;
 mod box_drawing;
+#[cfg(windows)]
+mod dcomp;
 mod decoration;
 mod font;
 mod frame;
