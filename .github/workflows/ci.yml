@@ -46,6 +46,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+      # The debug server behind `cargo xtask drive`.
+      - run: cargo clippy --workspace --all-targets --features nuntio/debug-server
+      - run: cargo test --workspace --features nuntio/debug-server
 
   # The `rust-version` in Cargo.toml still builds.
   msrv:

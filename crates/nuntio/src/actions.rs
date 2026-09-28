@@ -41,7 +41,7 @@ pub enum Action {
 
 impl Action {
     /// Parse an action name from the config; `"none"` gives `None`.
-    fn from_name(name: &str) -> Result<Option<Self>, String> {
+    pub(crate) fn from_name(name: &str) -> Result<Option<Self>, String> {
         use Action::*;
         let action = match name {
             "none" => return Ok(None),
@@ -280,7 +280,7 @@ fn parse_combo(combo: &str) -> Result<(BindKey, ModifiersState), String> {
     Ok((key, mods))
 }
 
-fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
+pub(crate) fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
     use nuntio_config::NamedKey as N;
     match key {
         N::Enter => NamedKey::Enter,

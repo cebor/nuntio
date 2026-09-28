@@ -11,4 +11,6 @@ mod renderer;
 pub use font::{CellMetrics, preload_fonts};
 pub use frame::{Frame, PaneView, UiRect, UiText};
 pub use gpu::{FrameStatus, GpuError};
+#[cfg(feature = "capture")]
+pub use renderer::Capture;
 pub use renderer::Renderer;

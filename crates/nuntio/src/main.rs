@@ -50,11 +50,23 @@ Options:
   -V, --version                 Print the version
 ";
 
+#[cfg(feature = "debug-server")]
+const DEBUG_HELP: &str = "
+Debugging:
+      --debug-server <file>     Accept remote control on 127.0.0.1; the port and
+                                token are written to <file>, the log next to it
+                                as nuntio.log (see `cargo xtask drive`)
+";
+#[cfg(not(feature = "debug-server"))]
+const DEBUG_HELP: &str = "";
+
 #[derive(Debug, Default)]
 struct Args {
     config: Option<PathBuf>,
     log_level: Option<String>,
     startup: Startup,
+    #[cfg(feature = "debug-server")]
+    debug_server: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, lexopt::Error> {
@@ -66,6 +78,8 @@ fn parse_args() -> Result<Args, lexopt::Error> {
         match arg {
             Long("config") => args.config = Some(parser.value()?.into()),
             Long("log-level") => args.log_level = Some(parser.value()?.string()?),
+            #[cfg(feature = "debug-server")]
+            Long("debug-server") => args.debug_server = Some(parser.value()?.into()),
             Long("working-directory") => {
                 args.startup.working_directory = Some(parser.value()?.into());
             }
@@ -78,7 +92,7 @@ fn parse_args() -> Result<Args, lexopt::Error> {
                 args.startup.command = Some(command(program.string()?, &mut parser)?);
             }
             Short('h') | Long("help") => {
-                print!("{HELP}");
+                print!("{HELP}{DEBUG_HELP}");
                 std::process::exit(0);
             }
             Short('V') | Long("version") => {
@@ -168,8 +182,21 @@ fn main() -> Result<()> {
         Some(level) => EnvFilter::try_new(level)?,
         None => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
     };
-    // Started from a desktop launcher there is no terminal to log to.
-    match (!std::io::stderr().is_terminal()).then(log_file).flatten() {
+    // A remote-controlled instance has no stderr: it logs next to its
+    // state file and leaves the real log alone.
+    #[cfg(feature = "debug-server")]
+    let debug_log = args
+        .debug_server
+        .as_ref()
+        .map(|state_file| state_file.with_file_name("nuntio.log"));
+    #[cfg(not(feature = "debug-server"))]
+    let debug_log: Option<PathBuf> = None;
+    let file = match debug_log {
+        Some(path) => Some(std::fs::File::create(path)?),
+        // Started from a desktop launcher there is no terminal to log to.
+        None => (!std::io::stderr().is_terminal()).then(log_file).flatten(),
+    };
+    match file {
         Some(file) => tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_ansi(false)
@@ -211,6 +238,7 @@ fn main() -> Result<()> {
     #[cfg(target_os = "macos")]
     winit::platform::macos::EventLoopBuilderExtMacOS::with_default_menu(&mut builder, false);
     let event_loop = builder.build().context("failed to create event loop")?;
+    #[cfg_attr(not(feature = "debug-server"), allow(unused_mut))]
     let mut app = App::new(
         config,
         config_path,
@@ -218,6 +246,11 @@ fn main() -> Result<()> {
         args.startup,
         event_loop.create_proxy(),
     );
+    #[cfg(feature = "debug-server")]
+    if let Some(state_file) = &args.debug_server {
+        app::debug_server::start(state_file, event_loop.create_proxy())?;
+        app.enable_debug_server();
+    }
     event_loop.run_app(&mut app).context("event loop failed")?;
     app.into_result()
 }

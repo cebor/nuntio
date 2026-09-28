@@ -16,7 +16,23 @@ cargo xtask changelog <from>..HEAD
 cargo xtask site [serve] # build the website in site/ with Zola (needs `zola` on PATH)
 ```
 
-Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates. CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on all three OSes; `release.yml` builds packages when a `v*` tag is pushed.
+Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates. CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on all three OSes, also with `--features nuntio/debug-server`; `release.yml` builds packages when a `v*` tag is pushed.
+
+## Seeing and driving nuntio (`cargo xtask drive`)
+
+To look at the running terminal or try out a change, use the debug server instead of asking the user for screenshots:
+
+```sh
+cargo xtask drive start                  # build with --features debug-server, start in the background (empty config)
+cargo xtask drive wait-idle              # until no pane had output for 300 ms
+cargo xtask drive shot                   # target/nuntio-debug/shot.png, look at it with Read
+cargo xtask drive text                   # visible lines of the focused pane; `state` for tabs/panes/banner as JSON
+cargo xtask drive type 'ls\r'            # also: key ctrl+shift+t, action split_vertical, mouse click 100 17 / --cell 5 3
+cargo xtask drive record start           # then act, then: record stop --sheet (contact sheet of every drawn frame)
+cargo xtask drive stop                   # `drive help` lists everything; `drive log` shows nuntio's log
+```
+
+The server (`crates/nuntio/src/debug_server.rs`, a child module of `app.rs`) is only compiled with the `debug-server` feature, never in packages. Input goes through the real paths (`keyboard_input`, `mouse_input`, `run_action`); screenshots are rendered offscreen (`Renderer::capture`), so they work while the window is covered. The window opens without taking focus and acts as focused.
 
 ## Architecture
 

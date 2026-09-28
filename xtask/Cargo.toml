@@ -9,6 +9,12 @@ anyhow.workspace = true
 resvg = { version = "0.48", default-features = false }
 ico = "0.5"
 icns = "0.5"
+# `drive`: the debug server's protocol, and PNGs of its frames.
+serde_json.workspace = true
+tiny-skia = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Security", "Win32_System_Threading"] }
 
 [lints]
 workspace = true

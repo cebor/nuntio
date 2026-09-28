@@ -84,6 +84,17 @@ struct Sprite {
 
 struct AtlasFull;
 
+/// A frame read back by [`Renderer::capture`].
+#[cfg(feature = "capture")]
+#[derive(Debug, Clone)]
+pub struct Capture {
+    pub width: u32,
+    pub height: u32,
+    /// Rows of RGBA pixels, top to bottom; premultiplied if the window is
+    /// transparent.
+    pub rgba: Vec<u8>,
+}
+
 pub struct Renderer {
     gpu: GpuContext,
     fonts: Fonts,
@@ -331,6 +342,107 @@ impl Renderer {
 
     /// Draw a frame and present it.
     pub fn render(&mut self, frame: &Frame) -> FrameStatus {
+        self.prepare(frame);
+        let surface_texture = match self.gpu.acquire() {
+            Ok(texture) => texture,
+            Err(status) => return status,
+        };
+        let view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame"),
+            });
+        self.encode_pass(&mut encoder, &view, frame);
+        self.gpu.queue.submit([encoder.finish()]);
+        self.gpu.queue.present(surface_texture);
+        FrameStatus::Presented
+    }
+
+    /// Draw a frame into an offscreen texture of the window's size and read
+    /// it back, as the window would show it. Doesn't need the surface, so
+    /// it also works while the window is covered or minimized.
+    #[cfg(feature = "capture")]
+    pub fn capture(&mut self, frame: &Frame) -> Result<Capture, GpuError> {
+        self.prepare(frame);
+        let device = &self.gpu.device;
+        let (width, height) = self.gpu.size();
+        let format = self.gpu.format();
+        let bgra = match format {
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
+            other => return Err(GpuError::Capture(format!("unsupported format {other:?}"))),
+        };
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("capture"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let padded_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("capture"),
+            size: u64::from(padded_row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("capture"),
+        });
+        self.encode_pass(&mut encoder, &view, frame);
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: None,
+                },
+            },
+            size,
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.map_async(wgpu::MapMode::Read, .., move |result| {
+            let _ = tx.send(result);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|err| GpuError::Capture(err.to_string()))?;
+        rx.recv()
+            .map_err(|err| GpuError::Capture(err.to_string()))?
+            .map_err(|err| GpuError::Capture(err.to_string()))?;
+        let rgba = {
+            let data = buffer
+                .get_mapped_range(..)
+                .map_err(|err| GpuError::Capture(err.to_string()))?;
+            unpad_rows(&data, width, height, padded_row, bgra)
+        };
+        buffer.unmap();
+        Ok(Capture {
+            width,
+            height,
+            rgba,
+        })
+    }
+
+    /// Lay out the frame's instances and upload them with the uniforms.
+    fn prepare(&mut self, frame: &Frame) {
         if self.build_instances(frame).is_err() {
             // The atlas filled up mid-frame: start over with an empty one.
             tracing::debug!("glyph atlas full, clearing");
@@ -342,12 +454,6 @@ impl Renderer {
             }
             self.atlas_overflow = !fits;
         }
-        let background = frame.background;
-
-        let surface_texture = match self.gpu.acquire() {
-            Ok(texture) => texture,
-            Err(status) => return status,
-        };
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
 
@@ -367,15 +473,18 @@ impl Renderer {
             0,
             bytemuck::cast_slice(&self.instances),
         );
+    }
 
-        let view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("frame"),
-        });
+    /// Record the render pass of a `prepare`d frame into `view`.
+    fn encode_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        frame: &Frame,
+    ) {
+        let (width, height) = self.gpu.size();
         {
-            let [r, g, b, _] = rgba(background).map(f64::from);
+            let [r, g, b, _] = rgba(frame.background).map(f64::from);
             let a = if self.gpu.transparent() {
                 f64::from(frame.background_opacity.clamp(0.0, 1.0))
             } else {
@@ -390,7 +499,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("terminal"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -421,9 +530,6 @@ impl Renderer {
                 }
             }
         }
-        queue.submit([encoder.finish()]);
-        queue.present(surface_texture);
-        FrameStatus::Presented
     }
 
     fn build_instances(&mut self, frame: &Frame) -> Result<(), AtlasFull> {
@@ -759,6 +865,23 @@ fn scissor(area: [f32; 4], (width, height): (u32, u32)) -> Option<[u32; 4]> {
     (right > left && bottom > top).then(|| [left, top, right - left, bottom - top])
 }
 
+/// Tightly packed RGBA rows from a texture copy whose rows are
+/// `padded_row` bytes long, swapping red and blue for BGRA textures.
+#[cfg(feature = "capture")]
+fn unpad_rows(data: &[u8], width: u32, height: u32, padded_row: u32, bgra: bool) -> Vec<u8> {
+    let row = width as usize * 4;
+    let mut rgba = Vec::with_capacity(row * height as usize);
+    for line in data.chunks(padded_row as usize).take(height as usize) {
+        rgba.extend_from_slice(&line[..row]);
+    }
+    if bgra {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+        }
+    }
+    rgba
+}
+
 fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("instances"),
@@ -824,5 +947,14 @@ mod tests {
         // Nothing visible.
         assert_eq!(scissor([850.0, 0.0, 100.0, 100.0], size), None);
         assert_eq!(scissor([0.0, 0.0, 0.0, 100.0], size), None);
+    }
+
+    #[cfg(feature = "capture")]
+    #[test]
+    fn captured_rows_lose_their_padding() {
+        // Two rows of one pixel, padded to 8 bytes.
+        let data = [1, 2, 3, 4, 0, 0, 0, 0, 5, 6, 7, 8, 0, 0, 0, 0];
+        assert_eq!(unpad_rows(&data, 1, 2, 8, false), [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(unpad_rows(&data, 1, 2, 8, true), [3, 2, 1, 4, 7, 6, 5, 8]);
     }
 }

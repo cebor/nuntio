@@ -21,7 +21,14 @@ path = "src/bin/nuntio-config.rs"
 # Its docs would overwrite those of the `nuntio-config` library.
 doc = false
 
+[features]
+# Remote control for debugging (`--debug-server`, driven by `cargo xtask
+# drive`). Not in release packages.
+debug-server = ["dep:serde", "dep:serde_json", "nuntio-render/capture"]
+
 [dependencies]
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 nuntio-config.workspace = true
 nuntio-render.workspace = true
 nuntio-term.workspace = true

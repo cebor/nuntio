@@ -7,13 +7,45 @@
 use nuntio_term::TermMode;
 
 use crate::kitty_keys;
+use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, KeyCode, KeyLocation, NamedKey, PhysicalKey};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEventKind {
     Press,
     Repeat,
     Release,
+}
+
+/// A key event as nuntio handles it: winit's `KeyEvent` can't be built
+/// outside winit, and the debug server makes up its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyPress {
+    pub logical: Key,
+    /// The key with no modifiers applied (e.g. `c` for Ctrl+Shift+C).
+    pub unmodified: Key,
+    pub text: Option<String>,
+    pub location: KeyLocation,
+    pub physical: PhysicalKey,
+    pub kind: KeyEventKind,
+}
+
+impl From<&KeyEvent> for KeyPress {
+    fn from(event: &KeyEvent) -> Self {
+        Self {
+            logical: event.logical_key.clone(),
+            unmodified: event.key_without_modifiers(),
+            text: event.text.as_ref().map(ToString::to_string),
+            location: event.location,
+            physical: event.physical_key,
+            kind: match (event.state, event.repeat) {
+                (ElementState::Released, _) => KeyEventKind::Release,
+                (ElementState::Pressed, false) => KeyEventKind::Press,
+                (ElementState::Pressed, true) => KeyEventKind::Repeat,
+            },
+        }
+    }
 }
 
 /// The parts of a key event the encoder needs.

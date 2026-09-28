@@ -13,12 +13,9 @@ use nuntio_term::{
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{
-    ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent,
-};
+use winit::event::{ElementState, Ime, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersKeyState, ModifiersState, NamedKey};
-use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{
     CursorIcon, Fullscreen, ResizeDirection, Theme as WindowTheme, Window, WindowAttributes,
     WindowId,
@@ -27,7 +24,7 @@ use winit::window::{
 use crate::actions::{Action, Bindings};
 use crate::banner::{Banner, Severity};
 use crate::event::{MenuCommand, PaneId, UserEvent};
-use crate::input::{self, KeyEventKind};
+use crate::input::{self, KeyEventKind, KeyPress};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
 use crate::pane_tree::{Axis, Direction, PaneTree};
 use crate::search_bar::SearchBar;
@@ -38,6 +35,11 @@ use crate::window::{
     AUTOSCROLL_INTERVAL, Autoscroll, BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent,
     TabDrag, WindowState,
 };
+
+// A child module, so that its request handlers can reach the app's state.
+#[cfg(feature = "debug-server")]
+#[path = "debug_server.rs"]
+pub(crate) mod debug_server;
 
 const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
@@ -517,6 +519,11 @@ pub struct App {
     error: Option<anyhow::Error>,
     #[cfg(target_os = "macos")]
     menu_bar: Option<crate::macos_menu::MenuBar>,
+    /// Input comes from the debug server, not the user: nothing may grab
+    /// the real pointer (window drags).
+    synthetic_input: bool,
+    #[cfg(feature = "debug-server")]
+    debug: debug_server::DebugState,
 }
 
 impl App {
@@ -566,6 +573,9 @@ impl App {
             error: None,
             #[cfg(target_os = "macos")]
             menu_bar: None,
+            synthetic_input: false,
+            #[cfg(feature = "debug-server")]
+            debug: Default::default(),
         };
         let theme_warning = app.update_palette();
         app.sync_system_monitor();
@@ -742,6 +752,13 @@ impl App {
         }
     }
 
+    /// The debug server runs: open the window in the background and keep
+    /// it acting as focused.
+    #[cfg(feature = "debug-server")]
+    pub fn enable_debug_server(&mut self) {
+        self.debug.enabled = true;
+    }
+
     pub fn into_result(self) -> Result<()> {
         self.error.map_or(Ok(()), Err)
     }
@@ -811,6 +828,9 @@ impl App {
             // Shown once it has the size of the configured grid, which is
             // only known with the font (where the platform allows hiding).
             .with_visible(false);
+        // Driven remotely: don't take the focus from the user's window.
+        #[cfg(feature = "debug-server")]
+        let attrs = attrs.with_active(!self.debug.enabled);
         // App id / WM_CLASS, matching the .desktop file (Wayland and X11).
         #[cfg(target_os = "linux")]
         let attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
@@ -878,6 +898,10 @@ impl App {
         center(&state.window);
         state.window.set_visible(true);
         state.resize_terms(&self.config);
+        #[cfg(feature = "debug-server")]
+        if self.debug.enabled {
+            debug_server::focus(&mut state);
+        }
         Ok(state)
     }
 
@@ -1315,24 +1339,20 @@ impl App {
         }
     }
 
-    fn keyboard_input(&mut self, event: KeyEvent) {
+    pub(crate) fn keyboard_input(&mut self, event: &KeyPress) {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        let kind = match (event.state, event.repeat) {
-            (ElementState::Released, _) => KeyEventKind::Release,
-            (ElementState::Pressed, false) => KeyEventKind::Press,
-            (ElementState::Pressed, true) => KeyEventKind::Repeat,
-        };
+        let kind = event.kind;
         // The release of a key nuntio used is nuntio's too.
-        let used = state.used_keys.remove(&event.physical_key);
+        let used = state.used_keys.remove(&event.physical);
         if kind == KeyEventKind::Release && used {
             return;
         }
         let mods = state.modifiers.state();
-        if kind != KeyEventKind::Release && !self.key_for_program(&event, mods) {
+        if kind != KeyEventKind::Release && !self.key_for_program(event, mods) {
             if let Some(state) = self.state.as_mut() {
-                state.used_keys.insert(event.physical_key);
+                state.used_keys.insert(event.physical);
             }
             return;
         }
@@ -1341,11 +1361,11 @@ impl App {
         };
         let meta = alt_is_meta(&state.modifiers, self.config.macos.option_as_meta);
         let key_input = input::KeyInput {
-            key: &event.logical_key,
-            unmodified: &event.key_without_modifiers(),
+            key: &event.logical,
+            unmodified: &event.unmodified,
             text: event.text.as_deref(),
             location: event.location,
-            physical: event.physical_key,
+            physical: event.physical,
             event: kind,
             shift: mods.shift_key(),
             ctrl: mods.control_key(),
@@ -1368,7 +1388,7 @@ impl App {
 
     /// Runs the find bar and shortcuts for a pressed key. Returns whether
     /// the key is left for the program in the focused pane.
-    fn key_for_program(&mut self, event: &KeyEvent, mods: ModifiersState) -> bool {
+    fn key_for_program(&mut self, event: &KeyPress, mods: ModifiersState) -> bool {
         if self
             .state
             .as_ref()
@@ -1377,16 +1397,15 @@ impl App {
         {
             return false;
         }
-        let unmodified = event.key_without_modifiers();
-        let latin = input::latin_key(&unmodified, event.physical_key);
-        if let Some(action) = self.lookup_binding(&unmodified, latin.as_ref(), mods) {
+        let latin = input::latin_key(&event.unmodified, event.physical);
+        if let Some(action) = self.lookup_binding(&event.unmodified, latin.as_ref(), mods) {
             self.run_action(action);
             return false;
         }
         // Unbound Cmd/Super combinations are shortcuts, not text. The
         // modifier keys themselves still go to programs that ask for them
         // (kitty's "report all keys").
-        !mods.super_key() || input::is_modifier(&event.logical_key)
+        !mods.super_key() || input::is_modifier(&event.logical)
     }
 
     /// The shortcut for a key; on layouts without Latin letters, also
@@ -1404,7 +1423,7 @@ impl App {
 
     /// Keys for the open find bar. Returns whether the key was used;
     /// shortcuts not handled here still work while searching.
-    fn search_key(&mut self, event: &KeyEvent) -> bool {
+    fn search_key(&mut self, event: &KeyPress) -> bool {
         let Some(state) = self.state.as_mut() else {
             return false;
         };
@@ -1415,10 +1434,10 @@ impl App {
         };
         // On macOS, Option+R arrives as "®"; the toggle must see the "r",
         // also where the key gives a non-Latin letter.
-        let unmodified = event.key_without_modifiers();
-        let latin = input::latin_key(&unmodified, event.physical_key);
-        let is_r = matches!(latin.as_ref().unwrap_or(&unmodified), Key::Character(c) if c.eq_ignore_ascii_case("r"));
-        match &event.logical_key {
+        let unmodified = &event.unmodified;
+        let latin = input::latin_key(unmodified, event.physical);
+        let is_r = matches!(latin.as_ref().unwrap_or(unmodified), Key::Character(c) if c.eq_ignore_ascii_case("r"));
+        match &event.logical {
             Key::Named(NamedKey::Escape) => state.search = None,
             Key::Named(NamedKey::Enter) => bar.next(term, !mods.shift_key()),
             Key::Named(NamedKey::ArrowUp) => bar.next(term, true),
@@ -1434,11 +1453,11 @@ impl App {
             }
             _ => {
                 let key_input = input::KeyInput {
-                    key: &event.logical_key,
-                    unmodified: &unmodified,
+                    key: &event.logical,
+                    unmodified,
                     text: event.text.as_deref(),
                     location: event.location,
-                    physical: event.physical_key,
+                    physical: event.physical,
                     event: KeyEventKind::Press,
                     shift: mods.shift_key(),
                     ctrl: mods.control_key(),
@@ -1450,7 +1469,7 @@ impl App {
                     // Shortcuts still work; other keys (Tab, F1, Ctrl+W, …)
                     // must not reach the shell behind the bar.
                     return self
-                        .lookup_binding(&unmodified, latin.as_ref(), mods)
+                        .lookup_binding(unmodified, latin.as_ref(), mods)
                         .is_none();
                 };
                 bar.query.push_str(text);
@@ -1543,7 +1562,9 @@ impl App {
         // Window edges (undecorated windows) and the tab bar come first.
         if pressed && button == Button::Left {
             if let Some(direction) = state.resize_edge(pos) {
-                let _ = state.window.drag_resize_window(direction);
+                if !self.synthetic_input {
+                    let _ = state.window.drag_resize_window(direction);
+                }
                 return;
             }
             if let Some(bar) = state.tab_bar(&self.config)
@@ -1573,7 +1594,9 @@ impl App {
                             state.window.set_maximized(!maximized);
                         } else {
                             state.mouse.last_bar_click = Some(now);
-                            let _ = state.window.drag_window();
+                            if !self.synthetic_input {
+                                let _ = state.window.drag_window();
+                            }
                         }
                     }
                     BarHit::Minimize => state.window.set_minimized(true),
@@ -1871,7 +1894,22 @@ impl App {
         }
     }
 
+    /// Draw the window, and capture the frame while the debug server
+    /// records.
+    fn redraw(&mut self) -> Option<FrameStatus> {
+        #[cfg(feature = "debug-server")]
+        if let Some(status) = self.debug_redraw() {
+            return Some(status);
+        }
+        let state = self.state.as_mut()?;
+        Some(state.redraw(&self.config, &self.stats, self.banner.as_ref()))
+    }
+
     fn term_event(&mut self, pane: PaneId, event: TermEvent) {
+        #[cfg(feature = "debug-server")]
+        if matches!(event, TermEvent::Wakeup) {
+            self.debug_output();
+        }
         let Some(state) = self.state.as_mut() else {
             return;
         };
@@ -1995,6 +2033,8 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ConfigChanged => self.reload_config(),
             UserEvent::Menu(MenuCommand::Action(action)) => self.run_action(action),
             UserEvent::Menu(MenuCommand::Quit) => self.request_close(CloseTarget::Window),
+            #[cfg(feature = "debug-server")]
+            UserEvent::Debug(call) => self.debug_call(call),
             UserEvent::SystemStats(sample) => {
                 // Late samples from a monitor that was just stopped.
                 if self.system_monitor.is_none() {
@@ -2032,6 +2072,9 @@ impl ApplicationHandler<UserEvent> for App {
                 state.resize_terms(&self.config);
                 state.window.request_redraw();
             }
+            // The debug server's window stays focused (see `enable_debug_server`).
+            #[cfg(feature = "debug-server")]
+            WindowEvent::Focused(_) if self.debug.enabled => {}
             WindowEvent::Focused(focused) => {
                 // Report while still marked focused, so focus-out gets through.
                 if focused {
@@ -2047,7 +2090,9 @@ impl ApplicationHandler<UserEvent> for App {
                 state.modifiers = mods;
                 self.update_hover_link();
             }
-            WindowEvent::KeyboardInput { event, .. } => self.keyboard_input(event),
+            WindowEvent::KeyboardInput { event, .. } => {
+                self.keyboard_input(&KeyPress::from(&event))
+            }
             WindowEvent::Ime(Ime::Preedit(text, _)) => {
                 state.preedit = (!text.is_empty()).then_some(text);
                 state.window.request_redraw();
@@ -2135,7 +2180,12 @@ impl ApplicationHandler<UserEvent> for App {
                 if state.reveal_holds(Instant::now()) {
                     return;
                 }
-                let status = state.redraw(&self.config, &self.stats, self.banner.as_ref());
+                let Some(status) = self.redraw() else {
+                    return;
+                };
+                let Some(state) = self.state.as_mut() else {
+                    return;
+                };
                 if status == FrameStatus::Skipped {
                     state.skipped_frames += 1;
                 } else {

@@ -15,6 +15,9 @@ pub enum GpuError {
     UnsupportedSurface,
     #[error("failed to configure the surface: {0}")]
     Configure(String),
+    #[cfg(feature = "capture")]
+    #[error("failed to capture the frame: {0}")]
+    Capture(String),
 }
 
 /// Outcome of a frame, so the caller can decide whether to redraw again.

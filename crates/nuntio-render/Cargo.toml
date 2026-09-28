@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# `Renderer::capture`: read frames back, for the debug server.
+capture = []
+
 [dependencies]
 nuntio-term.workspace = true
 cosmic-text.workspace = true

@@ -134,7 +134,7 @@ impl Pane {
 
     /// The tab title, and when it expires if it came from the cache (it
     /// may be stale then, so it should be looked at again).
-    fn cached_title(&mut self, mode: TabTitle, now: Instant) -> (String, Option<Instant>) {
+    pub fn cached_title(&mut self, mode: TabTitle, now: Instant) -> (String, Option<Instant>) {
         if let Some(cache) = &self.title_cache
             && let Some(title) = cache.get(mode, now)
         {
@@ -162,6 +162,12 @@ impl Pane {
                 .flatten(),
         };
         tab_title::title(mode, info, dirs::home_dir().as_deref())
+    }
+
+    /// Current grid size, once the pane has been laid out.
+    #[cfg_attr(not(feature = "debug-server"), allow(dead_code))]
+    pub fn grid_size(&self) -> Option<TermSize> {
+        self.size
     }
 
     fn resize(&mut self, size: TermSize) {
@@ -551,7 +557,7 @@ impl WindowState {
     }
 
     /// Top-left corner of a pane's grid.
-    fn grid_origin(&self, config: &Config, rect: Rect) -> (f32, f32) {
+    pub fn grid_origin(&self, config: &Config, rect: Rect) -> (f32, f32) {
         let (pad_x, pad_y) = self.padding(config);
         (rect.x + pad_x, rect.y + pad_y)
     }
@@ -605,6 +611,21 @@ impl WindowState {
         stats: &Stats,
         banner: Option<&Banner>,
     ) -> FrameStatus {
+        self.with_frame(config, stats, banner, |renderer, frame| {
+            renderer.render(frame)
+        })
+        .unwrap_or(FrameStatus::Skipped)
+    }
+
+    /// Put together the frame for the window and hand it to `draw`.
+    /// `None` if there is nothing to draw.
+    pub fn with_frame<R>(
+        &mut self,
+        config: &Config,
+        stats: &Stats,
+        banner: Option<&Banner>,
+        draw: impl FnOnce(&mut Renderer, &Frame) -> R,
+    ) -> Option<R> {
         let layout = self.layout(config);
         let focused_id = self.content().focused;
         let split = layout.panes.len() > 1;
@@ -632,9 +653,7 @@ impl WindowState {
             }
             snapshots.push((snapshot, rect, is_focused));
         }
-        let Some((first, ..)) = snapshots.first() else {
-            return FrameStatus::Skipped;
-        };
+        let (first, ..) = snapshots.first()?;
         let (background, foreground) = (first.background, first.foreground);
 
         let active = self.tabs.active_index();
@@ -786,14 +805,15 @@ impl WindowState {
         } else {
             0.0
         };
-        self.renderer.render(&Frame {
+        let frame = Frame {
             background,
             background_opacity: config.window.opacity,
             panes: &panes,
             rects: &rects,
             texts: &texts,
             corner_radius,
-        })
+        };
+        Some(draw(&mut self.renderer, &frame))
     }
 
     /// Preedit, blinking and IME placement for the focused pane.

@@ -1934,6 +1934,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "open",
  "percent-encoding",
+ "serde",
+ "serde_json",
  "starship-battery",
  "sys-locale",
  "sysinfo",
@@ -3197,6 +3199,19 @@ checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
 dependencies = [
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -4993,6 +5008,9 @@ dependencies = [
  "icns",
  "ico",
  "resvg",
+ "serde_json",
+ "tiny-skia 0.12.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5032,3 +5050,9 @@ name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"

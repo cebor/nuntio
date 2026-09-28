@@ -9,6 +9,10 @@
 //!   commit trailers (see CONTRIBUTING.md), e.g. `v0.1.0..HEAD`.
 //! - `site [serve]`: generate the website's derived files and build it with
 //!   Zola into `site/public/`, or serve it locally with live reload.
+//! - `drive <command>`: start nuntio with its debug server and remote-control
+//!   it: screenshots, screen text, keys, mouse, frame recordings.
+
+mod drive;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,12 +37,15 @@ fn main() -> Result<()> {
         Some("icons") => icons(),
         Some("package") => package(),
         Some("site") => site(args.get(1).is_some_and(|a| a == "serve")),
+        Some("drive") => drive::main(&args[1..]),
         Some("changelog") => {
             print!("{}", changelog(args.get(1).map_or("HEAD", String::as_str))?);
             Ok(())
         }
         _ => {
-            eprintln!("usage: cargo xtask <icons|package|changelog [<range>]|site [serve]>");
+            eprintln!(
+                "usage: cargo xtask <icons|package|changelog [<range>]|site [serve]|drive <command>>"
+            );
             std::process::exit(2);
         }
     }

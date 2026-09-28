@@ -18,6 +18,9 @@ pub enum UserEvent {
     /// A command from the macOS menu bar.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Menu(MenuCommand),
+    /// A request from the debug server.
+    #[cfg(feature = "debug-server")]
+    Debug(crate::app::debug_server::DebugCall),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
