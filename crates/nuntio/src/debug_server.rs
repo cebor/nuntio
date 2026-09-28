@@ -212,7 +212,7 @@ pub fn start(state_file: &Path, proxy: EventLoopProxy<UserEvent>) -> Result<()> 
     let port = listener.local_addr()?.port();
     let token = token();
     let info = json!({ "port": port, "token": token, "pid": std::process::id() });
-    std::fs::write(state_file, info.to_string())
+    write_private(state_file, &info.to_string())
         .with_context(|| format!("failed to write {}", state_file.display()))?;
     tracing::info!(port, file = %state_file.display(), "debug server listening");
     std::thread::Builder::new()
@@ -228,6 +228,23 @@ pub fn start(state_file: &Path, proxy: EventLoopProxy<UserEvent>) -> Result<()> 
             }
         })?;
     Ok(())
+}
+
+/// Write `contents` to a file only the user can read: whoever knows the
+/// token can type into the shells.
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    // An older file keeps its permissions when it is opened.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(contents.as_bytes())
 }
 
 /// A token nobody else on the machine can guess: `RandomState` is seeded
@@ -259,10 +276,22 @@ fn serve(stream: TcpStream, token: &str, proxy: &EventLoopProxy<UserEvent>) -> R
 
 fn parse(line: &str, token: &str) -> Result<Request, String> {
     let envelope: Envelope = serde_json::from_str(line).map_err(|err| err.to_string())?;
-    if envelope.token != token {
+    if !same_token(&envelope.token, token) {
         return Err("wrong token".into());
     }
     Ok(envelope.request)
+}
+
+/// Compare in constant time, so the time an answer takes doesn't tell how
+/// much of a guessed token was right.
+fn same_token(given: &str, token: &str) -> bool {
+    let (given, token) = (given.as_bytes(), token.as_bytes());
+    given.len() == token.len()
+        && given
+            .iter()
+            .zip(token)
+            .fold(0, |diff, (a, b)| diff | (a ^ b))
+            == 0
 }
 
 /// Hand the request to the main thread and wait for its reply.
@@ -875,6 +904,29 @@ mod tests {
 
     fn request(line: &str) -> Result<Request, String> {
         parse(line, "secret")
+    }
+
+    #[test]
+    fn tokens_must_match_exactly() {
+        assert!(same_token("abc123", "abc123"));
+        assert!(!same_token("abc124", "abc123"));
+        assert!(!same_token("abc", "abc123"));
+        assert!(!same_token("", "abc123"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_state_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("nuntio-debug-{}", std::process::id()));
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private(&path, "new").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(text, "new");
     }
 
     #[test]
