@@ -161,6 +161,11 @@ fn site(serve: bool) -> Result<()> {
         site.join("content/docs/config.md"),
         site_config_page(&config)?,
     )?;
+    let privacy = fs::read_to_string(root.join("PRIVACY.md"))?;
+    fs::write(
+        site.join("content/privacy.md"),
+        site_privacy_page(&privacy)?,
+    )?;
     copy(&root.join("assets/icon.svg"), &site.join("static/icon.svg"))?;
     copy(
         &root.join("assets/icons/png/32.png"),
@@ -210,6 +215,21 @@ fn site_config_page(markdown: &str) -> Result<String> {
     let body = body.replace(SCREENSHOTS, "](../../screenshots/");
     Ok(format!(
         "+++\ntitle = \"Configuration reference\"\ndescription = \"Every nuntio setting with its default, themes, keybindings and the nuntio-config editor.\"\nweight = 2\n+++\n{body}"
+    ))
+}
+
+/// Turn `PRIVACY.md` into a Zola page at `privacy/`, linked from the footer.
+fn site_privacy_page(markdown: &str) -> Result<String> {
+    let body = markdown
+        .strip_prefix("# Privacy policy\n")
+        .context("PRIVACY.md must start with `# Privacy policy`")?;
+    ensure!(
+        body.match_indices("](")
+            .all(|(i, _)| body[i + 2..].starts_with("https://")),
+        "PRIVACY.md may only link to absolute URLs"
+    );
+    Ok(format!(
+        "+++\ntitle = \"Privacy policy\"\ndescription = \"nuntio collects no data. What the app and the website do and don't do.\"\ntemplate = \"plain.html\"\n+++\n{body}"
     ))
 }
 

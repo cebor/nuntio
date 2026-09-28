@@ -1,6 +1,6 @@
 # Contributing to nuntio
 
-Thanks for your interest! This document explains how to build and test nuntio and how to submit changes.
+Thanks for your interest! This document explains how to build and test nuntio and how to submit changes. Please report security problems privately as described in [SECURITY.md](SECURITY.md), not as public issues.
 
 ## Prerequisites
 

@@ -187,6 +187,10 @@ PTY threads send events through the winit event loop proxy. The main thread take
 
 Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to build, test and write commits. The changelog is generated from `Changelog:` commit trailers.
 
+## Security and privacy
+
+Please report security problems privately as described in [SECURITY.md](SECURITY.md). nuntio collects no data; see the [privacy policy](PRIVACY.md).
+
 ## License
 
 nuntio is licensed under either of
