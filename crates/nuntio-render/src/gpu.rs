@@ -121,11 +121,22 @@ impl GpuContext {
     /// time (DX12, Vulkan), so a successor can only be created after this.
     /// Frames report `Lost` from now on, until `restore_surface`.
     pub fn release_surface(&mut self) {
+        #[cfg(target_os = "macos")]
+        let layer = self.metal_layer();
         self.surface = None;
         // The last frame's back buffer is kept by the device until its
         // submission is cleaned up, and with it the swapchain (on DX12 the
         // successor's configure fails with "Access is denied").
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        // Every surface gets a new sublayer of the view's layer, which
+        // neither wgpu nor raw-window-metal removes: it would stay under the
+        // successor's with its last frame, showing through where the window
+        // is transparent. winit's view has no `CAMetalLayer` of its own, so
+        // this layer is always such a sublayer.
+        #[cfg(target_os = "macos")]
+        if let Some(layer) = layer {
+            layer.removeFromSuperlayer();
+        }
     }
 
     /// Create the surface for `window` again after `release_surface`, with
@@ -151,17 +162,23 @@ impl GpuContext {
     fn match_srgb(&self) {
         use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
 
-        // SAFETY: the layer is only read and given a color space; the
-        // surface stays owned by wgpu.
-        let Some(surface) = self.surface.as_ref() else {
-            return;
-        };
-        let Some(surface) = (unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }) else {
+        let Some(layer) = self.metal_layer() else {
             return;
         };
         // SAFETY: a constant CoreGraphics provides.
         let srgb = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }));
-        surface.render_layer().lock().setColorspace(srgb.as_deref());
+        layer.setColorspace(srgb.as_deref());
+    }
+
+    /// The `CAMetalLayer` the surface draws into, if there is one.
+    #[cfg(target_os = "macos")]
+    fn metal_layer(
+        &self,
+    ) -> Option<impl std::ops::Deref<Target = objc2_quartz_core::CAMetalLayer> + use<>> {
+        // SAFETY: the layer is only retained, and changed in ways wgpu
+        // doesn't track; the surface stays owned by wgpu.
+        let surface = unsafe { self.surface.as_ref()?.as_hal::<wgpu::hal::api::Metal>() }?;
+        Some(surface.render_layer().lock().clone())
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
