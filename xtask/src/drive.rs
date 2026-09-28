@@ -41,6 +41,9 @@ usage: cargo xtask drive <command>
         [--mods shift,ctrl,alt,super]
                           mouse input at window pixels or a cell's center
   resize <width> <height> inner size in physical pixels
+  window <minimize|maximize|restore>
+                          change the window state as the window manager would;
+                          restore un-minimizes, or else un-maximizes
   wait-idle [--ms 300] [--timeout 10]
                           wait until no pane had output for --ms
   wait-text <text> [--pane N] [--timeout 10]
@@ -124,6 +127,25 @@ pub fn main(args: &[String]) -> Result<()> {
             let width: u32 = args.positional().context("resize: width")?.parse()?;
             let height: u32 = args.positional().context("resize: height")?.parse()?;
             request(json!({ "cmd": "resize", "width": width, "height": height }))?;
+            Ok(())
+        }
+        "window" => {
+            let request_json = match args.positional().as_deref() {
+                Some("minimize") => json!({ "cmd": "window", "minimized": true }),
+                Some("maximize") => json!({ "cmd": "window", "maximized": true }),
+                // Like the OS: a minimized window comes back as it was,
+                // maximized or not.
+                Some("restore") => {
+                    let state = request(json!({ "cmd": "state" }))?;
+                    if state.json["window"]["minimized"] == true {
+                        json!({ "cmd": "window", "minimized": false })
+                    } else {
+                        json!({ "cmd": "window", "maximized": false })
+                    }
+                }
+                _ => bail!("window: minimize, maximize or restore"),
+            };
+            request(request_json)?;
             Ok(())
         }
         "wait-idle" => {

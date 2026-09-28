@@ -122,6 +122,11 @@ pub enum Request {
         width: u32,
         height: u32,
     },
+    /// Minimize, maximize or restore the window, as the window manager would.
+    Window {
+        minimized: Option<bool>,
+        maximized: Option<bool>,
+    },
     RecordStart {
         max_frames: Option<usize>,
     },
@@ -359,6 +364,19 @@ impl App {
                 state.window.request_redraw();
                 Ok(Reply::ok(json!({})))
             }
+            Request::Window {
+                minimized,
+                maximized,
+            } => {
+                let state = self.state.as_ref().expect("checked above");
+                if let Some(minimized) = minimized {
+                    state.window.set_minimized(minimized);
+                }
+                if let Some(maximized) = maximized {
+                    state.window.set_maximized(maximized);
+                }
+                Ok(Reply::ok(json!({})))
+            }
             Request::RecordStart { max_frames } => {
                 self.debug.recording = Some(Recording {
                     start: Instant::now(),
@@ -434,6 +452,7 @@ impl App {
                 "scale": state.window.scale_factor(),
                 "focused": state.focused,
                 "maximized": state.window.is_maximized(),
+                "minimized": state.window.is_minimized(),
                 "position": state.window.outer_position().ok().map(|p| [p.x, p.y]),
                 "headless": self.debug.headless,
             },
@@ -887,6 +906,13 @@ mod tests {
         assert_eq!(mouse.kind, MouseKind::Click);
         assert_eq!((mouse.x, mouse.y), (Some(10.0), Some(20.0)));
         assert_eq!((mouse.button, mouse.count), (ButtonName::Left, 1));
+        assert_eq!(
+            request(r#"{"token":"secret","cmd":"window","minimized":false}"#),
+            Ok(Request::Window {
+                minimized: Some(false),
+                maximized: None
+            })
+        );
         assert!(request(r#"{"token":"secret","cmd":"fly"}"#).is_err());
     }
 

@@ -2079,8 +2079,12 @@ impl ApplicationHandler<UserEvent> for App {
         };
         match event {
             WindowEvent::CloseRequested => self.request_close(CloseTarget::Window),
-            // Minimized on Windows: keep the grids, don't reflow to 1x1.
-            WindowEvent::Resized(size) if size.width == 0 || size.height == 0 => {}
+            // Minimized: keep the grids, don't reflow to a tiny size. Windows
+            // reports 0x0 or the size of the minimized caption (160x28).
+            WindowEvent::Resized(size)
+                if size.width == 0
+                    || size.height == 0
+                    || state.window.is_minimized() == Some(true) => {}
             WindowEvent::Resized(size) => {
                 // A resized window needs a fresh frame right away.
                 state.reveal = None;
