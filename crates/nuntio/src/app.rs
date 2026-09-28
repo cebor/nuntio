@@ -753,10 +753,19 @@ impl App {
     }
 
     /// The debug server runs: open the window in the background and keep
-    /// it acting as focused.
+    /// it acting as focused; `headless` keeps it off-screen.
     #[cfg(feature = "debug-server")]
-    pub fn enable_debug_server(&mut self) {
+    pub fn enable_debug_server(&mut self, headless: bool) {
         self.debug.enabled = true;
+        self.debug.headless = headless;
+    }
+
+    /// The window is kept off-screen for the debug server.
+    fn headless(&self) -> bool {
+        #[cfg(feature = "debug-server")]
+        return self.debug.headless;
+        #[cfg(not(feature = "debug-server"))]
+        false
     }
 
     pub fn into_result(self) -> Result<()> {
@@ -831,6 +840,18 @@ impl App {
         // Driven remotely: don't take the focus from the user's window.
         #[cfg(feature = "debug-server")]
         let attrs = attrs.with_active(!self.debug.enabled);
+        // Headless: shown, since hidden windows get no redraws on Windows,
+        // but where nobody sees it.
+        let attrs = if self.headless() {
+            let attrs = attrs.with_position(PhysicalPosition::new(-32000, -32000));
+            #[cfg(windows)]
+            let attrs = winit::platform::windows::WindowAttributesExtWindows::with_skip_taskbar(
+                attrs, true,
+            );
+            attrs
+        } else {
+            attrs
+        };
         // App id / WM_CLASS, matching the .desktop file (Wayland and X11).
         #[cfg(target_os = "linux")]
         let attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
@@ -895,7 +916,9 @@ impl App {
         }
         // macOS centered the window at its first size.
         #[cfg(target_os = "macos")]
-        center(&state.window);
+        if !self.headless() {
+            center(&state.window);
+        }
         state.window.set_visible(true);
         state.resize_terms(&self.config);
         #[cfg(feature = "debug-server")]

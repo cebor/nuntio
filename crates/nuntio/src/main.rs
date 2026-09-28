@@ -56,6 +56,8 @@ Debugging:
       --debug-server <file>     Accept remote control on 127.0.0.1; the port and
                                 token are written to <file>, the log next to it
                                 as nuntio.log (see `cargo xtask drive`)
+      --headless                With --debug-server: keep the window off-screen
+                                and out of the taskbar
 ";
 #[cfg(not(feature = "debug-server"))]
 const DEBUG_HELP: &str = "";
@@ -67,6 +69,8 @@ struct Args {
     startup: Startup,
     #[cfg(feature = "debug-server")]
     debug_server: Option<PathBuf>,
+    #[cfg(feature = "debug-server")]
+    headless: bool,
 }
 
 fn parse_args() -> Result<Args, lexopt::Error> {
@@ -80,6 +84,8 @@ fn parse_args() -> Result<Args, lexopt::Error> {
             Long("log-level") => args.log_level = Some(parser.value()?.string()?),
             #[cfg(feature = "debug-server")]
             Long("debug-server") => args.debug_server = Some(parser.value()?.into()),
+            #[cfg(feature = "debug-server")]
+            Long("headless") => args.headless = true,
             Long("working-directory") => {
                 args.startup.working_directory = Some(parser.value()?.into());
             }
@@ -247,9 +253,13 @@ fn main() -> Result<()> {
         event_loop.create_proxy(),
     );
     #[cfg(feature = "debug-server")]
-    if let Some(state_file) = &args.debug_server {
-        app::debug_server::start(state_file, event_loop.create_proxy())?;
-        app.enable_debug_server();
+    match &args.debug_server {
+        Some(state_file) => {
+            app::debug_server::start(state_file, event_loop.create_proxy())?;
+            app.enable_debug_server(args.headless);
+        }
+        None if args.headless => anyhow::bail!("--headless needs --debug-server"),
+        None => {}
     }
     event_loop.run_app(&mut app).context("event loop failed")?;
     app.into_result()

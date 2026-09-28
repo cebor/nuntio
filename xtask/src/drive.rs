@@ -20,9 +20,11 @@ use crate::{root, run};
 const USAGE: &str = "\
 usage: cargo xtask drive <command>
 
-  start [--release] [--size WxH] [--config <file>] [-- <command>...]
+  start [--visible] [--release] [--size WxH] [--config <file>] [-- <command>...]
                           build nuntio with the debug server and start it in
-                          the background (with an empty config by default)
+                          the background (with an empty config by default);
+                          headless unless --visible: off-screen on Windows and
+                          macOS, under Xvfb on Linux (needs xvfb-run)
   stop                    quit it
   state                   window, tabs, panes, banner, idle time as JSON
   text [--pane N]         the visible lines of a pane
@@ -268,6 +270,7 @@ fn wait(timeout: Duration, what: &str, mut done: impl FnMut() -> Result<bool>) -
 
 fn start(args: &mut Args) -> Result<()> {
     let release = args.flag("--release");
+    let visible = args.flag("--visible");
     let size = args.option("--size")?;
     let config = args.option("--config")?;
     let command = match args.0.iter().position(|a| a == "--") {
@@ -312,17 +315,19 @@ fn start(args: &mut Args) -> Result<()> {
         .join(profile)
         .join(format!("nuntio{}", std::env::consts::EXE_SUFFIX));
     // nuntio writes its log next to the state file itself.
-    let mut argv = vec![
+    let argv = vec![
         "--debug-server".to_owned(),
         state_file().to_string_lossy().into_owned(),
         "--config".to_owned(),
         config.to_string_lossy().into_owned(),
     ];
+    let mut launch = launch(binary, argv, !visible);
     if !command.is_empty() {
-        argv.push("-e".to_owned());
-        argv.extend(command);
+        launch.args.push("-e".to_owned());
+        launch.args.extend(command);
     }
-    let mut child = Detached::spawn(&binary, &argv).context("failed to start nuntio")?;
+    let headless = launch.headless;
+    let mut child = Detached::spawn(&launch).context("failed to start nuntio")?;
 
     let started = Instant::now();
     loop {
@@ -346,8 +351,67 @@ fn start(args: &mut Args) -> Result<()> {
             "height": height.parse::<u32>()?,
         }))?;
     }
-    println!("nuntio is running (pid {})", child.pid());
+    let mode = if headless { "headless" } else { "visible" };
+    println!("nuntio is running {mode} (pid {})", child.pid());
     Ok(())
+}
+
+/// How nuntio is started.
+struct Launch {
+    program: PathBuf,
+    args: Vec<String>,
+    /// Environment variables the program must not see (Linux only).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    env_remove: &'static [&'static str],
+    headless: bool,
+}
+
+/// Start `nuntio` with `args`, headless if `headless` and possible. On
+/// Linux that means an X server without a screen (Xvfb): Wayland windows
+/// can be neither hidden nor moved away, so Wayland is kept out of it.
+/// Elsewhere nuntio keeps its window off-screen itself.
+fn launch(nuntio: PathBuf, mut args: Vec<String>, headless: bool) -> Launch {
+    let plain = |args| Launch {
+        program: nuntio.clone(),
+        args,
+        env_remove: &[],
+        headless: false,
+    };
+    if !headless {
+        return plain(args);
+    }
+    if cfg!(target_os = "linux") {
+        let Some(xvfb_run) = on_path("xvfb-run") else {
+            eprintln!("xvfb-run is not installed (package xvfb): starting a visible window");
+            return plain(args);
+        };
+        let mut wrapped = vec![
+            "-a".to_owned(),
+            "-s".to_owned(),
+            "-screen 0 1920x1080x24".to_owned(),
+            nuntio.to_string_lossy().into_owned(),
+        ];
+        wrapped.append(&mut args);
+        return Launch {
+            program: xvfb_run,
+            args: wrapped,
+            env_remove: &["WAYLAND_DISPLAY", "WAYLAND_SOCKET"],
+            headless: true,
+        };
+    }
+    args.push("--headless".to_owned());
+    Launch {
+        headless: true,
+        ..plain(args)
+    }
+}
+
+/// Where a program is on the `PATH`.
+fn on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// nuntio started so that it outlives the driver and doesn't hold on to
@@ -371,7 +435,8 @@ struct Detached {
 
 #[cfg(windows)]
 impl Detached {
-    fn spawn(program: &Path, args: &[String]) -> std::io::Result<Self> {
+    /// `launch.env_remove` is only used on Linux.
+    fn spawn(launch: &Launch) -> std::io::Result<Self> {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::{
@@ -379,8 +444,8 @@ impl Detached {
             PROCESS_INFORMATION, STARTUPINFOW,
         };
 
-        let mut line = quote(&program.to_string_lossy());
-        for arg in args {
+        let mut line = quote(&launch.program.to_string_lossy());
+        for arg in &launch.args {
             line.push(' ');
             line.push_str(&quote(arg));
         }
@@ -453,10 +518,14 @@ impl Drop for Detached {
 
 #[cfg(unix)]
 impl Detached {
-    fn spawn(program: &Path, args: &[String]) -> std::io::Result<Self> {
+    fn spawn(launch: &Launch) -> std::io::Result<Self> {
         use std::os::unix::process::CommandExt;
-        let child = Command::new(program)
-            .args(args)
+        let mut command = Command::new(&launch.program);
+        for name in launch.env_remove {
+            command.env_remove(name);
+        }
+        let child = command
+            .args(&launch.args)
             .current_dir(root())
             .stdin(Stdio::null())
             .stdout(Stdio::null())

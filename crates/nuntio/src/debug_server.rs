@@ -180,6 +180,9 @@ enum ButtonName {
 pub struct DebugState {
     /// The server runs: the window acts as focused all the time.
     pub enabled: bool,
+    /// The window stays off-screen and out of the taskbar. Not hidden:
+    /// hidden windows get no redraws on Windows.
+    pub headless: bool,
     /// When a pane last had output, for `idle_ms`.
     pub last_output: Option<Instant>,
     recording: Option<Recording>,
@@ -431,6 +434,8 @@ impl App {
                 "scale": state.window.scale_factor(),
                 "focused": state.focused,
                 "maximized": state.window.is_maximized(),
+                "position": state.window.outer_position().ok().map(|p| [p.x, p.y]),
+                "headless": self.debug.headless,
             },
             "cell": { "width": cell.width, "height": cell.height },
             "font_size": self.font_size,
