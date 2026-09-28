@@ -718,12 +718,21 @@ impl Core {
             let option = option_as_alt(self.config.macos.option_as_meta);
             state.window.set_option_as_alt(option);
         }
-        let rebuilt = old.window.gpu_acceleration != self.config.window.gpu_acceleration;
-        if rebuilt {
-            let software = !self.config.window.gpu_acceleration;
-            match self.rebuild_renderer(state, software, false) {
-                Ok(renderer_warnings) => warnings.extend(renderer_warnings),
-                Err(err) => warnings.push(format!("failed to switch the renderer: {err:#}")),
+        let software = !self.config.window.gpu_acceleration;
+        let mut rebuilt = false;
+        // Only switch if that gives another kind of renderer: on macOS, with
+        // no software adapter, the successor would run on the GPU again.
+        if old.window.gpu_acceleration != self.config.window.gpu_acceleration
+            && software != state.renderer.software()
+        {
+            if software && !state.renderer.offers_software() {
+                warnings.push(NO_SOFTWARE_RENDERER.into());
+            } else {
+                rebuilt = true;
+                match self.rebuild_renderer(state, software, false) {
+                    Ok(renderer_warnings) => warnings.extend(renderer_warnings),
+                    Err(err) => warnings.push(format!("failed to switch the renderer: {err:#}")),
+                }
             }
         }
         // A rebuilt renderer has the new family already.

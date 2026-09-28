@@ -233,6 +233,12 @@ impl Renderer {
         self.gpu.software()
     }
 
+    /// A software renderer could be created for the window (see
+    /// `GpuContext::offers_software`).
+    pub fn offers_software(&self) -> bool {
+        self.gpu.offers_software()
+    }
+
     /// Warning about the font given to `new`, if any.
     pub fn take_font_warning(&mut self) -> Option<String> {
         self.font_warning.take()

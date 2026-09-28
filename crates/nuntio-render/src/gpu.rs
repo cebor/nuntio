@@ -194,6 +194,20 @@ impl GpuContext {
         }
     }
 
+    /// A software adapter could present to the window: `adapters` offers
+    /// one to a successor. Without the surface, there's no telling.
+    pub fn offers_software(&self) -> bool {
+        let Some(surface) = &self.surface else {
+            return true;
+        };
+        pollster::block_on(self.instance.enumerate_adapters(wgpu::Backends::all()))
+            .iter()
+            .any(|adapter| {
+                adapter.get_info().device_type == wgpu::DeviceType::Cpu
+                    && adapter.is_surface_supported(surface)
+            })
+    }
+
     /// Create the surface for `window` again after `release_surface`, with
     /// the same configuration, for when no successor could be created.
     pub fn restore_surface<W>(&mut self, window: W) -> Result<(), GpuError>
