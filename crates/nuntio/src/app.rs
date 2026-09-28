@@ -855,8 +855,10 @@ impl Core {
     /// Swap the window's renderer for a new one. The old one gives up the
     /// window's surface first, as a window takes only one swapchain. If the
     /// renderer for `software` can't be created, the other kind is tried, so
-    /// the window doesn't end up without one. Returns the warnings about the
-    /// new renderer, and an error only if neither could be created. `quiet`:
+    /// the window doesn't end up without one. If neither can be created, the
+    /// old renderer takes the surface back and keeps drawing, with a warning
+    /// that says so. Returns the warnings about the new renderer, and an
+    /// error only if the window is left without one. `quiet`:
     /// leave out those that only repeat the setup (the font, no software
     /// renderer), for a renderer that replaces a lost one.
     fn rebuild_renderer(
@@ -875,14 +877,32 @@ impl Core {
                 }
                 renderer
             }
-            Err(err) => {
-                warnings.push(format!(
-                    "failed to create the {} renderer, using the {} one instead: {err:#}",
-                    kind(software),
-                    kind(!software),
-                ));
-                self.create_renderer(&state.window, state.transparent, !software)?
-            }
+            Err(err) => match self.create_renderer(&state.window, state.transparent, !software) {
+                Ok(renderer) => {
+                    warnings.push(format!(
+                        "failed to create the {} renderer, using the {} one instead: {err:#}",
+                        kind(software),
+                        kind(!software),
+                    ));
+                    renderer
+                }
+                Err(fallback) => {
+                    let failure = format!(
+                        "{} renderer: {err:#}; {} renderer: {fallback:#}",
+                        kind(software),
+                        kind(!software),
+                    );
+                    state
+                        .renderer
+                        .restore_surface(state.window.clone())
+                        .with_context(|| format!("no renderer left ({failure})"))?;
+                    state.window.request_redraw();
+                    warnings.push(format!(
+                        "failed to switch the renderer, keeping the current one ({failure})"
+                    ));
+                    return Ok(warnings);
+                }
+            },
         };
         if !quiet {
             warnings.extend(renderer.take_font_warning());

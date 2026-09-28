@@ -44,6 +44,8 @@ pub struct GpuOptions {
 }
 
 pub struct GpuContext {
+    /// Kept to create the surface anew (see `restore_surface`).
+    instance: wgpu::Instance,
     /// `None` once released for a successor on the same window.
     surface: Option<wgpu::Surface<'static>>,
     pub(crate) device: wgpu::Device,
@@ -84,6 +86,7 @@ impl GpuContext {
                 Ok((device, queue, config, transparent)) => {
                     tracing::info!(adapter = ?info, "selected GPU adapter");
                     let context = Self {
+                        instance,
                         surface: Some(surface),
                         device,
                         queue,
@@ -116,13 +119,28 @@ impl GpuContext {
 
     /// Give up the window's surface. A window takes only one swapchain at a
     /// time (DX12, Vulkan), so a successor can only be created after this.
-    /// Frames report `Lost` from now on.
+    /// Frames report `Lost` from now on, until `restore_surface`.
     pub fn release_surface(&mut self) {
         self.surface = None;
         // The last frame's back buffer is kept by the device until its
         // submission is cleaned up, and with it the swapchain (on DX12 the
         // successor's configure fails with "Access is denied").
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Create the surface for `window` again after `release_surface`, with
+    /// the same configuration, for when no successor could be created.
+    pub fn restore_surface<W>(&mut self, window: W) -> Result<(), GpuError>
+    where
+        W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
+    {
+        let surface = self.instance.create_surface(window)?;
+        configure_checked(&surface, &self.device, &self.config)?;
+        self.surface = Some(surface);
+        self.reconfigure = false;
+        #[cfg(target_os = "macos")]
+        self.match_srgb();
+        Ok(())
     }
 
     /// Have macOS convert the frames from sRGB, which the theme colors are,
@@ -316,11 +334,21 @@ fn setup(
     config.present_mode = wgpu::PresentMode::AutoVsync;
     config.desired_maximum_frame_latency = 1;
 
-    // Uncaptured, a configure error panics.
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    surface.configure(&device, &config);
-    if let Some(err) = pollster::block_on(scope.pop()) {
-        return Err(GpuError::Configure(err.to_string()));
-    }
+    configure_checked(surface, &device, &config)?;
     Ok((device, queue, config, transparent))
+}
+
+/// Configure `surface`, returning the error instead of panicking on it, as an
+/// uncaptured configure error would.
+fn configure_checked(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> Result<(), GpuError> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    surface.configure(device, config);
+    match pollster::block_on(scope.pop()) {
+        Some(err) => Err(GpuError::Configure(err.to_string())),
+        None => Ok(()),
+    }
 }

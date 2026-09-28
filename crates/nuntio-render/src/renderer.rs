@@ -212,9 +212,20 @@ impl Renderer {
     }
 
     /// Give up the window's surface, so that a new renderer can be created
-    /// for the same window. Frames report `Lost` until then.
+    /// for the same window. Frames report `Lost` until then, or until
+    /// `restore_surface`.
     pub fn release_surface(&mut self) {
         self.gpu.release_surface();
+    }
+
+    /// Take the window's surface back after `release_surface`, when no new
+    /// renderer could be created. `window` is the one this renderer was
+    /// created for.
+    pub fn restore_surface<W>(&mut self, window: W) -> Result<(), GpuError>
+    where
+        W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
+    {
+        self.gpu.restore_surface(window)
     }
 
     /// Drawing happens on the CPU (a software adapter).
