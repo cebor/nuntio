@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-nuntio is a terminal emulator in Rust for Linux, macOS and Windows, modeled on iTerm2: one window, tabs, split panes, GPU rendering, TOML config with hot reload.
+nuntio is a terminal emulator in Rust for Linux, macOS and Windows: one window, tabs, split panes, GPU rendering, TOML config with hot reload.
 
 ## Commands
 

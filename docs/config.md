@@ -186,7 +186,7 @@ option_as_meta = "none"
 
 ### `[status_bar]`
 
-A bar with live system graphs and the date and time, as in iTerm2. It is off by default.
+A bar with live system graphs and the date and time. It is off by default.
 
 ![The status bar with CPU, memory and network graphs, the battery level and the date](../assets/screenshots/status-bar.png)
 
@@ -196,7 +196,7 @@ A bar with live system graphs and the date and time, as in iTerm2. It is off by 
 | `position` | string | `"bottom"` | `"bottom"`: at the bottom edge of the window. `"top"`: right below the tab bar. |
 | `items` | list of strings | `["cpu", "memory", "network", "battery", "datetime"]` | What the bar shows, in this order, and springs (`"<->"`) between them. See [Springs](#springs). Leave an item out to hide it; each may appear only once. |
 | `datetime_format` | string | `"%a %d %b %H:%M"` | Format of the date and time in [strftime syntax](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). The default shows `Fri 25 Sep 10:50`; `"%d.%m.%Y %H:%M"` shows `25.09.2026 10:50`. |
-| `rainbow` | bool | `false` | Give each item its own color, spread evenly around the color wheel, as iTerm2\'s auto-rainbow does. The colors are lighter on dark themes and darker on light ones. Separators and graph tracks stay neutral. |
+| `rainbow` | bool | `false` | Give each item its own color, spread evenly around the color wheel. The colors are lighter on dark themes and darker on light ones. Separators and graph tracks stay neutral. |
 
 Each item starts with an icon:
 
@@ -208,7 +208,7 @@ Each item starts with an icon:
 
 #### Springs
 
-A spring `"<->"` is a flexible gap, as in iTerm2: the space the items don't need is shared evenly among the springs, pushing the items apart. A list may contain any number of them.
+A spring `"<->"` is a flexible gap: the space the items don't need is shared evenly among the springs, pushing the items apart. A list may contain any number of them.
 
 ```toml
 # Graphs on the left, date and time on the right:
