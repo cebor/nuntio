@@ -10,7 +10,10 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::state::{App, Entry, Focus, Mode, PickTarget, Row, Tone, bar_preview};
+use crate::state::{
+    App, Entry, Focus, InputMode, ItemsMode, Mode, PickTarget, PickerMode, Row, SearchMode, Tone,
+    bar_preview,
+};
 use crate::widgets::{Pick, TextInput};
 
 const ACCENT: Color = Color::Cyan;
@@ -59,199 +62,184 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
 
     match &app.mode {
         Mode::Normal => {}
-        Mode::Picker { picker, target, .. } => {
-            let filter_line = u16::from(picker.filter.is_some());
-            // At least one line, for "No matches".
-            let area = popup(
-                frame.area(),
-                60,
-                picker.visible.len().max(1) as u16 + 2 + filter_line,
-            );
-            frame.render_widget(Clear, area);
-            let block = Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title(format!(" {} ", picker.title))
-                .border_style(Style::new().fg(ACCENT));
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
-            let list_area = match &picker.filter {
-                Some(filter) => {
-                    let [filter_area, list_area] =
-                        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
-                    let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(filter)]);
-                    frame.render_widget(Paragraph::new(line), filter_area);
-                    frame.set_cursor_position(Position::new(
-                        filter_area.x + 2 + filter.width() as u16,
-                        filter_area.y,
-                    ));
-                    list_area
-                }
-                None => inner,
-            };
-            let theme_target = matches!(target, PickTarget::Theme(_));
-            let items: Vec<ListItem> = picker
-                .visible
-                .iter()
-                .enumerate()
-                .map(|(index, &entry)| {
-                    let mut spans = Vec::new();
-                    if theme_target
-                        && let Some(i) = entry
-                        && let Pick::Value(name) = &picker.choices[i].pick
-                        && let Some(theme) = app.themes.get(name)
-                    {
-                        spans.extend(swatch(theme, 8, index == picker.selected));
-                        spans.push(Span::raw(" "));
-                    }
-                    let label = picker.label(entry);
-                    let style = match entry {
-                        Some(i) if picker.choices[i].pick == Pick::Unset => tone(Tone::Dim),
-                        None => tone(Tone::Accent),
-                        _ => Style::new(),
-                    };
-                    spans.push(Span::styled(label, style));
-                    ListItem::new(Line::from(spans))
-                })
-                .collect();
-            if items.is_empty() {
-                let empty = Line::styled("No matches", tone(Tone::Dim));
-                frame.render_widget(Paragraph::new(empty), list_area);
-            }
-            let mut state = ListState::default().with_selected(Some(picker.selected));
-            let list = List::new(items).highlight_style(selected_style(true));
-            frame.render_stateful_widget(list, list_area, &mut state);
-        }
-        Mode::Input {
-            input,
-            title,
-            problem,
-            note,
-            ..
-        } => {
-            let area = popup(frame.area(), 60, 5);
-            frame.render_widget(Clear, area);
-            let block = Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title(format!(" {title} "))
-                .border_style(Style::new().fg(ACCENT));
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
-            let [line_area, _, info_area] = Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .areas(inner);
-            draw_input(frame, line_area, input);
-            let info = match (problem, note) {
-                (Some(problem), _) => Span::styled(problem.as_str(), tone(Tone::Error)),
-                (None, Some((t, note))) => Span::styled(note.as_str(), tone(*t)),
-                (None, None) => Span::styled("Enter to apply, Esc to cancel", tone(Tone::Dim)),
-            };
-            frame.render_widget(Paragraph::new(Line::from(info)), info_area);
-        }
-        Mode::Items { setting, selected } => {
-            let entries = app.item_entries(setting);
-            // Preview and a rule above the list.
-            let area = popup(frame.area(), 44, entries.len() as u16 + 4);
-            frame.render_widget(Clear, area);
-            let block = Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title(format!(" {} ", setting.label))
-                .border_style(Style::new().fg(ACCENT));
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
-            let [preview_area, rule_area, list_area] = Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(1),
-            ])
-            .areas(inner);
-            let width = inner.width as usize;
-            let preview = bar_preview(&entries, width.saturating_sub(2));
-            frame.render_widget(
-                Paragraph::new(Line::from(format!(" {preview}"))).style(tone(Tone::Accent)),
-                preview_area,
-            );
-            frame.render_widget(
-                Paragraph::new("─".repeat(width)).style(tone(Tone::Dim)),
-                rule_area,
-            );
-            let items: Vec<ListItem> = entries
-                .iter()
-                .map(|entry| match *entry {
-                    Entry::Item { value, on } => {
-                        let mark = if on { "[x] " } else { "[ ] " };
-                        if app.item_disabled(value) {
-                            // Switched off elsewhere, but placed here as usual.
-                            let style = tone(Tone::Warn);
-                            let style = if on {
-                                style
-                            } else {
-                                style.add_modifier(Modifier::DIM)
-                            };
-                            let text = format!("{mark}{value} (off under Updates)");
-                            return ListItem::new(Line::styled(text, style));
-                        }
-                        let style = if on { Style::new() } else { tone(Tone::Dim) };
-                        ListItem::new(Line::styled(format!("{mark}{value}"), style))
-                    }
-                    Entry::Spring { implicit } => {
-                        let label = if implicit {
-                            " spring (automatic) "
-                        } else {
-                            " spring "
-                        };
-                        ListItem::new(Line::styled(spring_line(label, width), {
-                            let style = tone(Tone::Accent);
-                            if implicit {
-                                style.add_modifier(Modifier::DIM)
-                            } else {
-                                style
-                            }
-                        }))
-                    }
-                })
-                .collect();
-            let mut state = ListState::default().with_selected(Some(*selected));
-            let list = List::new(items).highlight_style(selected_style(true));
-            frame.render_stateful_widget(list, list_area, &mut state);
-        }
-        Mode::Search {
-            input,
-            results,
-            selected,
-        } => {
-            let area = popup(frame.area(), 60, results.len() as u16 + 3);
-            frame.render_widget(Clear, area);
-            let block = Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title(" Search ")
-                .border_style(Style::new().fg(ACCENT));
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
-            let [line_area, list_area] =
+        Mode::Picker(mode) => draw_picker(frame, app, mode),
+        Mode::Input(mode) => draw_input_popup(frame, mode),
+        Mode::Items(mode) => draw_items(frame, app, mode),
+        Mode::Search(mode) => draw_search(frame, app, mode),
+    }
+}
+
+/// A bordered popup of about `width`×`height` in the middle of the screen,
+/// over what is below it. Returns the area inside the border.
+fn open_popup(frame: &mut Frame, width: u16, height: u16, title: &str) -> Rect {
+    let area = popup(frame.area(), width, height);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(format!(" {title} "))
+        .border_style(Style::new().fg(ACCENT));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    inner
+}
+
+/// A list with its `selected` line highlighted.
+fn draw_list(frame: &mut Frame, area: Rect, items: Vec<ListItem>, selected: usize) {
+    let mut state = ListState::default().with_selected(Some(selected));
+    let list = List::new(items).highlight_style(selected_style(true));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_picker(frame: &mut Frame, app: &App, mode: &PickerMode) {
+    let picker = &mode.picker;
+    let filter_line = u16::from(picker.filter.is_some());
+    // At least one line, for "No matches".
+    let height = picker.visible.len().max(1) as u16 + 2 + filter_line;
+    let inner = open_popup(frame, 60, height, &picker.title);
+    let list_area = match &picker.filter {
+        Some(filter) => {
+            let [filter_area, list_area] =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
-            draw_input(frame, line_area, input);
-            let items: Vec<ListItem> = results
-                .iter()
-                .map(|&(section, row)| {
-                    let section = Section::ALL[section];
-                    let row = app.rows(section)[row];
-                    ListItem::new(Line::from(vec![
-                        Span::styled(format!("{:<12}", section.label()), tone(Tone::Dim)),
-                        Span::raw(app.row_label(row)),
-                    ]))
-                })
-                .collect();
-            let mut state = ListState::default().with_selected(Some(*selected));
-            let list = List::new(items).highlight_style(selected_style(true));
-            frame.render_stateful_widget(list, list_area, &mut state);
+            let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(filter)]);
+            frame.render_widget(Paragraph::new(line), filter_area);
+            frame.set_cursor_position(Position::new(
+                filter_area.x + 2 + filter.width() as u16,
+                filter_area.y,
+            ));
+            list_area
+        }
+        None => inner,
+    };
+    let theme_target = matches!(mode.target, PickTarget::Theme(_));
+    let items: Vec<ListItem> = picker
+        .visible
+        .iter()
+        .enumerate()
+        .map(|(index, &entry)| {
+            let mut spans = Vec::new();
+            if theme_target
+                && let Some(i) = entry
+                && let Pick::Value(name) = &picker.choices[i].pick
+                && let Some(theme) = app.themes.get(name)
+            {
+                spans.extend(swatch(theme, 8, index == picker.selected));
+                spans.push(Span::raw(" "));
+            }
+            let label = picker.label(entry);
+            let style = match entry {
+                Some(i) if picker.choices[i].pick == Pick::Unset => tone(Tone::Dim),
+                None => tone(Tone::Accent),
+                _ => Style::new(),
+            };
+            spans.push(Span::styled(label, style));
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    if items.is_empty() {
+        let empty = Line::styled("No matches", tone(Tone::Dim));
+        frame.render_widget(Paragraph::new(empty), list_area);
+    }
+    draw_list(frame, list_area, items, picker.selected);
+}
+
+fn draw_input_popup(frame: &mut Frame, mode: &InputMode) {
+    let inner = open_popup(frame, 60, 5, &mode.title);
+    let [line_area, _, info_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    draw_input(frame, line_area, &mode.input);
+    let info = match (&mode.problem, &mode.note) {
+        (Some(problem), _) => Span::styled(problem.as_str(), tone(Tone::Error)),
+        (None, Some((t, note))) => Span::styled(note.as_str(), tone(*t)),
+        (None, None) => Span::styled("Enter to apply, Esc to cancel", tone(Tone::Dim)),
+    };
+    frame.render_widget(Paragraph::new(Line::from(info)), info_area);
+}
+
+fn draw_items(frame: &mut Frame, app: &App, mode: &ItemsMode) {
+    let entries = app.item_entries(mode.setting);
+    // Preview and a rule above the list.
+    let inner = open_popup(frame, 44, entries.len() as u16 + 4, mode.setting.label);
+    let [preview_area, rule_area, list_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(inner);
+    let width = inner.width as usize;
+    let preview = bar_preview(&entries, width.saturating_sub(2));
+    frame.render_widget(
+        Paragraph::new(Line::from(format!(" {preview}"))).style(tone(Tone::Accent)),
+        preview_area,
+    );
+    frame.render_widget(
+        Paragraph::new("─".repeat(width)).style(tone(Tone::Dim)),
+        rule_area,
+    );
+    let items = entries
+        .iter()
+        .map(|entry| item_line(app, *entry, width))
+        .collect();
+    draw_list(frame, list_area, items, mode.selected);
+}
+
+/// A line in the editor of an ordered set: a checkbox or a spring.
+fn item_line(app: &App, entry: Entry, width: usize) -> ListItem<'static> {
+    let dim_unless = |style: Style, on: bool| {
+        if on {
+            style
+        } else {
+            style.add_modifier(Modifier::DIM)
+        }
+    };
+    match entry {
+        Entry::Item { value, on } => {
+            let mark = if on { "[x] " } else { "[ ] " };
+            if app.item_disabled(value) {
+                // Switched off elsewhere, but placed here as usual.
+                let text = format!("{mark}{value} (off under Updates)");
+                return ListItem::new(Line::styled(text, dim_unless(tone(Tone::Warn), on)));
+            }
+            ListItem::new(Line::styled(
+                format!("{mark}{value}"),
+                dim_unless(Style::new(), on),
+            ))
+        }
+        Entry::Spring { implicit } => {
+            let label = if implicit {
+                " spring (automatic) "
+            } else {
+                " spring "
+            };
+            let style = dim_unless(tone(Tone::Accent), !implicit);
+            ListItem::new(Line::styled(spring_line(label, width), style))
         }
     }
 }
 
-/// A centered area of the given size, clamped to `area`.
+fn draw_search(frame: &mut Frame, app: &App, mode: &SearchMode) {
+    let inner = open_popup(frame, 60, mode.results.len() as u16 + 3, "Search");
+    let [line_area, list_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+    draw_input(frame, line_area, &mode.input);
+    let items = mode
+        .results
+        .iter()
+        .map(|&(section, row)| {
+            let section = Section::ALL[section];
+            let row = app.rows(section)[row];
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<12}", section.label()), tone(Tone::Dim)),
+                Span::raw(app.row_label(row)),
+            ]))
+        })
+        .collect();
+    draw_list(frame, list_area, items, mode.selected);
+}
+
 /// ` ⟷ ──── spring ──────`, `width` columns wide.
 fn spring_line(label: &str, width: usize) -> String {
     let rest = width.saturating_sub(label.width() + 4);
@@ -259,6 +247,7 @@ fn spring_line(label: &str, width: usize) -> String {
     format!(" ⟷ {}{label}{}", "─".repeat(left), "─".repeat(rest - left))
 }
 
+/// A centered area of the given size, clamped to `area`.
 fn popup(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(4));
     let height = height.min(area.height.saturating_sub(2));
@@ -521,15 +510,15 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("R", "restore"),
             ("q", "quit"),
         ],
-        Mode::Picker { picker, .. } if picker.filter.is_some() => &[
+        Mode::Picker(PickerMode { picker, .. }) if picker.filter.is_some() => &[
             ("type", "filter"),
             ("↑↓", "choose"),
             ("⏎", "apply"),
             ("Esc", "cancel"),
         ],
-        Mode::Picker { .. } => &[("↑↓", "choose"), ("⏎", "apply"), ("Esc", "cancel")],
-        Mode::Input { .. } => &[("⏎", "apply"), ("Esc", "cancel"), ("Ctrl+U", "clear")],
-        Mode::Items { .. } => &[
+        Mode::Picker(_) => &[("↑↓", "choose"), ("⏎", "apply"), ("Esc", "cancel")],
+        Mode::Input(_) => &[("⏎", "apply"), ("Esc", "cancel"), ("Ctrl+U", "clear")],
+        Mode::Items(_) => &[
             ("↑↓", "move"),
             ("Space", "show/hide"),
             ("Shift+↑↓", "reorder"),
@@ -537,7 +526,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("d", "remove spring"),
             ("⏎/Esc", "done"),
         ],
-        Mode::Search { .. } => &[
+        Mode::Search(_) => &[
             ("type", "search"),
             ("↑↓", "choose"),
             ("⏎", "go"),
