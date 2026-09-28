@@ -10,7 +10,7 @@ use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::font::{CellMetrics, FaceStyle, Fonts};
-use crate::frame::{Frame, UiText};
+use crate::frame::{Frame, Rect, UiText};
 use crate::gpu::{FrameStatus, GpuContext, GpuError};
 use crate::{box_drawing, decoration};
 
@@ -33,6 +33,10 @@ struct Instance {
 }
 
 impl Instance {
+    fn solid_rect(rect: Rect, color: Rgb) -> Self {
+        Self::solid(rect.x, rect.y, rect.width, rect.height, color)
+    }
+
     fn solid(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> Self {
         Self {
             pos: [x, y],
@@ -111,7 +115,7 @@ pub struct Renderer {
     instances: Vec<Instance>,
     /// The instances of each pane and the area they are clipped to, so
     /// glyphs wider than their cell don't reach into the next pane.
-    pane_batches: Vec<(Range<u32>, [f32; 4])>,
+    pane_batches: Vec<(Range<u32>, Rect)>,
     /// Instances from here on are UI (bars, overlays), drawn unclipped.
     ui_start: usize,
     /// Instances from here on are corner cutouts, drawn with their own
@@ -173,101 +177,7 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        };
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("quad"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                texture_entry(1),
-                texture_entry(2),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let shader = device.create_shader_module(wgpu::include_wgsl!("quad.wgsl"));
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("quad"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let create_pipeline = |label, entry_point, blend| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: size_of::<Instance>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![
-                            0 => Float32x2,
-                            1 => Float32x2,
-                            2 => Float32x4,
-                            3 => Float32x4,
-                            4 => Uint32,
-                        ],
-                    })],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry_point),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: gpu.format(),
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let pipeline = create_pipeline("quad", "fs_main", wgpu::BlendState::ALPHA_BLENDING);
-        // Scales what is already drawn by the fragment's alpha.
-        let scale_by_alpha = wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::Zero,
-            dst_factor: wgpu::BlendFactor::SrcAlpha,
-            operation: wgpu::BlendOperation::Add,
-        };
-        let cutout_pipeline = create_pipeline(
-            "corner cutout",
-            "fs_cutout",
-            wgpu::BlendState {
-                color: scale_by_alpha,
-                alpha: scale_by_alpha,
-            },
-        );
+        let (bind_group_layout, pipeline, cutout_pipeline) = create_pipelines(device, gpu.format());
 
         let instance_capacity = 4096;
         let instance_buffer = create_instance_buffer(device, instance_capacity);
@@ -488,53 +398,61 @@ impl Renderer {
         view: &wgpu::TextureView,
         frame: &Frame,
     ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("terminal"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(self.clear_color(frame)),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        if self.instances.is_empty() {
+            return;
+        }
         let (width, height) = self.gpu.size();
-        {
-            let [r, g, b, _] = rgba(frame.background).map(f64::from);
-            let a = if self.gpu.transparent() {
-                f64::from(frame.background_opacity.clamp(0.0, 1.0))
-            } else {
-                1.0
-            };
-            // Blending keeps the target premultiplied, so start that way.
-            let (r, g, b) = if self.gpu.premultiplied() {
-                (r * a, g * a, b * a)
-            } else {
-                (r, g, b)
-            };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("terminal"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            if !self.instances.is_empty() {
-                let ui = self.ui_start as u32;
-                let (cutout, total) = (self.cutout_start as u32, self.instances.len() as u32);
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind_group, &[]);
-                pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-                for (range, area) in &self.pane_batches {
-                    // A pane outside the window has nothing to show.
-                    if let Some([x, y, w, h]) = scissor(*area, (width, height)) {
-                        pass.set_scissor_rect(x, y, w, h);
-                        pass.draw(0..4, range.clone());
-                    }
-                }
-                pass.set_scissor_rect(0, 0, width, height);
-                pass.draw(0..4, ui..cutout);
-                if total > cutout {
-                    pass.set_pipeline(&self.cutout_pipeline);
-                    pass.draw(0..4, cutout..total);
-                }
+        let ui = self.ui_start as u32;
+        let (cutout, total) = (self.cutout_start as u32, self.instances.len() as u32);
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+        for (range, area) in &self.pane_batches {
+            // A pane outside the window has nothing to show.
+            if let Some([x, y, w, h]) = scissor(*area, (width, height)) {
+                pass.set_scissor_rect(x, y, w, h);
+                pass.draw(0..4, range.clone());
             }
+        }
+        pass.set_scissor_rect(0, 0, width, height);
+        pass.draw(0..4, ui..cutout);
+        if total > cutout {
+            pass.set_pipeline(&self.cutout_pipeline);
+            pass.draw(0..4, cutout..total);
+        }
+    }
+
+    /// The frame's background, as the color the pass starts from.
+    fn clear_color(&self, frame: &Frame) -> wgpu::Color {
+        let [r, g, b, _] = rgba(frame.background).map(f64::from);
+        let a = if self.gpu.transparent() {
+            f64::from(frame.background_opacity.clamp(0.0, 1.0))
+        } else {
+            1.0
+        };
+        // Blending keeps the target premultiplied, so start that way.
+        if self.gpu.premultiplied() {
+            wgpu::Color {
+                r: r * a,
+                g: g * a,
+                b: b * a,
+                a,
+            }
+        } else {
+            wgpu::Color { r, g, b, a }
         }
     }
 
@@ -548,8 +466,7 @@ impl Renderer {
             let start = self.instances.len() as u32;
             self.push_pane(pane.snapshot, pane.x, pane.y)?;
             if pane.dim > 0.0 {
-                let [x, y, width, height] = pane.area;
-                let mut veil = Instance::solid(x, y, width, height, pane.snapshot.background);
+                let mut veil = Instance::solid_rect(pane.area, pane.snapshot.background);
                 veil.color[3] = pane.dim.min(1.0);
                 self.instances.push(veil);
             }
@@ -775,53 +692,68 @@ impl Renderer {
         if let Some(sprites) = self.glyphs.get(&key) {
             return Ok(sprites.clone());
         }
+        let sprites: Rc<[Sprite]> = match &key {
+            GlyphKey::Char(c, style) => self.char_sprites(*c, *style, false)?,
+            GlyphKey::Small(c, style) => self.char_sprites(*c, *style, true)?,
+            GlyphKey::Cluster(text, style) => self.font_sprites(text, *style, false)?,
+            GlyphKey::Underline(style) => self.underline_sprites(*style)?,
+        }
+        .into();
+        self.glyphs.insert(key, sprites.clone());
+        Ok(sprites)
+    }
 
-        let (text, style) = match &key {
-            GlyphKey::Char(c, style) | GlyphKey::Small(c, style) => (c.to_string(), *style),
-            GlyphKey::Cluster(s, style) => (s.to_string(), *style),
-            GlyphKey::Underline(style) => return self.underline_sprites(key.clone(), *style),
-        };
-        let small = matches!(key, GlyphKey::Small(..));
+    /// Box-drawing and block characters are drawn to fill the cell exactly,
+    /// like a few symbols that fonts rarely cover (see `box_drawing`); all
+    /// others come from the font.
+    fn char_sprites(
+        &mut self,
+        c: char,
+        style: FaceStyle,
+        small: bool,
+    ) -> Result<Vec<Sprite>, AtlasFull> {
         let metrics = if small {
             self.fonts.small_metrics()
         } else {
             self.fonts.metrics()
         };
-        let queue = &self.gpu.queue;
-        let mut sprites = Vec::new();
-
-        // Box-drawing and block characters are drawn to fill the cell exactly,
-        // like a few symbols that fonts rarely cover (see `box_drawing`).
-        if let GlyphKey::Char(c, _) | GlyphKey::Small(c, _) = key
-            && let Some(mask) =
-                box_drawing::rasterize(c, metrics.width, metrics.height, metrics.stroke)
-        {
-            let region = self
-                .mask_atlas
-                .insert(queue, metrics.width, metrics.height, &mask)
-                .ok_or(AtlasFull)?;
-            sprites.push(Sprite {
-                x: 0,
-                y: 0,
-                region,
-                color: false,
-            });
-        }
-
-        let baseline = metrics.baseline as i32;
-        let glyphs = if sprites.is_empty() {
-            self.fonts.rasterize(&text, style, small)
-        } else {
-            Vec::new()
+        let Some(mask) = box_drawing::rasterize(c, metrics.width, metrics.height, metrics.stroke)
+        else {
+            return self.font_sprites(&c.to_string(), style, small);
         };
-        for glyph in glyphs {
+        let region = self
+            .mask_atlas
+            .insert(&self.gpu.queue, metrics.width, metrics.height, &mask)
+            .ok_or(AtlasFull)?;
+        Ok(vec![Sprite {
+            x: 0,
+            y: 0,
+            region,
+            color: false,
+        }])
+    }
+
+    /// Rasterize `text` with the font into the atlases.
+    fn font_sprites(
+        &mut self,
+        text: &str,
+        style: FaceStyle,
+        small: bool,
+    ) -> Result<Vec<Sprite>, AtlasFull> {
+        let baseline = if small {
+            self.fonts.small_metrics().baseline
+        } else {
+            self.fonts.metrics().baseline
+        } as i32;
+        let mut sprites = Vec::new();
+        for glyph in self.fonts.rasterize(text, style, small) {
             let atlas = if glyph.color {
                 &mut self.color_atlas
             } else {
                 &mut self.mask_atlas
             };
             let region = atlas
-                .insert(queue, glyph.width, glyph.height, &glyph.data)
+                .insert(&self.gpu.queue, glyph.width, glyph.height, &glyph.data)
                 .ok_or(AtlasFull)?;
             sprites.push(Sprite {
                 x: glyph.left,
@@ -830,44 +762,40 @@ impl Renderer {
                 color: glyph.color,
             });
         }
-        let sprites: Rc<[Sprite]> = sprites.into();
-        self.glyphs.insert(key, sprites.clone());
         Ok(sprites)
     }
 
     /// Rasterize a patterned underline into the mask atlas, placed at the
     /// font's underline position but kept inside the cell.
-    fn underline_sprites(
-        &mut self,
-        key: GlyphKey,
-        style: UnderlineStyle,
-    ) -> Result<Rc<[Sprite]>, AtlasFull> {
+    fn underline_sprites(&mut self, style: UnderlineStyle) -> Result<Vec<Sprite>, AtlasFull> {
         let m = self.fonts.metrics();
-        let mut sprites = Vec::new();
-        if let Some(mask) = decoration::rasterize(style, m.width, m.stroke) {
-            let region = self
-                .mask_atlas
-                .insert(&self.gpu.queue, mask.width, mask.height, &mask.data)
-                .ok_or(AtlasFull)?;
-            let y = m.underline_y.min(m.height.saturating_sub(mask.height));
-            sprites.push(Sprite {
-                x: 0,
-                y: y as i32,
-                region,
-                color: false,
-            });
-        }
-        let sprites: Rc<[Sprite]> = sprites.into();
-        self.glyphs.insert(key, sprites.clone());
-        Ok(sprites)
+        let Some(mask) = decoration::rasterize(style, m.width, m.stroke) else {
+            return Ok(Vec::new());
+        };
+        let region = self
+            .mask_atlas
+            .insert(&self.gpu.queue, mask.width, mask.height, &mask.data)
+            .ok_or(AtlasFull)?;
+        let y = m.underline_y.min(m.height.saturating_sub(mask.height));
+        Ok(vec![Sprite {
+            x: 0,
+            y: y as i32,
+            region,
+            color: false,
+        }])
     }
 }
 
-/// The scissor rectangle (x, y, width, height) for an `area` (x, y, width,
-/// height in pixels) on a target of `size`: whole pixels that cover the
-/// area, inside the target. `None` if nothing of it is visible.
-fn scissor(area: [f32; 4], (width, height): (u32, u32)) -> Option<[u32; 4]> {
-    let [x, y, w, h] = area;
+/// The scissor rectangle (x, y, width, height) for an `area` on a target of
+/// `size`: whole pixels that cover the area, inside the target. `None` if
+/// nothing of it is visible.
+fn scissor(area: Rect, (width, height): (u32, u32)) -> Option<[u32; 4]> {
+    let Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    } = area;
     let clamp = |v: f32, max: u32| (v.max(0.0) as u32).min(max);
     let (left, top) = (clamp(x.floor(), width), clamp(y.floor(), height));
     let (right, bottom) = (clamp((x + w).ceil(), width), clamp((y + h).ceil(), height));
@@ -889,6 +817,114 @@ fn unpad_rows(data: &[u8], width: u32, height: u32, padded_row: u32, bgra: bool)
         }
     }
     rgba
+}
+
+/// The layout of the quad shader's bindings, and its two pipelines: one
+/// that draws the quads, one that cuts the window's corners out.
+fn create_pipelines(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> (
+    wgpu::BindGroupLayout,
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+) {
+    let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("quad"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            texture_entry(1),
+            texture_entry(2),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+
+    let shader = device.create_shader_module(wgpu::include_wgsl!("quad.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("quad"),
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
+    });
+    let create_pipeline = |label, entry_point, blend| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: size_of::<Instance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2,
+                        1 => Float32x2,
+                        2 => Float32x4,
+                        3 => Float32x4,
+                        4 => Uint32,
+                    ],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let pipeline = create_pipeline("quad", "fs_main", wgpu::BlendState::ALPHA_BLENDING);
+    // Scales what is already drawn by the fragment's alpha.
+    let scale_by_alpha = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::SrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    };
+    let cutout_pipeline = create_pipeline(
+        "corner cutout",
+        "fs_cutout",
+        wgpu::BlendState {
+            color: scale_by_alpha,
+            alpha: scale_by_alpha,
+        },
+    );
+    (bind_group_layout, pipeline, cutout_pipeline)
 }
 
 fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -936,26 +972,35 @@ fn create_bind_group(
 mod tests {
     use super::*;
 
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     #[test]
     fn scissors_cover_the_area_inside_the_target() {
         let size = (800, 600);
         assert_eq!(
-            scissor([10.0, 20.0, 300.0, 200.0], size),
+            scissor(rect(10.0, 20.0, 300.0, 200.0), size),
             Some([10, 20, 300, 200])
         );
         // Fractional edges round outwards.
         assert_eq!(
-            scissor([10.5, 20.5, 100.0, 100.0], size),
+            scissor(rect(10.5, 20.5, 100.0, 100.0), size),
             Some([10, 20, 101, 101])
         );
         // Cut to the target.
         assert_eq!(
-            scissor([-5.0, 500.0, 900.0, 200.0], size),
+            scissor(rect(-5.0, 500.0, 900.0, 200.0), size),
             Some([0, 500, 800, 100])
         );
         // Nothing visible.
-        assert_eq!(scissor([850.0, 0.0, 100.0, 100.0], size), None);
-        assert_eq!(scissor([0.0, 0.0, 0.0, 100.0], size), None);
+        assert_eq!(scissor(rect(850.0, 0.0, 100.0, 100.0), size), None);
+        assert_eq!(scissor(rect(0.0, 0.0, 0.0, 100.0), size), None);
     }
 
     #[cfg(feature = "capture")]

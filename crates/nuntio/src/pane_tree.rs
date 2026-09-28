@@ -1,5 +1,7 @@
 //! Split layout of a tab: a binary tree of splits with panes as leaves.
 
+use nuntio_render::Rect;
+
 use crate::event::PaneId;
 
 /// Orientation of the line dividing a split.
@@ -28,50 +30,36 @@ impl Direction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Rect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Rect {
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
-    }
-
-    /// Split into two parts along `axis`, leaving a `gap` between them.
-    fn split(self, axis: Axis, ratio: f32, gap: f32) -> (Rect, Rect) {
-        match axis {
-            Axis::Vertical => {
-                let first = ((self.width - gap) * ratio).round();
-                (
-                    Rect {
-                        width: first,
-                        ..self
-                    },
-                    Rect {
-                        x: self.x + first + gap,
-                        width: self.width - first - gap,
-                        ..self
-                    },
-                )
-            }
-            Axis::Horizontal => {
-                let first = ((self.height - gap) * ratio).round();
-                (
-                    Rect {
-                        height: first,
-                        ..self
-                    },
-                    Rect {
-                        y: self.y + first + gap,
-                        height: self.height - first - gap,
-                        ..self
-                    },
-                )
-            }
+/// Split `rect` into two parts along `axis`, leaving a `gap` between them.
+fn split(rect: Rect, axis: Axis, ratio: f32, gap: f32) -> (Rect, Rect) {
+    match axis {
+        Axis::Vertical => {
+            let first = ((rect.width - gap) * ratio).round();
+            (
+                Rect {
+                    width: first,
+                    ..rect
+                },
+                Rect {
+                    x: rect.x + first + gap,
+                    width: rect.width - first - gap,
+                    ..rect
+                },
+            )
+        }
+        Axis::Horizontal => {
+            let first = ((rect.height - gap) * ratio).round();
+            (
+                Rect {
+                    height: first,
+                    ..rect
+                },
+                Rect {
+                    y: rect.y + first + gap,
+                    height: rect.height - first - gap,
+                    ..rect
+                },
+            )
         }
     }
 }
@@ -156,16 +144,9 @@ impl Layout {
 
     /// Divider under a point, with `slop` pixels of extra grab area.
     pub fn divider_at(&self, x: f32, y: f32, slop: f32) -> Option<&Divider> {
-        self.dividers.iter().find(|d| {
-            let r = d.rect;
-            let grab = Rect {
-                x: r.x - slop,
-                y: r.y - slop,
-                width: r.width + 2.0 * slop,
-                height: r.height + 2.0 * slop,
-            };
-            grab.contains(x, y)
-        })
+        self.dividers
+            .iter()
+            .find(|d| d.rect.inset(-slop).contains(x, y))
     }
 }
 
@@ -268,7 +249,7 @@ impl PaneTree {
                     first,
                     second,
                 } => {
-                    let (a, b) = area.split(*axis, *ratio, gap);
+                    let (a, b) = split(area, *axis, *ratio, gap);
                     let rect = match axis {
                         Axis::Vertical => Rect {
                             x: a.x + a.width,

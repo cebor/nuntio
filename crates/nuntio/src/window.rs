@@ -1,48 +1,41 @@
 //! Per-window state: tabs of split panes, layout (tab bar + terminal area),
-//! drawing, and the mouse/keyboard state that belongs to the window.
+//! and the keyboard state that belongs to the window. Pointer input is in
+//! `window_pointer`, putting frames together in `window_frame`.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nuntio_config::{Config, StatusBarPosition, StatusItem, TabTitle};
-use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect, UiText};
-use nuntio_term::{
-    CursorStyle, GridPoint, Link, Rgb, Snapshot, TermHandle, TermMode, TermSize, UnderlineStyle,
-};
+use nuntio_render::{CellMetrics, Rect, Renderer, UiRect, UiText};
+use nuntio_term::{Rgb, TermHandle, TermMode, TermSize};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
 use winit::keyboard::PhysicalKey;
-use winit::window::{ResizeDirection, Window};
+use winit::window::{Fullscreen, Window};
 
 use crate::banner::Banner;
 use crate::event::PaneId;
-use crate::ime;
-use crate::link;
-use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
-use crate::pane_tree::{Divider, Layout, PaneTree, Rect};
+use crate::pane_tree::{Direction, Layout, PaneTree};
 use crate::search_bar::SearchBar;
 use crate::status_bar::{Stats, StatusBar};
-use crate::tab_bar::{BarHit, TabBar, TabLabel, mix};
+use crate::style::{UiMetrics, hairline};
+use crate::tab_bar::{TabBar, TabBarOptions};
 use crate::tab_title::{self, TitleInfo};
 use crate::tabs::Tabs;
 
+#[path = "window_frame.rs"]
+mod frame;
+#[path = "window_pointer.rs"]
+mod pointer;
+
+pub use pointer::{MouseState, TabDrag};
+
 pub const DEFAULT_TITLE: &str = "nuntio";
-pub const BLINK_INTERVAL: Duration = Duration::from_millis(530);
-/// Width of the edge that resizes an undecorated window, in logical pixels.
-const RESIZE_BORDER: f64 = 5.0;
-/// Radius of the window's corners where nuntio rounds them itself (Linux),
-/// in logical pixels, as GNOME's.
-const WINDOW_RADIUS: f64 = 12.0;
+const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 /// Height of the macOS title bar that holds the traffic lights, in logical
 /// pixels. A tab bar in it must be at least as high to keep them centered.
 const TITLEBAR_HEIGHT: f64 = 28.0;
-/// Extra grab area around pane dividers, in logical pixels.
-const DIVIDER_SLOP: f64 = 3.0;
-/// Time between steps while a selection drag scrolls the pane.
-pub const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(50);
-/// Fastest autoscroll, in lines per step.
-const AUTOSCROLL_MAX_LINES: i32 = 5;
 /// How long a tab title is reused before the process info is read again.
 const TITLE_REFRESH: Duration = Duration::from_millis(250);
 /// A new pane is shown once its output has paused this long, so the shell's
@@ -50,7 +43,9 @@ const TITLE_REFRESH: Duration = Duration::from_millis(250);
 const REVEAL_QUIET: Duration = Duration::from_millis(20);
 /// Latest time a new pane is shown, however busy or silent its shell is.
 const REVEAL_MAX: Duration = Duration::from_millis(300);
-
+/// Cells a pane grows or shrinks per resize shortcut, so each press is
+/// clearly visible.
+const RESIZE_STEP_CELLS: u32 = 2;
 /// Holds back frames after a new tab or split opens, until its shell has
 /// drawn its first screen. Otherwise the window flashes the empty pane and
 /// then the startup output line by line, as each read of the pty is drawn.
@@ -211,48 +206,6 @@ impl TabContent {
     }
 }
 
-/// Pointer state for selection, mouse reporting, the tab bar and dividers.
-#[derive(Default)]
-pub struct MouseState {
-    pub position: Option<PhysicalPosition<f64>>,
-    /// Button held down that is reported to the application.
-    pub reported_button: Option<Button>,
-    /// Last cell a motion event was reported for, to avoid duplicates.
-    pub last_reported_cell: Option<(usize, usize)>,
-    /// A local selection drag is in progress.
-    pub selecting: bool,
-    pub clicks: ClickCounter,
-    /// Sub-line remainder of trackpad and high-resolution wheel scrolling,
-    /// in pixels.
-    pub scroll_pixels: f64,
-    /// Tab bar element under the pointer.
-    pub hovered_bar: Option<BarHit>,
-    /// Time of the last click on free tab bar space, to detect double clicks.
-    pub last_bar_click: Option<Instant>,
-    /// A tab is being pressed or dragged to reorder it.
-    pub tab_drag: Option<TabDrag>,
-    /// A pane divider is being dragged.
-    pub divider_drag: Option<Divider>,
-    /// Link under the pointer while the link modifier is held.
-    pub hover_link: Option<(PaneId, Link)>,
-    /// A selection drag is past the top or bottom of the pane and scrolls it.
-    pub autoscroll: Option<Autoscroll>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Autoscroll {
-    /// Lines per step; positive scrolls up into the scrollback.
-    pub lines: i32,
-    pub next: Instant,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct TabDrag {
-    pub index: usize,
-    pub press_x: f64,
-    pub moved: bool,
-}
-
 /// Cursor blinking, only while the application asks for it (DECSCUSR).
 pub struct Blink {
     pub active: bool,
@@ -368,6 +321,11 @@ impl WindowState {
         &mut self.tabs.active_mut().content
     }
 
+    /// The panes of all tabs.
+    pub fn panes(&self) -> impl Iterator<Item = &Pane> {
+        self.tabs.iter().flat_map(|tab| &tab.content.panes)
+    }
+
     /// The terminal of the focused pane in the active tab.
     pub fn term(&self) -> &TermHandle {
         &self.content().focused_pane().term
@@ -427,6 +385,15 @@ impl WindowState {
         self.window.scale_factor()
     }
 
+    /// Cell sizes and scale factor the UI is laid out with.
+    pub fn ui_metrics(&self) -> UiMetrics {
+        UiMetrics {
+            cell: self.renderer.cell_metrics(),
+            small: self.renderer.small_cell_metrics(),
+            scale: self.scale(),
+        }
+    }
+
     fn bar_visible(&self, config: &Config) -> bool {
         self.tabs.len() > 1 || !config.tabs.hide_when_single || self.chrome != Chrome::System
     }
@@ -446,12 +413,13 @@ impl WindowState {
         Some(TabBar::new(
             self.window.inner_size().width as f32,
             self.tabs.len(),
-            self.renderer.cell_metrics(),
-            self.scale(),
-            left_inset as f32,
-            min_height as f32,
-            self.chrome == Chrome::Undecorated,
-            self.update_badge,
+            self.ui_metrics(),
+            TabBarOptions {
+                left_inset: left_inset as f32,
+                min_height: min_height as f32,
+                window_controls: self.chrome == Chrome::Undecorated,
+                update_badge: self.update_badge,
+            },
         ))
     }
 
@@ -460,7 +428,7 @@ impl WindowState {
         if !config.status_bar.visible() {
             return None;
         }
-        let height = StatusBar::height(self.renderer.small_cell_metrics(), self.scale());
+        let height = StatusBar::height(self.ui_metrics());
         let top = match config.status_bar.position {
             StatusBarPosition::Top => self.tab_bar(config).map_or(0.0, |bar| bar.height),
             StatusBarPosition::Bottom => self.window.inner_size().height as f32 - height,
@@ -477,9 +445,7 @@ impl WindowState {
             &config.status_bar.arranged_items(),
             stats,
             datetime,
-            self.renderer.small_cell_metrics(),
-            self.renderer.cell_metrics(),
-            self.scale(),
+            self.ui_metrics(),
         ))
     }
 
@@ -554,7 +520,7 @@ impl WindowState {
 
     /// Thickness of the lines between panes.
     fn divider_width(&self) -> f32 {
-        self.scale().round().max(1.0) as f32
+        hairline(self.scale())
     }
 
     /// Pane layout of the active tab.
@@ -623,312 +589,13 @@ impl WindowState {
         }
     }
 
-    pub fn redraw(
-        &mut self,
-        config: &Config,
-        stats: &Stats,
-        banner: Option<&Banner>,
-    ) -> FrameStatus {
-        self.with_frame(config, stats, banner, |renderer, frame| {
-            renderer.render(frame)
-        })
-        .unwrap_or(FrameStatus::Skipped)
-    }
-
-    /// Put together the frame for the window and hand it to `draw`.
-    /// `None` if there is nothing to draw.
-    pub fn with_frame<R>(
-        &mut self,
-        config: &Config,
-        stats: &Stats,
-        banner: Option<&Banner>,
-        draw: impl FnOnce(&mut Renderer, &Frame) -> R,
-    ) -> Option<R> {
-        let layout = self.layout(config);
-        let focused_id = self.content().focused;
-        let split = layout.panes.len() > 1;
-
-        let mut snapshots: Vec<(Snapshot, Rect, bool)> = Vec::with_capacity(layout.panes.len());
-        for &(id, rect) in &layout.panes {
-            let Some(pane) = self.tabs.active().content.pane(id) else {
-                continue;
-            };
-            let is_focused = id == focused_id;
-            let search = self.search.as_mut().and_then(|bar| bar.search_mut());
-            let mut snapshot = match search {
-                Some(search) if is_focused => pane.term.search_snapshot(search),
-                _ => pane.term.snapshot(),
-            };
-            if let Some((link_pane, link)) = &self.mouse.hover_link
-                && *link_pane == id
-            {
-                underline(&mut snapshot, link);
-            }
-            if is_focused {
-                self.prepare_focused(config, &mut snapshot, rect);
-            } else if let Some(cursor) = snapshot.cursor.as_mut() {
-                cursor.style = CursorStyle::HollowBlock;
-            }
-            snapshots.push((snapshot, rect, is_focused));
-        }
-        let (first, ..) = snapshots.first()?;
-        let (background, foreground) = (first.background, first.foreground);
-
-        let active = self.tabs.active_index();
-        let bar = self.tab_bar(config);
-        // Titles look up the foreground process, so only compute the ones
-        // that are shown.
-        let now = Instant::now();
-        let mut refresh: Option<Instant> = None;
-        let labels: Vec<TabLabel> = self
-            .tabs
-            .iter_mut()
-            .enumerate()
-            .filter(|&(i, _)| bar.is_some() || i == active)
-            .map(|(i, tab)| {
-                let focused = tab.content.focused;
-                let (title, expiry) = match tab.content.pane_mut(focused) {
-                    Some(pane) => pane.cached_title(config.tabs.title, now),
-                    None => (String::new(), None),
-                };
-                if let Some(expiry) = expiry {
-                    refresh = Some(refresh.map_or(expiry, |r| r.min(expiry)));
-                }
-                TabLabel {
-                    title,
-                    active: i == active,
-                    activity: tab.activity,
-                    bell: tab.bell,
-                }
-            })
-            .collect();
-        self.title_refresh = refresh;
-        if let Some(label) = labels.iter().find(|l| l.active)
-            && label.title != self.title
-        {
-            self.window.set_title(&label.title);
-            self.title = label.title.clone();
-        }
-
-        let (mut rects, mut texts) = match bar {
-            Some(bar) => bar.draw(
-                &labels,
-                self.mouse.hovered_bar,
-                self.window.is_maximized(),
-                background,
-                foreground,
-            ),
-            None => Default::default(),
-        };
-
-        let divider_color = mix(background, foreground, 0.25);
-        for divider in &layout.dividers {
-            let r = divider.rect;
-            rects.push(UiRect {
-                x: r.x,
-                y: r.y,
-                width: r.width,
-                height: r.height,
-                color: divider_color,
-                radius: 0.0,
-            });
-        }
-
-        if config.status_bar.visible() {
-            let datetime = datetime(config);
-            if let Some(bar) = self.status_bar(config, stats, &datetime) {
-                let (bar_rects, bar_texts) = bar.draw(
-                    stats,
-                    &datetime,
-                    background,
-                    foreground,
-                    config.status_bar.rainbow,
-                );
-                rects.extend(bar_rects);
-                texts.extend(bar_texts);
-            }
-        }
-
-        if let Some(bar) = &self.search
-            && let Some(rect) = layout.rect(focused_id)
-        {
-            let (bar_rects, bar_texts) = bar.draw(
-                rect,
-                self.renderer.cell_metrics(),
-                self.scale(),
-                background,
-                foreground,
-            );
-            rects.extend(bar_rects);
-            texts.extend(bar_texts);
-        }
-
-        // Where the link under the pointer leads: OSC 8 links may show
-        // other text.
-        if let Some((id, link)) = &self.mouse.hover_link
-            && let Some(mut rect) = layout.rect(*id)
-            && let Some(pos) = self.mouse.position
-        {
-            // Stay above the banner, which covers the bottom of the window.
-            if let Some(banner) = banner {
-                let cell = self.renderer.cell_metrics();
-                let (top, _) = banner.bounds(self.banner_bottom(config), cell, self.scale());
-                rect.height = rect.height.min(top - rect.y).max(0.0);
-            }
-            let (hint_rects, hint_texts) = link::draw_hint(
-                &link.url,
-                rect,
-                (pos.x as f32, pos.y as f32),
-                self.renderer.small_cell_metrics(),
-                self.scale(),
-                background,
-                foreground,
-            );
-            rects.extend(hint_rects);
-            texts.extend(hint_texts);
-        }
-
-        if let Some(banner) = banner {
-            let size = self.window.inner_size();
-            let (rect, text) = banner.draw(
-                size.width as f32,
-                self.banner_bottom(config),
-                self.renderer.cell_metrics(),
-                self.scale(),
-            );
-            rects.push(rect);
-            texts.push(text);
-        }
-
-        let panes: Vec<PaneView> = snapshots
-            .iter()
-            .map(|(snapshot, rect, is_focused)| {
-                let (x, y) = self.grid_origin(config, *rect);
-                PaneView {
-                    snapshot,
-                    x,
-                    y,
-                    area: [rect.x, rect.y, rect.width, rect.height],
-                    dim: if split && !is_focused {
-                        config.panes.dim_inactive
-                    } else {
-                        0.0
-                    },
-                }
-            })
-            .collect();
-        // Maximized windows sit flush with the screen edges: square corners.
-        let corner_radius = if self.chrome.draws_corners() && !self.window.is_maximized() {
-            (WINDOW_RADIUS * self.scale()) as f32
-        } else {
-            0.0
-        };
-        let frame = Frame {
-            background,
-            background_opacity: config.window.opacity,
-            panes: &panes,
-            rects: &rects,
-            texts: &texts,
-            corner_radius,
-        };
-        Some(draw(&mut self.renderer, &frame))
-    }
-
-    /// Preedit, blinking and IME placement for the focused pane.
-    fn prepare_focused(&mut self, config: &Config, snapshot: &mut Snapshot, rect: Rect) {
-        if let Some(preedit) = &self.preedit {
-            ime::overlay_preedit(snapshot, preedit);
-        }
-        let blinking =
-            self.focused && self.preedit.is_none() && snapshot.cursor.is_some_and(|c| c.blinking);
-        if blinking != self.blink.active {
-            self.blink.active = blinking;
-            self.blink.reset();
-        }
-        if let Some(cursor) = snapshot.cursor.as_mut() {
-            let (x, y) = self.grid_origin(config, rect);
-            let cell = self.renderer.cell_metrics();
-            self.update_ime_area(
-                x as u32 + cursor.column as u32 * cell.width,
-                y as u32 + cursor.line as u32 * cell.height,
-            );
-            if !self.focused {
-                cursor.style = CursorStyle::HollowBlock;
-            }
-        }
-        if self.blink.active && !self.blink.visible {
-            snapshot.cursor = None;
-        }
-    }
-
-    /// Keep the IME candidate window next to the cursor.
-    fn update_ime_area(&mut self, x: u32, y: u32) {
-        if self.ime_cell == Some((x, y)) {
-            return;
-        }
-        self.ime_cell = Some((x, y));
-        let cell = self.renderer.cell_metrics();
-        self.window.set_ime_cursor_area(
-            PhysicalPosition::new(x, y),
-            PhysicalSize::new(cell.width, cell.height),
-        );
-    }
-
-    /// Grid cell of the focused pane under a window position, clamped to
-    /// its grid.
-    pub fn cell_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> GridPoint {
-        self.cell_in(config, self.content().focused, pos)
-    }
-
-    /// Grid cell of pane `id` under a window position, clamped to its grid.
-    pub fn cell_in(&self, config: &Config, id: PaneId, pos: PhysicalPosition<f64>) -> GridPoint {
-        let layout = self.layout(config);
-        let rect = layout.rect(id).unwrap_or_default();
-        let (x0, y0) = self.grid_origin(config, rect);
-        let cell = self.renderer.cell_metrics();
-        let grid = self
-            .content()
-            .pane(id)
-            .and_then(|p| p.size)
-            .unwrap_or(self.grid());
-        let x = (pos.x - x0 as f64).max(0.0);
-        let y = (pos.y - y0 as f64).max(0.0);
-        let column = ((x / cell.width as f64) as usize).min(grid.columns as usize - 1);
-        let line = ((y / cell.height as f64) as usize).min(grid.lines as usize - 1);
-        let within = x - column as f64 * cell.width as f64;
-        GridPoint {
-            column,
-            line,
-            right_half: within >= cell.width as f64 / 2.0,
-        }
-    }
-
-    pub fn pane_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> Option<PaneId> {
-        self.layout(config).pane_at(pos.x as f32, pos.y as f32)
-    }
-
-    pub fn divider_at(&self, config: &Config, pos: PhysicalPosition<f64>) -> Option<Divider> {
-        let slop = (DIVIDER_SLOP * self.scale()) as f32;
-        self.layout(config)
-            .divider_at(pos.x as f32, pos.y as f32, slop)
-            .cloned()
-    }
-
     /// The pointer is over the find bar.
     pub fn search_bar_contains(&self, config: &Config, pos: PhysicalPosition<f64>) -> bool {
         let Some(bar) = &self.search else {
             return false;
         };
         let rect = self.layout(config).rect(self.content().focused);
-        rect.is_some_and(|rect| {
-            bar.contains(
-                rect,
-                self.renderer.cell_metrics(),
-                self.scale(),
-                pos.x as f32,
-                pos.y as f32,
-            )
-        })
+        rect.is_some_and(|rect| bar.contains(rect, self.ui_metrics(), pos.x as f32, pos.y as f32))
     }
 
     /// Bottom edge of the banner: above a status bar at the bottom.
@@ -946,78 +613,25 @@ impl WindowState {
         banner: &Banner,
         pos: PhysicalPosition<f64>,
     ) -> bool {
-        banner.contains(
-            pos.y as f32,
-            self.banner_bottom(config),
-            self.renderer.cell_metrics(),
-            self.scale(),
-        )
+        banner.contains(pos.y as f32, self.banner_bottom(config), self.ui_metrics())
     }
 
-    /// Resize edge under the pointer, for windows without decorations.
-    /// Maximized windows can't be resized, so their edges stay clickable.
-    pub fn resize_edge(&self, pos: PhysicalPosition<f64>) -> Option<ResizeDirection> {
-        if self.chrome != Chrome::Undecorated || self.window.is_maximized() {
-            return None;
-        }
-        let size = self.window.inner_size();
-        let border = RESIZE_BORDER * self.scale();
-        edge_at(
-            (pos.x, pos.y),
-            (size.width as f64, size.height as f64),
-            border,
-        )
-    }
-
-    fn mouse_mods(&self) -> MouseMods {
-        let mods = self.modifiers.state();
-        MouseMods {
-            shift: mods.shift_key(),
-            alt: mods.alt_key(),
-            ctrl: mods.control_key(),
-        }
-    }
-
-    /// Lines per autoscroll step for a selection drag at `pos`: positive
-    /// above the focused pane's grid, negative below it, 0 inside.
-    pub fn autoscroll_lines(&self, config: &Config, pos: PhysicalPosition<f64>) -> i32 {
-        let layout = self.layout(config);
-        let Some(rect) = layout.rect(self.content().focused) else {
-            return 0;
+    /// Add `text` to the query of the find bar. Returns false if the bar
+    /// is closed.
+    pub fn search_append(&mut self, text: &str) -> bool {
+        let Some((bar, term)) = self.search_and_term() else {
+            return false;
         };
-        let (_, top) = self.grid_origin(config, rect);
-        let cell = self.renderer.cell_metrics();
-        let lines = self.grid().lines as f32;
-        let bottom = top + lines * cell.height as f32;
-        autoscroll_speed(pos.y as f32, top, bottom, cell.height as f32)
+        bar.append(text, term);
+        self.window.request_redraw();
+        true
     }
 
-    /// Mouse events go to the application unless Shift is held, which
-    /// forces local selection like in xterm.
-    pub fn reports_mouse(&self, mode: TermMode) -> bool {
-        mouse::reporting_enabled(mode) && !self.modifiers.state().shift_key()
-    }
-
-    pub fn report(&self, button: Option<Button>, action: MouseAction, point: GridPoint) {
-        self.report_to(self.content().focused, button, action, point);
-    }
-
-    /// Report a mouse event to pane `id` of the active tab, focused or not.
-    pub fn report_to(
-        &self,
-        id: PaneId,
-        button: Option<Button>,
-        action: MouseAction,
-        point: GridPoint,
-    ) {
-        let Some(term) = self.content().pane(id).map(|pane| &pane.term) else {
-            return;
-        };
-        let mods = self.mouse_mods();
-        if let Some(bytes) =
-            mouse::encode_report(button, action, mods, point.column, point.line, term.mode())
-        {
-            term.write(bytes);
+    /// Type `text` where the keyboard types: into the find bar while it
+    /// is open, otherwise into the focused pane.
+    pub fn type_text(&mut self, text: &str) {
+        if !self.search_append(text) {
+            self.type_bytes(text.as_bytes().to_vec());
         }
     }
 
@@ -1045,6 +659,113 @@ impl WindowState {
         self.mouse.last_reported_cell = None;
         self.ime_cell = None;
         self.window.request_redraw();
+    }
+
+    pub fn select_next_tab(&mut self) {
+        self.select_tab((self.tabs.active_index() + 1) % self.tabs.len());
+    }
+
+    pub fn select_previous_tab(&mut self) {
+        let len = self.tabs.len();
+        self.select_tab((self.tabs.active_index() + len - 1) % len);
+    }
+
+    /// Move the focus to the pane next to the focused one.
+    pub fn focus_neighbor(&mut self, config: &Config, direction: Direction) {
+        let focused = self.content().focused;
+        // A zoomed pane has no visible neighbors: find them in the split
+        // layout and leave zoom only if there is one.
+        let zoomed = self.content().tree.is_zoomed();
+        if zoomed {
+            self.content_mut().tree.toggle_zoom(focused);
+        }
+        match PaneTree::neighbor(focused, direction, &self.layout(config)) {
+            Some(id) => {
+                self.focus_pane(id);
+                if zoomed {
+                    self.resize_terms(config);
+                }
+            }
+            None if zoomed => self.content_mut().tree.toggle_zoom(focused),
+            None => {}
+        }
+    }
+
+    /// Show the focused pane alone, or return to the split layout.
+    pub fn toggle_zoom(&mut self, config: &Config) {
+        let content = self.content_mut();
+        content.tree.toggle_zoom(content.focused);
+        self.resize_terms(config);
+    }
+
+    /// Grow or shrink the focused pane towards `direction`.
+    pub fn resize_pane(&mut self, config: &Config, direction: Direction) {
+        let layout = self.layout(config);
+        let cell = self.renderer.cell_metrics();
+        let step = match direction {
+            Direction::Left | Direction::Right => RESIZE_STEP_CELLS * cell.width,
+            Direction::Up | Direction::Down => RESIZE_STEP_CELLS * cell.height,
+        } as f32;
+        let content = self.content_mut();
+        content
+            .tree
+            .resize(content.focused, direction, step, &layout);
+        self.resize_terms(config);
+    }
+
+    /// Open the find bar. A selected piece of a line becomes the query.
+    pub fn open_search(&mut self) {
+        let selection = self
+            .term()
+            .selection_text()
+            .map(|text| text.trim_end_matches(['\r', '\n']).to_owned())
+            .filter(|text| !text.trim().is_empty() && !text.contains('\n'));
+        self.search.get_or_insert_with(SearchBar::new);
+        if let Some(text) = selection
+            && let Some((bar, term)) = self.search_and_term()
+        {
+            term.clear_selection();
+            bar.set_query(text, term);
+        }
+    }
+
+    pub fn toggle_fullscreen(&self) {
+        // Borderless is the native full screen (its own Space) on macOS.
+        let fullscreen = self.window.fullscreen().is_some();
+        let target = (!fullscreen).then_some(Fullscreen::Borderless(None));
+        self.window.set_fullscreen(target);
+    }
+
+    pub fn toggle_maximized(&self) {
+        self.window.set_maximized(!self.window.is_maximized());
+    }
+
+    /// Run the timers that are due at `now` (cursor blinking, title
+    /// refresh, autoscroll, reveal) and return when the next one is.
+    pub fn run_timers(&mut self, config: &Config, now: Instant) -> Option<Instant> {
+        if self.blink.active && now >= self.blink.next_toggle {
+            self.blink.visible = !self.blink.visible;
+            self.blink.next_toggle = now + BLINK_INTERVAL;
+            self.window.request_redraw();
+        }
+        if self.title_refresh.is_some_and(|t| now >= t) {
+            // The redraw computes fresh titles and schedules no further one.
+            self.invalidate_titles();
+            self.window.request_redraw();
+        }
+        self.step_autoscroll(config, now);
+        if self.reveal.is_some() && !self.reveal_holds(now) {
+            self.window.request_redraw();
+        }
+        [
+            self.reveal.map(|reveal| reveal.due()),
+            self.blink.active.then_some(self.blink.next_toggle),
+            self.title_refresh,
+            self.mouse.autoscroll.map(|scroll| scroll.next),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Switch tabs, telling applications that asked about focus changes.
@@ -1090,52 +811,6 @@ fn datetime(config: &Config) -> String {
         .to_string()
 }
 
-/// Which window edge or corner `pos` is on, within `border` of the edge.
-fn edge_at(pos: (f64, f64), size: (f64, f64), border: f64) -> Option<ResizeDirection> {
-    let (left, right) = (pos.0 < border, pos.0 >= size.0 - border);
-    let (top, bottom) = (pos.1 < border, pos.1 >= size.1 - border);
-    Some(match (left, right, top, bottom) {
-        (true, _, true, _) => ResizeDirection::NorthWest,
-        (_, true, true, _) => ResizeDirection::NorthEast,
-        (true, _, _, true) => ResizeDirection::SouthWest,
-        (_, true, _, true) => ResizeDirection::SouthEast,
-        (true, ..) => ResizeDirection::West,
-        (_, true, ..) => ResizeDirection::East,
-        (_, _, true, _) => ResizeDirection::North,
-        (_, _, _, true) => ResizeDirection::South,
-        _ => return None,
-    })
-}
-
-/// Autoscroll speed for a pointer at `y` with the grid spanning `top` to
-/// `bottom`: one line per step at the edge, faster with distance.
-fn autoscroll_speed(y: f32, top: f32, bottom: f32, cell_height: f32) -> i32 {
-    let lines = |distance: f32| (1 + (distance / cell_height) as i32).min(AUTOSCROLL_MAX_LINES);
-    if y < top {
-        lines(top - y)
-    } else if y >= bottom {
-        -lines(y - bottom)
-    } else {
-        0
-    }
-}
-
-/// Underline the cells of a link (viewport positions, inclusive).
-fn underline(snapshot: &mut Snapshot, link: &Link) {
-    let start = (link.start.1, link.start.0 as i32);
-    let end = (link.end.1, link.end.0 as i32);
-    for line in 0..snapshot.lines {
-        for column in 0..snapshot.columns {
-            let pos = (line as i32, column as i32);
-            if pos >= start && pos <= end {
-                snapshot.cells[line * snapshot.columns + column]
-                    .style
-                    .underline = Some(UnderlineStyle::Single);
-            }
-        }
-    }
-}
-
 /// Window size for a grid of `columns`×`lines` cells plus padding and
 /// `bars` (the height of the tab and status bars); the inverse of
 /// `grid_size`.
@@ -1165,18 +840,9 @@ fn grid_size(rect: Rect, padding: (f32, f32), cell: CellMetrics) -> TermSize {
 
 #[cfg(test)]
 mod tests {
-    use nuntio_term::{CellStyle, Rgb, SnapshotCell};
+    use crate::style::test_metrics::*;
 
     use super::*;
-
-    const CELL: CellMetrics = CellMetrics {
-        width: 10,
-        height: 20,
-        baseline: 15,
-        underline_y: 17,
-        stroke: 1,
-        strikeout_y: 10,
-    };
 
     #[test]
     fn reveal_waits_for_output_to_pause_but_not_forever() {
@@ -1209,37 +875,6 @@ mod tests {
             None,
             "expired"
         );
-    }
-
-    #[test]
-    fn autoscroll_speeds_up_with_distance() {
-        let speed = |y| autoscroll_speed(y, 100.0, 500.0, 20.0);
-        assert_eq!(speed(300.0), 0);
-        assert_eq!(speed(100.0), 0);
-        assert_eq!(speed(99.0), 1);
-        assert_eq!(speed(60.0), 3);
-        assert_eq!(speed(-1000.0), AUTOSCROLL_MAX_LINES);
-        assert_eq!(speed(500.0), -1);
-        assert_eq!(speed(545.0), -3);
-    }
-
-    #[test]
-    fn edges_and_corners() {
-        let size = (100.0, 50.0);
-        assert_eq!(
-            edge_at((2.0, 2.0), size, 5.0),
-            Some(ResizeDirection::NorthWest)
-        );
-        assert_eq!(
-            edge_at((98.0, 2.0), size, 5.0),
-            Some(ResizeDirection::NorthEast)
-        );
-        assert_eq!(
-            edge_at((50.0, 49.0), size, 5.0),
-            Some(ResizeDirection::South)
-        );
-        assert_eq!(edge_at((0.0, 25.0), size, 5.0), Some(ResizeDirection::West));
-        assert_eq!(edge_at((50.0, 25.0), size, 5.0), None);
     }
 
     #[test]
@@ -1279,41 +914,5 @@ mod tests {
         };
         let size = grid_size(rect, (200.0, 200.0), CELL);
         assert_eq!((size.columns, size.lines), (1, 1));
-    }
-
-    #[test]
-    fn underline_covers_a_wrapped_link() {
-        let cell = SnapshotCell {
-            c: 'x',
-            zerowidth: None,
-            fg: Rgb::default(),
-            bg: Rgb::default(),
-            style: CellStyle::default(),
-            underline_color: None,
-        };
-        let mut snapshot = Snapshot {
-            columns: 4,
-            lines: 3,
-            cells: vec![cell; 12],
-            ..Snapshot::default()
-        };
-        let link = Link {
-            url: "https://x".into(),
-            start: (2, 0),
-            end: (1, 1),
-        };
-        underline(&mut snapshot, &link);
-        let underlined: Vec<bool> = snapshot
-            .cells
-            .iter()
-            .map(|c| c.style.underline.is_some())
-            .collect();
-        #[rustfmt::skip]
-        let expected = [
-            false, false, true, true,
-            true, true, false, false,
-            false, false, false, false,
-        ];
-        assert_eq!(underlined, expected);
     }
 }

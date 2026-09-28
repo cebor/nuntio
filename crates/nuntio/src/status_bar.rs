@@ -1,6 +1,6 @@
 //! Status bar layout and drawing: system graphs, date and time, a newer
-//! release. It is
-//! laid out in the cells of the small UI font (`small_cell_metrics`).
+//! release. It is laid out in the cells of the small UI font
+//! (`UiMetrics::small`).
 
 use std::collections::VecDeque;
 
@@ -9,8 +9,8 @@ use nuntio_render::{CellMetrics, UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
+use crate::style::{UiMetrics, bar_background, hairline, mix, rect};
 use crate::sysmon::Sample;
-use crate::tab_bar::{bar_background, mix};
 
 /// Samples kept per graph: one minute at one sample per second.
 const HISTORY: usize = 60;
@@ -112,7 +112,7 @@ pub struct StatusBar {
     scale: f32,
     cell: CellMetrics,
     /// Cells of the terminal font, which is a bit larger.
-    font_cell: CellMetrics,
+    term_cell: CellMetrics,
     /// Items that fit, left to right.
     slots: Vec<Slot>,
 }
@@ -136,28 +136,25 @@ enum Piece {
 }
 
 impl StatusBar {
-    /// Height of the bar for a font's cell size.
-    pub fn height(cell: CellMetrics, scale: f64) -> f32 {
-        cell.height as f32 + 2.0 * (BAR_PADDING * scale).round() as f32
+    /// Height of the bar, which is laid out in the small UI font.
+    pub fn height(metrics: UiMetrics) -> f32 {
+        metrics.small.height as f32 + 2.0 * metrics.logical(BAR_PADDING)
     }
 
     /// Lay out `items` in a bar of `width` pixels whose top edge is at
-    /// `top`. Springs share the free space. Items without data to show
-    /// (no battery, no update) are left out. `cell` is the small UI font the bar is
-    /// laid out in, `font_cell` the terminal font.
-    #[allow(clippy::too_many_arguments)]
+    /// `top`, in the small UI font. Springs share the free space. Items
+    /// without data to show (no battery, no update) are left out.
     pub fn new(
         width: f32,
         top: f32,
         items: &[StatusItem],
         stats: &Stats,
         datetime: &str,
-        cell: CellMetrics,
-        font_cell: CellMetrics,
-        scale: f64,
+        metrics: UiMetrics,
     ) -> Self {
-        let padding = (BAR_PADDING * scale).round() as f32;
-        let height = Self::height(cell, scale);
+        let cell = metrics.small;
+        let padding = metrics.logical(BAR_PADDING);
+        let height = Self::height(metrics);
         let shown: Vec<StatusItem> = items
             .iter()
             .copied()
@@ -196,9 +193,9 @@ impl StatusBar {
             height,
             width,
             padding,
-            scale: scale as f32,
+            scale: metrics.scale as f32,
             cell,
-            font_cell,
+            term_cell: metrics.cell,
             slots,
         }
     }
@@ -274,14 +271,8 @@ impl StatusBar {
         let cw = self.cell.width as f32;
         let text_y = self.top + self.padding;
         let text = |cells: usize, text: String, color: Rgb, out: &mut Output| {
-            out.texts.push(UiText {
-                x: (x + cells as f32 * cw).floor(),
-                y: text_y,
-                text,
-                color,
-                bold: false,
-                small: true,
-            });
+            out.texts
+                .push(UiText::new((x + cells as f32 * cw).floor(), text_y, text, color).small());
         };
         let graph_x = x + CONTENT as f32 * cw;
         let after_graph = CONTENT + GRAPH_CELLS + 1;
@@ -308,22 +299,10 @@ impl StatusBar {
                 let (down, up) = latest.network.map_or(("--".into(), "--".into()), |net| {
                     (format_rate(net.down), format_rate(net.up))
                 });
-                // The arrows are small in the UI font: take the terminal
-                // font, centered in their cell and on the same baseline.
-                let arrow = |cells: usize, text: &str, out: &mut Output| {
-                    let overhang = (self.font_cell.width as f32 - cw) / 2.0;
-                    out.texts.push(UiText {
-                        x: (x + cells as f32 * cw - overhang).floor(),
-                        y: text_y + self.cell.baseline as f32 - self.font_cell.baseline as f32,
-                        text: text.into(),
-                        color: colors.label,
-                        bold: false,
-                        small: false,
-                    });
-                };
-                arrow(CONTENT, "↓", out);
+                let arrow_x = |cells: usize| x + cells as f32 * cw;
+                self.arrow(out, arrow_x(CONTENT), 1, "↓", colors.label);
                 text(CONTENT + 1, format!("{down:>4}"), colors.value, out);
-                arrow(up_x, "↑", out);
+                self.arrow(out, arrow_x(up_x), 1, "↑", colors.label);
                 text(up_x + 1, format!("{up:>4}"), colors.value, out);
             }
             StatusItem::Battery => {
@@ -346,21 +325,22 @@ impl StatusBar {
                 let Some(version) = &stats.update else {
                     return;
                 };
-                // In the terminal font, which draws the arrow larger,
-                // centered in the icon's cells and on the text's baseline.
-                let overhang = (self.font_cell.width as f32 - ICON_CELLS as f32 * cw) / 2.0;
-                out.texts.push(UiText {
-                    x: (x - overhang).floor(),
-                    y: text_y + self.cell.baseline as f32 - self.font_cell.baseline as f32,
-                    text: "↑".into(),
-                    color: colors.label,
-                    bold: false,
-                    small: false,
-                });
+                self.arrow(out, x, ICON_CELLS, "↑", colors.label);
                 text(CONTENT, version.clone(), colors.value, out);
             }
             StatusItem::Spring => {}
         }
+    }
+
+    /// An arrow centered over `cells` cells from `x`. Arrows are small in
+    /// the UI font, so they take the terminal font, on the text's baseline.
+    fn arrow(&self, out: &mut Output, x: f32, cells: usize, arrow: &str, color: Rgb) {
+        let width = cells as f32 * self.cell.width as f32;
+        let overhang = (self.term_cell.width as f32 - width) / 2.0;
+        let baseline_shift = self.cell.baseline as f32 - self.term_cell.baseline as f32;
+        let y = self.top + self.padding + baseline_shift;
+        out.texts
+            .push(UiText::new((x - overhang).floor(), y, arrow, color));
     }
 
     /// Vertical extent of graphs: the text row, slightly inset.
@@ -439,7 +419,7 @@ impl StatusBar {
     }
 
     fn stroke(&self) -> f32 {
-        self.scale.round().max(1.0)
+        hairline(f64::from(self.scale))
     }
 
     /// Left edge, top edge and size of the square an icon is drawn in,
@@ -630,17 +610,6 @@ struct Output {
     texts: Vec<UiText>,
 }
 
-fn rect(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> UiRect {
-    UiRect {
-        x,
-        y,
-        width,
-        height,
-        color,
-        radius: 0.0,
-    }
-}
-
 /// Perceived brightness, 0.0 (black) to 1.0 (white).
 fn luminance(c: Rgb) -> f32 {
     (0.2126 * c.r as f32 + 0.7152 * c.g as f32 + 0.0722 * c.b as f32) / 255.0
@@ -791,17 +760,9 @@ fn format_gib(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::test_metrics::*;
     use crate::sysmon::{Battery, Memory, Throughput};
     use nuntio_config::arranged;
-
-    const CELL: CellMetrics = CellMetrics {
-        width: 10,
-        height: 20,
-        baseline: 15,
-        underline_y: 17,
-        stroke: 1,
-        strikeout_y: 10,
-    };
 
     use Piece::{Item, Spring};
 
@@ -952,13 +913,13 @@ mod tests {
     #[test]
     fn missing_battery_is_left_out() {
         let items = arranged(&[StatusItem::Cpu, StatusItem::Battery, StatusItem::Datetime]);
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(false), "12:34", CELL, CELL, 1.0);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(false), "12:34", METRICS);
         let shown: Vec<_> = bar.slots.iter().map(|s| s.item).collect();
         assert_eq!(shown, [StatusItem::Cpu, StatusItem::Datetime]);
         // Icon, space and "12:34" (8 cells) sit at the right margin of one cell.
         assert_eq!(bar.slots[1].x, 1000.0 - 10.0 - 80.0);
 
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", CELL, CELL, 1.0);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", METRICS);
         assert_eq!(bar.slots.len(), 3);
     }
 
@@ -966,12 +927,12 @@ mod tests {
     fn update_shows_only_when_there_is_one_and_is_clickable() {
         let items = arranged(&[StatusItem::Update, StatusItem::Datetime]);
         let mut stats = stats(false);
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", CELL, CELL, 1.0);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
         assert_eq!(bar.item_at(20.0), None);
 
         stats.set_update(Some("0.1.6".into()));
         stats.clear();
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", CELL, CELL, 1.0);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
         // Icon, space and "0.1.6" (8 cells) after the one-cell margin.
         assert_eq!(bar.item_at(10.0), Some(StatusItem::Update));
         assert_eq!(bar.item_at(89.0), Some(StatusItem::Update));
@@ -991,16 +952,7 @@ mod tests {
             StatusItem::Datetime,
         ];
         let stats = stats(true);
-        let bar = StatusBar::new(
-            1200.0,
-            500.0,
-            &arranged(&items),
-            &stats,
-            "12:34",
-            CELL,
-            CELL,
-            1.0,
-        );
+        let bar = StatusBar::new(1200.0, 500.0, &arranged(&items), &stats, "12:34", METRICS);
         assert_eq!(bar.height, 28.0);
         let (bg, fg) = (
             Rgb { r: 0, g: 0, b: 0 },
@@ -1037,7 +989,7 @@ mod tests {
         for rainbow in [false, true] {
             let count = |items: &[StatusItem]| {
                 let stats = stats(false);
-                let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", CELL, CELL, 1.0);
+                let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", METRICS);
                 let (rects, _) = bar.draw(&stats, "12:34", bg, fg, rainbow);
                 rects.iter().filter(|r| r.color == separator).count()
             };
@@ -1062,7 +1014,7 @@ mod tests {
         use StatusItem::*;
         let stats = stats(false);
         let items = [Cpu, Memory, Datetime];
-        let bar = StatusBar::new(1200.0, 0.0, &items, &stats, "12:34", CELL, CELL, 1.0);
+        let bar = StatusBar::new(1200.0, 0.0, &items, &stats, "12:34", METRICS);
         let (_, texts) = bar.draw(&stats, "12:34", bg, fg, rainbow);
         texts.iter().map(|t| t.color).collect()
     }

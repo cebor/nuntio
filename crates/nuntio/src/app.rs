@@ -1,68 +1,61 @@
+//! The application: the window's lifecycle, the config and its hot reload,
+//! banners and update checks. Input handling lives in `app_input`, tabs and
+//! panes in `app_panes`.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use nuntio_config::{
-    Color, Config, ConfigWatcher, DEFAULT_THEME, OptionAsMeta, StatusItem, Theme, ThemeSelection,
-    ThemeSet,
+    Color, Config, ConfigWatcher, DEFAULT_THEME, StatusItem, Theme, ThemeSelection, ThemeSet,
 };
 use nuntio_render::{FrameStatus, Renderer};
-use nuntio_term::{
-    GridPoint, Palette, Rgb, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
-    TermOptions,
-};
+use nuntio_term::{Palette, Rgb, TermEvent, TermOptions, TermSize};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, Ime, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::keyboard::{Key, ModifiersKeyState, ModifiersState, NamedKey};
-use winit::window::{
-    CursorIcon, Fullscreen, ResizeDirection, Theme as WindowTheme, Window, WindowAttributes,
-    WindowId,
-};
+use winit::window::{Theme as WindowTheme, Window, WindowAttributes, WindowId};
 
-use crate::actions::{Action, Bindings};
+use crate::actions::Bindings;
 use crate::banner::{Banner, Severity};
 use crate::event::{MenuCommand, PaneId, UserEvent};
-use crate::input::{self, KeyEventKind, KeyPress};
-use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
-use crate::pane_tree::{Axis, Direction, PaneTree};
-use crate::search_bar::SearchBar;
+use crate::input::KeyPress;
 use crate::status_bar::Stats;
 use crate::sysmon::SystemMonitor;
-use crate::tab_bar::BarHit;
 use crate::update::{self, Build, Checker, Update};
-use crate::window::{
-    AUTOSCROLL_INTERVAL, Autoscroll, BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent,
-    TabDrag, WindowState,
-};
+use crate::window::{Chrome, DEFAULT_TITLE, WindowState};
 
-// A child module, so that its request handlers can reach the app's state.
+// Child modules, so that their handlers can reach the app's state.
+#[path = "app_input.rs"]
+mod app_input;
+#[path = "app_panes.rs"]
+mod app_panes;
 #[cfg(feature = "debug-server")]
 #[path = "debug_server.rs"]
 pub(crate) mod debug_server;
 
+use app_input::PendingPaste;
+use app_panes::{CloseTarget, PendingClose};
+
 const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
-/// Lines scrolled per wheel notch.
-const WHEEL_LINES: f64 = 3.0;
-/// Pointer travel before a pressed tab starts moving.
-const TAB_DRAG_THRESHOLD: f64 = 4.0;
 /// Room for macOS's traffic-light buttons, in logical pixels.
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
-/// Cells a pane grows or shrinks per resize shortcut, so each press is
-/// clearly visible.
-const RESIZE_STEP_CELLS: u32 = 2;
 /// Immediate retries of a skipped frame before waiting for the next event.
 const MAX_FRAME_RETRIES: u32 = 3;
 /// How long an action that asked for confirmation waits to be repeated.
 const CONFIRM_REPEAT: Duration = Duration::from_secs(5);
-/// Title of the banner that asks to confirm a close.
-const CLOSE_BANNER: &str = "Close";
-/// Title of the banner that asks to confirm a paste.
-const PASTE_BANNER: &str = "Paste";
+/// Size of a pane spawned before the window is laid out; the first
+/// `resize_terms` corrects it.
+const INITIAL_GRID: TermSize = TermSize {
+    columns: 80,
+    lines: 24,
+    cell_width: 1,
+    cell_height: 1,
+};
 
 /// WSLg's Weston (9.0, RDP backend) segfaults on pointer motion over windows
 /// with winit's client-side decorations, taking every Wayland client down with
@@ -196,66 +189,13 @@ fn center(window: &Window) {
     }
 }
 
-/// Where the mouse pointer is in the window, asked from the system. Needed
-/// for drops: while something is dragged, the window gets no pointer moves.
-#[cfg(target_os = "macos")]
-fn cursor_position(window: &Window) -> Option<PhysicalPosition<f64>> {
-    let view = ns_view(window)?;
-    let in_window = view.window()?.mouseLocationOutsideOfEventStream();
-    let point = view.convertPoint_fromView(in_window, None);
-    // AppKit counts y from the bottom unless the view is flipped.
-    let y = if view.isFlipped() {
-        point.y
-    } else {
-        view.bounds().size.height - point.y
-    };
-    Some(winit::dpi::LogicalPosition::new(point.x, y).to_physical(window.scale_factor()))
-}
-
-#[cfg(windows)]
-fn cursor_position(window: &Window) -> Option<PhysicalPosition<f64>> {
-    use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
-        return None;
-    };
-    let mut point = POINT { x: 0, y: 0 };
-    // SAFETY: `hwnd` is our live window and `point` outlives the calls.
-    let found = unsafe {
-        GetCursorPos(&mut point) != 0 && ScreenToClient(handle.hwnd.get() as _, &mut point) != 0
-    };
-    found.then(|| PhysicalPosition::new(f64::from(point.x), f64::from(point.y)))
-}
-
-/// Elsewhere the last pointer position is used.
-#[cfg(not(any(target_os = "macos", windows)))]
-fn cursor_position(_window: &Window) -> Option<PhysicalPosition<f64>> {
-    None
-}
-
-/// Whether Alt should act as Meta (ESC prefix). On macOS Option composes
-/// characters unless Option-as-Meta is enabled for the pressed side.
-fn alt_is_meta(mods: &Modifiers, option_as_meta: OptionAsMeta) -> bool {
-    if !cfg!(target_os = "macos") {
-        return mods.state().alt_key();
-    }
-    let left = mods.lalt_state() == ModifiersKeyState::Pressed;
-    let right = mods.ralt_state() == ModifiersKeyState::Pressed;
-    match option_as_meta {
-        OptionAsMeta::None => false,
-        OptionAsMeta::Left => left,
-        OptionAsMeta::Right => right,
-        OptionAsMeta::Both => left || right,
-    }
-}
-
 /// Tells macOS which Option keys act as Alt, so they don't start
 /// composing dead keys like Option+U (¨) while nuntio sends Meta.
 #[cfg(target_os = "macos")]
-fn option_as_alt(option_as_meta: OptionAsMeta) -> winit::platform::macos::OptionAsAlt {
+fn option_as_alt(
+    option_as_meta: nuntio_config::OptionAsMeta,
+) -> winit::platform::macos::OptionAsAlt {
+    use nuntio_config::OptionAsMeta;
     use winit::platform::macos::OptionAsAlt;
 
     match option_as_meta {
@@ -263,19 +203,6 @@ fn option_as_alt(option_as_meta: OptionAsMeta) -> winit::platform::macos::Option
         OptionAsMeta::Left => OptionAsAlt::OnlyLeft,
         OptionAsMeta::Right => OptionAsAlt::OnlyRight,
         OptionAsMeta::Both => OptionAsAlt::Both,
-    }
-}
-
-fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
-    match direction {
-        ResizeDirection::East => CursorIcon::EResize,
-        ResizeDirection::West => CursorIcon::WResize,
-        ResizeDirection::North => CursorIcon::NResize,
-        ResizeDirection::South => CursorIcon::SResize,
-        ResizeDirection::NorthEast => CursorIcon::NeResize,
-        ResizeDirection::NorthWest => CursorIcon::NwResize,
-        ResizeDirection::SouthEast => CursorIcon::SeResize,
-        ResizeDirection::SouthWest => CursorIcon::SwResize,
     }
 }
 
@@ -313,148 +240,6 @@ fn themes_dir(config_path: Option<&Path>) -> Option<PathBuf> {
     nuntio_config::themes_dir(config_path?)
 }
 
-/// What a close request ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CloseTarget {
-    Window,
-    /// The tab holding this pane.
-    Tab(PaneId),
-    Pane(PaneId),
-}
-
-/// A close that named running programs and waits to be repeated.
-#[derive(Debug, Clone, Copy)]
-struct PendingClose {
-    target: CloseTarget,
-    until: Instant,
-}
-
-/// A paste that would run commands at once and waits to be repeated.
-#[derive(Debug, Clone)]
-struct PendingPaste {
-    text: String,
-    until: Instant,
-}
-
-/// Why pasting `text` without bracketed paste needs confirmation: each
-/// line break works like Enter, so the shell runs the lines at once.
-fn paste_warning(text: &str) -> Option<String> {
-    if !text.contains(['\n', '\r']) {
-        return None;
-    }
-    let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
-    Some(if lines > 1 {
-        format!("{lines} lines would run at once; paste again to run them")
-    } else {
-        "the text has a line break and would run at once; paste again to run it".into()
-    })
-}
-
-/// How the shell in a pane reads a dropped file's path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PathSyntax {
-    /// Backslash escapes (sh, bash, zsh, fish).
-    Posix,
-    /// Single quotes, in which PowerShell expands nothing.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    PowerShell,
-    /// Double quotes, with `%` outside them so it can be escaped.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    Cmd,
-    /// A Windows path, seen from inside WSL.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    Wsl,
-}
-
-/// A dropped file's path as a shell word, with a space after it like in
-/// Terminal.app, so several files line up as arguments.
-fn dropped_path(path: &str, syntax: PathSyntax) -> String {
-    // Windows paths can't contain `"`.
-    let plain = || {
-        path.chars()
-            .all(|c| c.is_alphanumeric() || "\\/:._-".contains(c))
-    };
-    let mut word = match syntax {
-        PathSyntax::Posix => posix_word(path),
-        PathSyntax::PowerShell if plain() => path.to_owned(),
-        PathSyntax::PowerShell => {
-            // PowerShell also closes single quotes with the typographic
-            // ones; each is escaped by doubling it.
-            let mut word = String::from("'");
-            for c in path.chars() {
-                if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
-                    word.push(c);
-                }
-                word.push(c);
-            }
-            word.push('\'');
-            word
-        }
-        PathSyntax::Cmd if plain() => path.to_owned(),
-        // cmd expands `%VAR%` even in quotes, where `^` is no escape.
-        PathSyntax::Cmd => format!("\"{}\"", path.replace('%', "\"^%\"")),
-        PathSyntax::Wsl => posix_word(&crate::wsl::wsl_path(path)),
-    };
-    word.push(' ');
-    word
-}
-
-/// `s` with a backslash before each character a POSIX shell treats
-/// specially. A line break after a backslash would continue the line
-/// instead, so names with control characters are single-quoted.
-fn posix_word(s: &str) -> String {
-    if s.chars().any(char::is_control) {
-        return format!("'{}'", s.replace('\'', r"'\''"));
-    }
-    let mut word = String::new();
-    for c in s.chars() {
-        let plain = c.is_alphanumeric() || "/._-+,:@%=".contains(c);
-        if !plain {
-            word.push('\\');
-        }
-        word.push(c);
-    }
-    word
-}
-
-/// Asks to confirm closing `target`, in which the programs `running` run
-/// (one name per pane).
-fn close_message(running: &[String], target: CloseTarget) -> String {
-    let mut names: Vec<String> = Vec::new();
-    for name in running {
-        let count = running.iter().filter(|n| *n == name).count();
-        let name = if count > 1 {
-            format!("{name} ({count})")
-        } else {
-            name.clone()
-        };
-        if !names.contains(&name) {
-            names.push(name);
-        }
-    }
-    let (verb, pronoun) = if running.len() == 1 {
-        ("is", "it")
-    } else {
-        ("are", "them")
-    };
-    let again = match target {
-        CloseTarget::Window => "quit",
-        CloseTarget::Tab(_) => "close the tab",
-        CloseTarget::Pane(_) => "close the pane",
-    };
-    format!(
-        "{} {verb} still running; {again} again to end {pronoun}",
-        names.join(", ")
-    )
-}
-
-/// Where a new pane starts.
-enum StartDir {
-    Local(PathBuf),
-    /// For a shell in WSL: `~` or an absolute Linux path.
-    Wsl(String),
-}
-
 /// How the first pane starts, from the command line.
 #[derive(Debug, Default)]
 pub struct Startup {
@@ -464,6 +249,14 @@ pub struct Startup {
 }
 
 pub struct App {
+    core: Core,
+    /// The window, once the event loop has resumed.
+    state: Option<WindowState>,
+}
+
+/// Everything the app keeps besides the window's state, so that handlers
+/// can borrow both at once.
+struct Core {
     config: Config,
     config_path: Option<PathBuf>,
     /// Keeps hot reload running.
@@ -474,6 +267,8 @@ pub struct App {
     /// The OS prefers dark mode (for `theme = { light, dark }`).
     os_dark: bool,
     banner: Option<Banner>,
+    /// The window, to redraw it when a banner changes.
+    window: Option<Arc<Window>>,
     proxy: EventLoopProxy<UserEvent>,
     bindings: Bindings,
     /// Samples for the status bar while it is shown.
@@ -489,7 +284,6 @@ pub struct App {
     /// Current font size in points; changed by zoom shortcuts.
     font_size: f32,
     next_pane_id: u64,
-    state: Option<WindowState>,
     /// Home directories in WSL, to start new panes in `~/…`.
     wsl_homes: crate::wsl::Homes,
     /// Used up by the first pane.
@@ -519,6 +313,33 @@ impl App {
         startup: Startup,
         proxy: EventLoopProxy<UserEvent>,
     ) -> Self {
+        Self {
+            core: Core::new(config, config_path, banner, startup, proxy),
+            state: None,
+        }
+    }
+
+    /// The debug server runs: open the window in the background and keep
+    /// it acting as focused; `headless` keeps it off-screen.
+    #[cfg(feature = "debug-server")]
+    pub fn enable_debug_server(&mut self, headless: bool) {
+        self.core.debug.enabled = true;
+        self.core.debug.headless = headless;
+    }
+
+    pub fn into_result(self) -> Result<()> {
+        self.core.error.map_or(Ok(()), Err)
+    }
+}
+
+impl Core {
+    fn new(
+        config: Config,
+        config_path: Option<PathBuf>,
+        banner: Option<Banner>,
+        startup: Startup,
+        proxy: EventLoopProxy<UserEvent>,
+    ) -> Self {
         let clipboard = arboard::Clipboard::new()
             .inspect_err(|err| tracing::warn!("clipboard unavailable: {err}"))
             .ok();
@@ -534,7 +355,7 @@ impl App {
         let (themes, theme_warnings) = ThemeSet::load(themes_dir.as_deref());
         let (bindings, binding_warnings) = Bindings::from_config(&config.keybindings);
 
-        let mut app = Self {
+        let mut core = Self {
             font_size: config.font.size,
             config,
             config_path,
@@ -543,6 +364,7 @@ impl App {
             palette: Palette::default(),
             os_dark: true,
             banner,
+            window: None,
             proxy,
             bindings,
             system_monitor: None,
@@ -552,7 +374,6 @@ impl App {
             update: None,
             clipboard,
             next_pane_id: 0,
-            state: None,
             wsl_homes: Default::default(),
             startup,
             exit_requested: false,
@@ -565,10 +386,10 @@ impl App {
             #[cfg(feature = "debug-server")]
             debug: Default::default(),
         };
-        let theme_warning = app.update_palette();
-        app.sync_system_monitor();
-        app.sync_update_checker();
-        app.notify(Banner::config(
+        let theme_warning = core.update_palette(None);
+        core.sync_system_monitor();
+        core.sync_update_checker(None);
+        core.notify(Banner::config(
             Severity::Warning,
             theme_warnings
                 .into_iter()
@@ -576,8 +397,16 @@ impl App {
                 .chain(theme_warning)
                 .collect(),
         ));
-        app
+        core
     }
+
+    fn request_redraw(&self) {
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    // ----- Banners ---------------------------------------------------------
 
     /// Show a banner (and log its messages). Errors take precedence.
     fn notify(&mut self, banner: Option<Banner>) {
@@ -599,14 +428,58 @@ impl App {
             Some(old) if old.severity == Severity::Error => Some(old),
             _ => Some(new),
         };
-        if let Some(state) = self.state.as_ref() {
-            state.window.request_redraw();
+        self.request_redraw();
+    }
+
+    /// Drop the banner titled `title`, if it is shown.
+    fn dismiss_banner(&mut self, title: &str) {
+        if self.banner.as_ref().is_some_and(|b| b.title == title) {
+            self.banner = None;
+            self.request_redraw();
         }
     }
 
+    /// Drop a banner about the previous config; others (e.g. a failed
+    /// link) stay until dismissed.
+    fn clear_config_banner(&mut self) {
+        if self.banner.as_ref().is_some_and(Banner::is_config) {
+            self.banner = None;
+        }
+    }
+
+    /// Show a banner asking to repeat an action to confirm it. It replaces
+    /// any other banner, even an error: the action must not look like it
+    /// failed.
+    fn ask_to_repeat(&mut self, title: &'static str, message: String) {
+        tracing::info!("{message}");
+        self.banner = Banner::new(Severity::Warning, title, vec![message]);
+        self.request_redraw();
+    }
+
+    /// Open `url` in the browser, or say why not.
+    fn open_url(&mut self, url: &str) {
+        let problem = match crate::link::check(url) {
+            Err(reason) => format!("not opening {url}: {reason}"),
+            Ok(()) => match open::that_detached(url) {
+                Err(err) => format!("failed to open {url}: {err}"),
+                Ok(()) => return,
+            },
+        };
+        self.notify(Banner::new(Severity::Warning, "Link", vec![problem]));
+    }
+
+    /// Open the page of the newer release.
+    fn open_update(&mut self) {
+        if let Some(url) = self.update.as_ref().map(|u| u.url.clone()) {
+            self.open_url(&url);
+        }
+    }
+
+    // ----- Theme -------------------------------------------------------------
+
     /// Pick the theme for the current config and OS appearance and apply
     /// it to all panes. Returns a warning if the theme doesn't exist.
-    fn update_palette(&mut self) -> Option<String> {
+    fn update_palette(&mut self, state: Option<&mut WindowState>) -> Option<String> {
         let name = match &self.config.theme {
             ThemeSelection::Single(name) => name,
             ThemeSelection::Auto { light, dark } => {
@@ -630,14 +503,31 @@ impl App {
             }
         };
         self.palette = palette_from(theme);
-        if let Some(state) = self.state.as_ref() {
-            for pane in state.tabs.iter().flat_map(|t| &t.content.panes) {
+        if let Some(state) = state {
+            for pane in state.panes() {
                 pane.term.set_palette(self.palette.clone());
             }
             state.window.request_redraw();
         }
         warning
     }
+
+    /// Follow the OS appearance for `theme = { light, dark }`.
+    fn set_os_dark(&mut self, state: Option<&mut WindowState>, dark: bool) {
+        if dark == self.os_dark {
+            return;
+        }
+        self.os_dark = dark;
+        if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
+            let warning = self.update_palette(state);
+            self.notify(Banner::config(
+                Severity::Warning,
+                warning.into_iter().collect(),
+            ));
+        }
+    }
+
+    // ----- Status bar and updates -------------------------------------------
 
     /// Start, restart or stop sampling to match the status bar config.
     fn sync_system_monitor(&mut self) {
@@ -660,9 +550,14 @@ impl App {
         }
     }
 
+    /// The tab bar shows a badge for a newer release.
+    fn update_badge(&self) -> bool {
+        self.update.is_some() && self.config.updates.tab_bar
+    }
+
     /// Start or stop the daily update check to match the update
     /// indicators, and show or hide the tab bar badge.
-    fn sync_update_checker(&mut self) {
+    fn sync_update_checker(&mut self, mut state: Option<&mut WindowState>) {
         match (self.config.update_check(), self.update_checker.is_some()) {
             (true, false) => {
                 tracing::debug!("starting update check");
@@ -671,22 +566,21 @@ impl App {
             (false, true) => {
                 // Dropping it stops the thread; forget what it found.
                 self.update_checker = None;
-                self.set_update(None);
+                self.set_update(state.as_deref_mut(), None);
                 self.dismiss_banner(update::BANNER);
             }
             _ => {}
         }
-        if let Some(state) = self.state.as_mut() {
-            let badge = self.update.is_some() && self.config.updates.tab_bar;
-            if state.update_badge != badge {
-                state.update_badge = badge;
-                state.window.request_redraw();
-            }
+        if let Some(state) = state
+            && state.update_badge != self.update_badge()
+        {
+            state.update_badge = self.update_badge();
+            state.window.request_redraw();
         }
     }
 
     /// Show what an update check found.
-    fn update_checked(&mut self, checked: update::Checked) {
+    fn update_checked(&mut self, state: Option<&mut WindowState>, checked: update::Checked) {
         // Late answers of a check that was just turned off.
         if !checked.manual && self.update_checker.is_none() {
             return;
@@ -707,23 +601,24 @@ impl App {
         let update = Update::new(&release, Build::current());
         // A repeated answer replaces the banner instead of adding to it.
         self.dismiss_banner(update::BANNER);
-        match &update {
+        let message = match &update {
             Some(update) if checked.manual || (show_banner && !checked.dismissed) => {
-                let banner = Banner::new(Severity::Info, update::BANNER, vec![update.message()]);
-                self.notify(banner.map(|b| b.with_url(update.url.clone())));
+                Some((update.message(), Some(update.url.clone())))
             }
-            Some(_) => {}
-            None if checked.manual => self.notify(Banner::new(
-                Severity::Info,
-                update::BANNER,
-                vec![update::up_to_date()],
-            )),
-            None => {}
+            None if checked.manual => Some((update::up_to_date(), None)),
+            _ => None,
+        };
+        if let Some((message, url)) = message {
+            let banner = Banner::new(Severity::Info, update::BANNER, vec![message]);
+            self.notify(banner.map(|b| match url {
+                Some(url) => b.with_url(url),
+                None => b,
+            }));
         }
-        self.set_update(update);
+        self.set_update(state, update);
     }
 
-    fn set_update(&mut self, update: Option<Update>) {
+    fn set_update(&mut self, state: Option<&mut WindowState>, update: Option<Update>) {
         self.stats.set_update(
             update
                 .as_ref()
@@ -731,40 +626,18 @@ impl App {
                 .map(|u| u.version.clone()),
         );
         self.update = update;
-        if let Some(state) = self.state.as_mut() {
-            state.update_badge = self.update.is_some() && self.config.updates.tab_bar;
+        if let Some(state) = state {
+            state.update_badge = self.update_badge();
             state.status_bar_changed(&self.config, &self.stats);
             state.window.request_redraw();
         }
     }
 
-    /// Open `url` in the browser, or say why not.
-    fn open_url(&mut self, url: &str) {
-        if let Err(reason) = crate::link::check(url) {
-            self.notify(Banner::new(
-                Severity::Warning,
-                "Link",
-                vec![format!("not opening {url}: {reason}")],
-            ));
-        } else if let Err(err) = open::that_detached(url) {
-            self.notify(Banner::new(
-                Severity::Warning,
-                "Link",
-                vec![format!("failed to open {url}: {err}")],
-            ));
-        }
-    }
-
-    /// Open the page of the newer release.
-    fn open_update(&mut self) {
-        if let Some(url) = self.update.as_ref().map(|u| u.url.clone()) {
-            self.open_url(&url);
-        }
-    }
+    // ----- Config ------------------------------------------------------------
 
     /// Re-read the config file and apply what changed. An invalid file
     /// leaves the current settings untouched.
-    fn reload_config(&mut self) {
+    fn reload_config(&mut self, mut state: Option<&mut WindowState>) {
         let Some(path) = self.config_path.clone() else {
             return;
         };
@@ -786,16 +659,26 @@ impl App {
         let old = std::mem::replace(&mut self.config, loaded.config);
         self.themes = themes;
         self.bindings = bindings;
-        warnings.extend(self.update_palette());
+        warnings.extend(self.update_palette(state.as_deref_mut()));
         self.sync_system_monitor();
-        self.sync_update_checker();
+        self.sync_update_checker(state.as_deref_mut());
         if old.updates.banner && !self.config.updates.banner {
             self.dismiss_banner(update::BANNER);
         }
         if old.updates.status_bar != self.config.updates.status_bar {
-            self.set_update(self.update.clone());
+            self.set_update(state.as_deref_mut(), self.update.clone());
         }
+        warnings.extend(self.restart_warnings(&old, state.as_deref()));
+        if let Some(state) = state {
+            self.apply_config_to_window(&old, state, &mut warnings);
+        }
+        self.clear_config_banner();
+        self.notify(Banner::config(Severity::Warning, warnings));
+    }
 
+    /// Changes that only take effect when nuntio is restarted.
+    fn restart_warnings(&self, old: &Config, state: Option<&WindowState>) -> Vec<String> {
+        let mut warnings = Vec::new();
         let chrome_changed = if cfg!(target_os = "macos") {
             old.window.effective_macos_titlebar() != self.config.window.effective_macos_titlebar()
         } else {
@@ -805,234 +688,59 @@ impl App {
             warnings.push("window decorations change when nuntio is restarted".into());
         }
         // A window created opaque can't become transparent.
-        let opaque = self.state.as_ref().is_some_and(|s| !s.transparent);
+        let opaque = state.is_some_and(|s| !s.transparent);
         if opaque && self.config.window.opacity < 1.0 && old.window.opacity >= 1.0 {
             warnings.push("window opacity takes effect when nuntio is restarted".into());
         }
+        warnings
+    }
 
-        if let Some(state) = self.state.as_mut() {
-            #[cfg(target_os = "macos")]
-            if old.macos.option_as_meta != self.config.macos.option_as_meta {
-                use winit::platform::macos::WindowExtMacOS;
-                let option = option_as_alt(self.config.macos.option_as_meta);
-                state.window.set_option_as_alt(option);
-            }
-            if old.font.family != self.config.font.family {
-                warnings.extend(
-                    state
-                        .renderer
-                        .set_font_family(self.config.font.family.clone()),
-                );
-            }
-            let options = term_options(&self.config);
-            if term_options(&old) != options {
-                for pane in state.tabs.iter().flat_map(|t| &t.content.panes) {
-                    pane.term.set_options(options);
-                }
-            }
-            if old.font.size != self.config.font.size {
-                self.font_size = self.config.font.size;
-                let scale = state.window.scale_factor();
-                state.renderer.set_font_size(self.font_size, scale);
-            }
-            // Padding, font and tab bar settings all affect the grid.
-            state.resize_terms(&self.config);
-            state.window.request_redraw();
+    /// Apply a reloaded config to the window and its panes; `old` is the
+    /// config before.
+    fn apply_config_to_window(
+        &mut self,
+        old: &Config,
+        state: &mut WindowState,
+        warnings: &mut Vec<String>,
+    ) {
+        #[cfg(target_os = "macos")]
+        if old.macos.option_as_meta != self.config.macos.option_as_meta {
+            use winit::platform::macos::WindowExtMacOS;
+            let option = option_as_alt(self.config.macos.option_as_meta);
+            state.window.set_option_as_alt(option);
         }
-        self.clear_config_banner();
-        self.notify(Banner::config(Severity::Warning, warnings));
-    }
-
-    /// Drop a banner about the previous config; others (e.g. a failed
-    /// link) stay until dismissed.
-    fn clear_config_banner(&mut self) {
-        if self.banner.as_ref().is_some_and(Banner::is_config) {
-            self.banner = None;
-        }
-    }
-
-    /// The debug server runs: open the window in the background and keep
-    /// it acting as focused; `headless` keeps it off-screen.
-    #[cfg(feature = "debug-server")]
-    pub fn enable_debug_server(&mut self, headless: bool) {
-        self.debug.enabled = true;
-        self.debug.headless = headless;
-    }
-
-    /// The window is kept off-screen for the debug server.
-    fn headless(&self) -> bool {
-        #[cfg(feature = "debug-server")]
-        return self.debug.headless;
-        #[cfg(not(feature = "debug-server"))]
-        false
-    }
-
-    pub fn into_result(self) -> Result<()> {
-        self.error.map_or(Ok(()), Err)
-    }
-
-    /// `transparent`: the window was created transparent (see
-    /// `wants_transparency`).
-    fn create_renderer(&self, window: &Arc<Window>, transparent: bool) -> Result<Renderer> {
-        let size = window.inner_size();
-        Ok(Renderer::new(
-            window.clone(),
-            size.width,
-            size.height,
-            window.scale_factor(),
-            self.config.font.family.clone(),
-            self.font_size,
-            transparent,
-        )?)
-    }
-
-    /// Start a shell, or `command` instead, in a new pane, in `dir` if it
-    /// suits the shell. The size is corrected by the next `resize_terms`.
-    fn spawn_pane(&mut self, dir: Option<StartDir>, command: Option<Vec<String>>) -> Result<Pane> {
-        let id = PaneId(self.next_pane_id);
-        self.next_pane_id += 1;
-        let proxy = self.proxy.clone();
-        let config_shell = self.config.shell.as_ref().filter(|_| command.is_none());
-        let wsl = config_shell.is_some_and(|s| s.is_wsl());
-        let login_shell = command.is_none();
-        let shell = match command {
-            Some(mut argv) => Some(Shell {
-                program: argv.remove(0),
-                args: argv,
-            }),
-            None => config_shell.map(|s| {
-                let wsl_dir = match &dir {
-                    Some(StartDir::Wsl(dir)) => Some(dir.as_str()),
-                    _ => None,
-                };
-                let (program, args) = s.command(wsl_dir);
-                Shell { program, args }
-            }),
-        };
-        let options = SpawnOptions {
-            shell,
-            login_shell,
-            // `wsl.exe --cd` picks the directory; a Windows one would be ignored.
-            working_directory: match dir {
-                Some(StartDir::Local(dir)) if !wsl => Some(dir),
-                _ => None,
-            },
-            term: term_options(&self.config),
-            palette: self.palette.clone(),
-            env: crate::pane_env::pane_env(self.config_path.as_deref(), wsl),
-        };
-        let size = self.state.as_ref().map_or(
-            nuntio_term::TermSize {
-                columns: 80,
-                lines: 24,
-                cell_width: 1,
-                cell_height: 1,
-            },
-            |s| s.grid(),
-        );
-        let term = TermHandle::spawn(options, size, move |event| {
-            let _ = proxy.send_event(UserEvent::Term(id, event));
-        })?;
-        Ok(Pane::new(id, term, wsl))
-    }
-
-    fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState> {
-        let attrs = Window::default_attributes()
-            .with_title(DEFAULT_TITLE)
-            .with_inner_size(LogicalSize::new(900.0, 600.0))
-            // Shown once it has the size of the configured grid, which is
-            // only known with the font (where the platform allows hiding).
-            .with_visible(false);
-        // Driven remotely: don't take the focus from the user's window.
-        #[cfg(feature = "debug-server")]
-        let attrs = attrs.with_active(!self.debug.enabled);
-        // Headless: shown, since hidden windows get no redraws on Windows,
-        // but where nobody sees it.
-        let attrs = if self.headless() {
-            let attrs = attrs.with_position(PhysicalPosition::new(-32000, -32000));
-            #[cfg(windows)]
-            let attrs = winit::platform::windows::WindowAttributesExtWindows::with_skip_taskbar(
-                attrs, true,
+        if old.font.family != self.config.font.family {
+            warnings.extend(
+                state
+                    .renderer
+                    .set_font_family(self.config.font.family.clone()),
             );
-            attrs
-        } else {
-            attrs
-        };
-        // App id / WM_CLASS, matching the .desktop file (Wayland and X11).
-        #[cfg(target_os = "linux")]
-        let attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
-            attrs, "nuntio", "nuntio",
-        );
-        let (attrs, chrome) = chrome(event_loop, &self.config, attrs);
-        let transparent = wants_transparency(chrome, &self.config);
-        let attrs = attrs.with_transparent(transparent);
-        #[cfg(target_os = "macos")]
-        let attrs = winit::platform::macos::WindowAttributesExtMacOS::with_option_as_alt(
-            attrs,
-            option_as_alt(self.config.macos.option_as_meta),
-        );
-        let window = Arc::new(
-            event_loop
-                .create_window(attrs)
-                .context("failed to create window")?,
-        );
-        window.set_ime_allowed(true);
-        #[cfg(windows)]
-        if chrome == Chrome::Undecorated {
-            round_corners(&window);
         }
-        let mut renderer = self.create_renderer(&window, transparent)?;
-        if let Some(warning) = renderer.take_font_warning() {
-            self.notify(Banner::config(Severity::Warning, vec![warning]));
-        }
-        // Follow the OS appearance for `theme = { light, dark }`.
-        let os_dark = window.theme() != Some(WindowTheme::Light);
-        if os_dark != self.os_dark {
-            self.os_dark = os_dark;
-            if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
-                let warning = self.update_palette();
-                self.notify(Banner::config(
-                    Severity::Warning,
-                    warning.into_iter().collect(),
-                ));
+        let options = term_options(&self.config);
+        if term_options(old) != options {
+            for pane in state.panes() {
+                pane.term.set_options(options);
             }
         }
-        let Startup {
-            command,
-            working_directory,
-        } = std::mem::take(&mut self.startup);
-        let dir = match working_directory {
-            Some(dir) => self.existing_dir(dir).map(StartDir::Local),
-            None => self.configured_dir(command.is_none()),
-        };
-        let pane = self.spawn_pane(dir, command)?;
-        let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
-        state.update_badge = self.update.is_some() && self.config.updates.tab_bar;
-        // The cell size is only known now that the renderer has the font.
-        // Where the size applies at once, there may be no `Resized` event.
-        let size = state.size_for_grid(&self.config);
-        if let Some(size) = state.window.request_inner_size(size) {
-            state.renderer.resize(size.width, size.height);
+        if old.font.size != self.config.font.size {
+            self.font_size = self.config.font.size;
+            let scale = state.window.scale_factor();
+            state.renderer.set_font_size(self.font_size, scale);
         }
-        // macOS centered the window at its first size.
-        #[cfg(target_os = "macos")]
-        if !self.headless() {
-            center(&state.window);
-        }
-        state.window.set_visible(true);
+        // Padding, font and tab bar settings all affect the grid.
         state.resize_terms(&self.config);
-        #[cfg(feature = "debug-server")]
-        if self.debug.enabled {
-            debug_server::focus(&mut state);
-        }
-        Ok(state)
+        state.window.request_redraw();
     }
 
-    fn fail(&mut self, event_loop: &ActiveEventLoop, err: anyhow::Error) {
-        tracing::error!("{err:#}");
-        self.error = Some(err);
-        event_loop.exit();
+    fn set_font_size(&mut self, state: &mut WindowState, size: f32) {
+        self.font_size = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        let scale = state.window.scale_factor();
+        state.renderer.set_font_size(self.font_size, scale);
+        state.resize_terms(&self.config);
+        state.window.request_redraw();
     }
+
+    // ----- Clipboard ---------------------------------------------------------
 
     fn set_clipboard(&mut self, text: String) {
         if let Some(clipboard) = self.clipboard.as_mut()
@@ -1086,1053 +794,165 @@ impl App {
         None
     }
 
-    fn copy_selection(&mut self) {
-        if let Some(text) = self.state.as_ref().and_then(|s| s.term().selection_text()) {
-            self.set_clipboard(text);
-        }
-    }
+    // ----- The window ------------------------------------------------------
 
-    fn set_font_size(&mut self, size: f32) {
-        self.font_size = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-        if let Some(state) = self.state.as_mut() {
-            let scale = state.window.scale_factor();
-            state.renderer.set_font_size(self.font_size, scale);
-            state.resize_terms(&self.config);
-            state.window.request_redraw();
-        }
-    }
-
-    /// `dir` if it is a directory; otherwise a warning.
-    fn existing_dir(&mut self, dir: PathBuf) -> Option<PathBuf> {
-        if dir.is_dir() {
-            return Some(dir);
-        }
-        self.notify(Banner::new(
-            Severity::Warning,
-            "Working directory",
-            vec![format!("{} is not a directory", dir.display())],
-        ));
-        None
-    }
-
-    /// The configured `working_directory` for a new pane, which runs the
-    /// shell (or a command).
-    fn configured_dir(&mut self, shell: bool) -> Option<StartDir> {
-        let dir = self.config.working_directory.clone()?;
-        if shell && self.config.shell.as_ref().is_some_and(|s| s.is_wsl()) {
-            return self.wsl_cd(&dir).map(StartDir::Wsl);
-        }
-        let path = match dir.strip_prefix('~') {
-            Some(rest) => {
-                let rest = rest.trim_start_matches(['/', '\\']);
-                dirs::home_dir()?.join(rest)
-            }
-            None => PathBuf::from(dir),
-        };
-        self.existing_dir(path).map(StartDir::Local)
-    }
-
-    /// `dir` as `wsl.exe --cd` takes it: `~/…` becomes absolute.
-    fn wsl_cd(&mut self, dir: &str) -> Option<String> {
-        let shell = self.config.shell.as_ref()?;
-        let distro = shell.wsl.as_deref()?;
-        crate::wsl::cd_arg(dir, || {
-            self.wsl_homes.get(distro, shell.wsl_user.as_deref())
-        })
-    }
-
-    /// The directory of the focused pane, for a new pane to start in.
-    fn focused_dir(&mut self) -> Option<StartDir> {
-        let pane = self.state.as_ref()?.content().focused_pane();
-        if !pane.wsl {
-            return pane.term.working_directory().map(StartDir::Local);
-        }
-        let dir = crate::wsl::linux_dir(pane.term.reported_directory(), pane.title.as_deref())?;
-        self.wsl_cd(&dir).map(StartDir::Wsl)
-    }
-
-    /// Start a shell, or `command`, for a new tab or split: in the focused
-    /// pane's directory with `inherit`, otherwise (or if it's unknown) in
-    /// `working_directory` or at home. Failures are shown in a banner.
-    fn spawn_for_focused(&mut self, command: Option<Vec<String>>, inherit: bool) -> Option<Pane> {
-        let dir = inherit
-            .then(|| self.focused_dir())
-            .flatten()
-            .or_else(|| self.configured_dir(command.is_none()))
-            .or_else(|| dirs::home_dir().map(StartDir::Local));
-        self.spawn_pane(dir, command)
-            .inspect_err(|err| {
-                self.notify(Banner::new(
-                    Severity::Error,
-                    "Shell",
-                    vec![format!("failed to start: {err:#}")],
-                ));
-            })
-            .ok()
-    }
-
-    /// Open a tab with a shell, or with `command` instead.
-    fn new_tab(&mut self, command: Option<Vec<String>>) {
-        let inherit = self.config.tabs.inherit_directory;
-        let Some(pane) = self.spawn_for_focused(command, inherit) else {
-            return;
-        };
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let id = pane.id;
-        state.send_focus(false);
-        state.tabs.open(TabContent::new(pane));
-        state.hold_reveal(id, Instant::now());
-        state.reset_focus_state();
-        // The first extra tab may show the tab bar and shrink the grid.
-        state.resize_terms(&self.config);
-        state.window.request_redraw();
-    }
-
-    /// Split the focused pane; the new pane starts in the same directory.
-    fn split(&mut self, axis: Axis) {
-        let Some(pane) = self.spawn_for_focused(None, true) else {
-            return;
-        };
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let new = pane.id;
-        let content = state.content_mut();
-        let target = content.focused;
-        if !content.tree.split(target, new, axis) {
-            // Dropping the pane ends its shell.
-            tracing::error!("focused pane {target:?} is not in the split tree");
-            return;
-        }
-        content.panes.push(pane);
-        state.focus_pane(new);
-        state.hold_reveal(new, Instant::now());
-        state.resize_terms(&self.config);
-    }
-
-    /// Close a pane; closing a tab's last pane closes the tab.
-    fn close_pane(&mut self, id: PaneId) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let Some(index) = state.tabs.position(|c| c.contains(id)) else {
-            return;
-        };
-        let active = index == state.tabs.active_index();
-        let Some(tab) = state.tabs.get_mut(index) else {
-            return;
-        };
-        let content = &mut tab.content;
-        let Some(next) = content.tree.remove(id) else {
-            // The tab's last pane.
-            self.close_tab(index);
-            return;
-        };
-        let was_focused = content.focused == id;
-        content.panes.retain(|p| p.id != id);
-        if was_focused {
-            content.focused = next;
-            if active {
-                state.send_focus(true);
-                state.reset_focus_state();
-            }
-        }
-        state.mouse.divider_drag = None;
-        state.resize_terms(&self.config);
-        state.window.request_redraw();
-    }
-
-    fn resize_pane(&mut self, direction: Direction) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let layout = state.layout(&self.config);
-        let cell = state.renderer.cell_metrics();
-        let step = match direction {
-            Direction::Left | Direction::Right => RESIZE_STEP_CELLS * cell.width,
-            Direction::Up | Direction::Down => RESIZE_STEP_CELLS * cell.height,
-        } as f32;
-        let content = state.content_mut();
-        let focused = content.focused;
-        content.tree.resize(focused, direction, step, &layout);
-        state.resize_terms(&self.config);
-        state.window.request_redraw();
-    }
-
-    /// Close a tab; closing the last one quits.
-    fn close_tab(&mut self, index: usize) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        if state.tabs.len() == 1 {
-            self.exit_requested = true;
-            return;
-        }
-        let was_active = index == state.tabs.active_index();
-        state.tabs.close(index);
-        if was_active {
-            state.send_focus(true);
-            state.reset_focus_state();
-        }
-        state.mouse.hovered_bar = None;
-        state.mouse.tab_drag = None;
-        state.resize_terms(&self.config);
-        state.window.request_redraw();
-    }
-
-    /// Close what the user asked to close, unless programs run there and
-    /// this isn't the confirming repetition.
-    fn request_close(&mut self, target: CloseTarget) {
-        if !self.confirm_close(target) {
-            return;
-        }
-        match target {
-            CloseTarget::Window => self.exit_requested = true,
-            CloseTarget::Tab(id) => {
-                let index = self
-                    .state
-                    .as_ref()
-                    .and_then(|s| s.tabs.position(|c| c.contains(id)));
-                if let Some(index) = index {
-                    self.close_tab(index);
-                }
-            }
-            CloseTarget::Pane(id) => self.close_pane(id),
-        }
-    }
-
-    /// Close the tab at `index`, as `request_close` does.
-    fn request_close_tab(&mut self, index: usize) {
-        let id = self
-            .state
-            .as_ref()
-            .and_then(|s| s.tabs.iter().nth(index))
-            .map(|tab| tab.content.focused);
-        if let Some(id) = id {
-            self.request_close(CloseTarget::Tab(id));
-        }
-    }
-
-    /// Whether `target` may close now. If programs other than the shell
-    /// run in it, the first request names them in a banner, and only the
-    /// same request again within `CONFIRM_REPEAT` closes it.
-    fn confirm_close(&mut self, target: CloseTarget) -> bool {
-        let now = Instant::now();
-        let pending = self.pending_close.take();
-        let Some(state) = self
-            .state
-            .as_ref()
-            .filter(|_| self.config.window.confirm_close)
-        else {
-            return true;
-        };
-        let tabs = state.tabs.iter().map(|t| &t.content);
-        let panes: Vec<&Pane> = match target {
-            CloseTarget::Window => tabs.flat_map(|c| &c.panes).collect(),
-            CloseTarget::Tab(id) => tabs
-                .filter(|c| c.contains(id))
-                .flat_map(|c| &c.panes)
-                .collect(),
-            CloseTarget::Pane(id) => tabs.filter_map(|c| c.pane(id)).collect(),
-        };
-        // Where the process can't be seen (Windows, WSL), don't ask.
-        let running: Vec<String> = panes
-            .iter()
-            .filter(|p| p.term.foreground_is_shell() == Some(false))
-            .map(|p| p.term.process_name())
-            .collect();
-        self.dismiss_banner(CLOSE_BANNER);
-        if running.is_empty() || pending.is_some_and(|p| p.target == target && now < p.until) {
-            return true;
-        }
-        self.pending_close = Some(PendingClose {
-            target,
-            until: now + CONFIRM_REPEAT,
-        });
-        self.ask_to_repeat(CLOSE_BANNER, close_message(&running, target));
+    /// The window is kept off-screen for the debug server.
+    fn headless(&self) -> bool {
+        #[cfg(feature = "debug-server")]
+        return self.debug.headless;
+        #[cfg(not(feature = "debug-server"))]
         false
     }
 
-    /// Paste into the focused pane. Where the program doesn't use
-    /// bracketed paste, text with line breaks would run at once: the
-    /// first paste only warns, and the same paste again within
-    /// `CONFIRM_REPEAT` goes through.
-    fn paste(&mut self, text: String) {
-        let Some(state) = self.state.as_ref() else {
-            return;
-        };
-        let bracketed = state.term().mode().contains(TermMode::BRACKETED_PASTE);
-        let pending = self.pending_paste.take();
-        self.dismiss_banner(PASTE_BANNER);
-        let now = Instant::now();
-        if self.config.confirm_paste
-            && !bracketed
-            && let Some(message) = paste_warning(&text)
-            && !pending.is_some_and(|p| p.text == text && now < p.until)
-        {
-            self.pending_paste = Some(PendingPaste {
-                text,
-                until: now + CONFIRM_REPEAT,
-            });
-            self.ask_to_repeat(PASTE_BANNER, message);
-            return;
-        }
-        if let Some(state) = self.state.as_ref() {
-            state.term().paste(&text);
-        }
+    fn fail(&mut self, event_loop: &ActiveEventLoop, err: anyhow::Error) {
+        tracing::error!("{err:#}");
+        self.error = Some(err);
+        event_loop.exit();
     }
 
-    /// Drop the banner titled `title`, if it is shown.
-    fn dismiss_banner(&mut self, title: &str) {
-        if self.banner.as_ref().is_some_and(|b| b.title == title) {
-            self.banner = None;
-            if let Some(state) = self.state.as_ref() {
-                state.window.request_redraw();
-            }
-        }
+    /// `transparent`: the window was created transparent (see
+    /// `wants_transparency`).
+    fn create_renderer(&self, window: &Arc<Window>, transparent: bool) -> Result<Renderer> {
+        let size = window.inner_size();
+        Ok(Renderer::new(
+            window.clone(),
+            size.width,
+            size.height,
+            window.scale_factor(),
+            self.config.font.family.clone(),
+            self.font_size,
+            transparent,
+        )?)
     }
 
-    /// Show a banner asking to repeat an action to confirm it. It replaces
-    /// any other banner, even an error: the action must not look like it
-    /// failed.
-    fn ask_to_repeat(&mut self, title: &'static str, message: String) {
-        tracing::info!("{message}");
-        self.banner = Banner::new(Severity::Warning, title, vec![message]);
-        if let Some(state) = self.state.as_ref() {
-            state.window.request_redraw();
-        }
-    }
-
-    fn run_action(&mut self, action: Action) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        match action {
-            Action::Copy => self.copy_selection(),
-            Action::Paste => {
-                if let Some(text) = self.clipboard_text() {
-                    match self.state.as_mut().and_then(|s| s.search_and_term()) {
-                        // Pasting into the find bar extends the query.
-                        Some((bar, term)) => {
-                            bar.query.push_str(text.lines().next().unwrap_or(""));
-                            bar.update(term);
-                        }
-                        None => self.paste(text),
-                    }
-                }
-            }
-            Action::ScrollPageUp => state.term().scroll_page(true),
-            Action::ScrollPageDown => state.term().scroll_page(false),
-            Action::ScrollLineUp => state.term().scroll(1),
-            Action::ScrollLineDown => state.term().scroll(-1),
-            Action::ClearScrollback => state.term().clear_history(),
-            Action::FontIncrease => self.set_font_size(self.font_size + 1.0),
-            Action::FontDecrease => self.set_font_size(self.font_size - 1.0),
-            Action::FontReset => self.set_font_size(self.config.font.size),
-            Action::NewTab => self.new_tab(None),
-            Action::OpenSettings => match crate::pane_env::helper() {
-                Some(helper) => self.new_tab(Some(vec![helper.to_string_lossy().into_owned()])),
-                None => self.notify(Banner::new(
-                    Severity::Warning,
-                    "Settings",
-                    vec!["nuntio-config is not installed next to nuntio".into()],
-                )),
-            },
-            Action::CheckForUpdates => update::check_now(self.proxy.clone()),
-            Action::CloseTab => {
-                let id = state.content().focused;
-                self.request_close(CloseTarget::Tab(id));
-            }
-            Action::NextTab => {
-                let next = (state.tabs.active_index() + 1) % state.tabs.len();
-                state.select_tab(next);
-            }
-            Action::PreviousTab => {
-                let len = state.tabs.len();
-                state.select_tab((state.tabs.active_index() + len - 1) % len);
-            }
-            Action::SelectTab(index) => state.select_tab(index),
-            Action::ReloadConfig => self.reload_config(),
-            Action::ClosePane => {
-                let id = state.content().focused;
-                self.request_close(CloseTarget::Pane(id));
-            }
-            Action::SplitVertical => self.split(Axis::Vertical),
-            Action::SplitHorizontal => self.split(Axis::Horizontal),
-            Action::FocusPane(direction) => {
-                let focused = state.content().focused;
-                // A zoomed pane has no visible neighbors: find them in the
-                // split layout and leave zoom only if there is one.
-                let zoomed = state.content().tree.is_zoomed();
-                if zoomed {
-                    state.content_mut().tree.toggle_zoom(focused);
-                }
-                let layout = state.layout(&self.config);
-                match PaneTree::neighbor(focused, direction, &layout) {
-                    Some(id) => {
-                        state.focus_pane(id);
-                        if zoomed {
-                            state.resize_terms(&self.config);
-                        }
-                    }
-                    None if zoomed => state.content_mut().tree.toggle_zoom(focused),
-                    None => {}
-                }
-            }
-            Action::ResizePane(direction) => self.resize_pane(direction),
-            Action::Search => {
-                // A selected piece of a line becomes the query.
-                let selection = state
-                    .term()
-                    .selection_text()
-                    .map(|text| text.trim_end_matches(['\r', '\n']).to_owned())
-                    .filter(|text| !text.trim().is_empty() && !text.contains('\n'));
-                state.search.get_or_insert_with(SearchBar::new);
-                if let Some(text) = selection
-                    && let Some((bar, term)) = state.search_and_term()
-                {
-                    term.clear_selection();
-                    bar.set_query(text, term);
-                }
-            }
-            Action::ToggleFullscreen => {
-                // Borderless is the native full screen (its own Space) on macOS.
-                let fullscreen = state.window.fullscreen().is_some();
-                let target = (!fullscreen).then_some(Fullscreen::Borderless(None));
-                state.window.set_fullscreen(target);
-            }
-            Action::ZoomPane => {
-                let content = state.content_mut();
-                let focused = content.focused;
-                content.tree.toggle_zoom(focused);
-                state.resize_terms(&self.config);
-            }
-        }
-        if let Some(state) = self.state.as_ref() {
-            state.window.request_redraw();
-        }
-    }
-
-    pub(crate) fn keyboard_input(&mut self, event: &KeyPress) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let kind = event.kind;
-        // The release of a key nuntio used is nuntio's too.
-        let used = state.used_keys.remove(&event.physical);
-        if kind == KeyEventKind::Release && used {
-            return;
-        }
-        let mods = state.modifiers.state();
-        if kind != KeyEventKind::Release && !self.key_for_program(event, mods) {
-            if let Some(state) = self.state.as_mut() {
-                state.used_keys.insert(event.physical);
-            }
-            return;
-        }
-        let Some(state) = self.state.as_ref() else {
-            return;
-        };
-        let meta = alt_is_meta(&state.modifiers, self.config.macos.option_as_meta);
-        let key_input = input::KeyInput {
-            key: &event.logical,
-            unmodified: &event.unmodified,
-            text: event.text.as_deref(),
-            location: event.location,
-            physical: event.physical,
-            event: kind,
-            shift: mods.shift_key(),
-            ctrl: mods.control_key(),
-            meta,
-            option: cfg!(target_os = "macos") && mods.alt_key() && !meta,
-            super_key: mods.super_key(),
-        };
-        let Some(bytes) = input::encode_key(&key_input, state.term().mode()) else {
-            return;
-        };
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        match kind {
-            // Letting go of a key doesn't count as typing.
-            KeyEventKind::Release => state.term().write(bytes),
-            _ => state.type_bytes(bytes),
-        }
-    }
-
-    /// Runs the find bar and shortcuts for a pressed key. Returns whether
-    /// the key is left for the program in the focused pane.
-    fn key_for_program(&mut self, event: &KeyPress, mods: ModifiersState) -> bool {
-        if self
-            .state
-            .as_ref()
-            .is_some_and(|state| state.search.is_some())
-            && self.search_key(event)
-        {
-            return false;
-        }
-        let latin = input::latin_key(&event.unmodified, event.physical);
-        if let Some(action) = self.lookup_binding(&event.unmodified, latin.as_ref(), mods) {
-            self.run_action(action);
-            return false;
-        }
-        // Unbound Cmd/Super combinations are shortcuts, not text. The
-        // modifier keys themselves still go to programs that ask for them
-        // (kitty's "report all keys").
-        !mods.super_key() || input::is_modifier(&event.logical)
-    }
-
-    /// The shortcut for a key; on layouts without Latin letters, also
-    /// looked up by the key's US character (see `input::latin_key`).
-    fn lookup_binding(
-        &self,
-        unmodified: &Key,
-        latin: Option<&Key>,
-        mods: ModifiersState,
-    ) -> Option<Action> {
-        self.bindings
-            .lookup(unmodified, mods)
-            .or_else(|| self.bindings.lookup(latin?, mods))
-    }
-
-    /// Keys for the open find bar. Returns whether the key was used;
-    /// shortcuts not handled here still work while searching.
-    fn search_key(&mut self, event: &KeyPress) -> bool {
-        let Some(state) = self.state.as_mut() else {
-            return false;
-        };
-        let mods = state.modifiers.state();
-        let term = &state.tabs.active().content.focused_pane().term;
-        let Some(bar) = state.search.as_mut() else {
-            return false;
-        };
-        // On macOS, Option+R arrives as "®"; the toggle must see the "r",
-        // also where the key gives a non-Latin letter.
-        let unmodified = &event.unmodified;
-        let latin = input::latin_key(unmodified, event.physical);
-        let is_r = matches!(latin.as_ref().unwrap_or(unmodified), Key::Character(c) if c.eq_ignore_ascii_case("r"));
-        match &event.logical {
-            Key::Named(NamedKey::Escape) => state.search = None,
-            Key::Named(NamedKey::Enter) => bar.next(term, !mods.shift_key()),
-            Key::Named(NamedKey::ArrowUp) => bar.next(term, true),
-            Key::Named(NamedKey::ArrowDown) => bar.next(term, false),
-            Key::Named(NamedKey::Backspace) => {
-                bar.query.pop();
-                bar.update(term);
-            }
-            // Alt+R toggles regex mode, like in many editors.
-            _ if mods.alt_key() && is_r => {
-                bar.regex = !bar.regex;
-                bar.update(term);
-            }
-            _ => {
-                let key_input = input::KeyInput {
-                    key: &event.logical,
-                    unmodified,
-                    text: event.text.as_deref(),
-                    location: event.location,
-                    physical: event.physical,
-                    event: KeyEventKind::Press,
-                    shift: mods.shift_key(),
-                    ctrl: mods.control_key(),
-                    meta: alt_is_meta(&state.modifiers, self.config.macos.option_as_meta),
-                    option: false,
-                    super_key: mods.super_key(),
-                };
-                let Some(text) = input::field_text(&key_input, mods.super_key()) else {
-                    // Shortcuts still work; other keys (Tab, F1, Ctrl+W, …)
-                    // must not reach the shell behind the bar.
-                    return self
-                        .lookup_binding(unmodified, latin.as_ref(), mods)
-                        .is_none();
-                };
-                bar.query.push_str(text);
-                bar.update(term);
-            }
-        }
-        state.window.request_redraw();
-        true
-    }
-
-    /// Look up the link under the pointer again and redraw if it changed.
-    fn update_hover_link(&mut self) {
-        if self.refresh_hover_link()
-            && let Some(state) = self.state.as_ref()
-        {
-            state.window.request_redraw();
-        }
-    }
-
-    /// The link under the pointer, if the link modifier (Ctrl, Cmd on
-    /// macOS) is held. Output, scrolling or a closed pane move the text
-    /// under a resting pointer, so this also runs before every frame and
-    /// click. Returns whether it changed.
-    fn refresh_hover_link(&mut self) -> bool {
-        let Some(state) = self.state.as_mut() else {
-            return false;
-        };
-        let mods = state.modifiers.state();
-        let held = if cfg!(target_os = "macos") {
-            mods.super_key()
+    fn window_attributes(&self) -> WindowAttributes {
+        let attrs = Window::default_attributes()
+            .with_title(DEFAULT_TITLE)
+            .with_inner_size(LogicalSize::new(900.0, 600.0))
+            // Shown once it has the size of the configured grid, which is
+            // only known with the font (where the platform allows hiding).
+            .with_visible(false);
+        // Driven remotely: don't take the focus from the user's window.
+        #[cfg(feature = "debug-server")]
+        let attrs = attrs.with_active(!self.debug.enabled);
+        // Headless: shown, since hidden windows get no redraws on Windows,
+        // but where nobody sees it.
+        let attrs = if self.headless() {
+            let attrs = attrs.with_position(PhysicalPosition::new(-32000, -32000));
+            #[cfg(windows)]
+            let attrs = winit::platform::windows::WindowAttributesExtWindows::with_skip_taskbar(
+                attrs, true,
+            );
+            attrs
         } else {
-            mods.control_key()
+            attrs
         };
-        let link = state.mouse.position.filter(|_| held).and_then(|pos| {
-            let id = state.pane_at(&self.config, pos)?;
-            let point = state.cell_in(&self.config, id, pos);
-            let link = state.content().pane(id)?.term.link_at(point)?;
-            Some((id, link))
-        });
-        if link == state.mouse.hover_link {
-            return false;
-        }
-        state.mouse.hover_link = link;
-        true
+        // App id / WM_CLASS, matching the .desktop file (Wayland and X11).
+        #[cfg(target_os = "linux")]
+        let attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
+            attrs, "nuntio", "nuntio",
+        );
+        #[cfg(target_os = "macos")]
+        let attrs = winit::platform::macos::WindowAttributesExtMacOS::with_option_as_alt(
+            attrs,
+            option_as_alt(self.config.macos.option_as_meta),
+        );
+        attrs
     }
 
-    fn mouse_input(&mut self, button: MouseButton, pressed: bool) {
-        // Open the link that is under the pointer now, not the one that
-        // was there when it last moved.
-        if pressed {
-            self.update_hover_link();
+    fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<WindowState> {
+        let (attrs, chrome) = chrome(event_loop, &self.config, self.window_attributes());
+        let transparent = wants_transparency(chrome, &self.config);
+        let window = Arc::new(
+            event_loop
+                .create_window(attrs.with_transparent(transparent))
+                .context("failed to create window")?,
+        );
+        window.set_ime_allowed(true);
+        #[cfg(windows)]
+        if chrome == Chrome::Undecorated {
+            round_corners(&window);
         }
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let button = match button {
-            MouseButton::Left => Button::Left,
-            MouseButton::Middle => Button::Middle,
-            MouseButton::Right => Button::Right,
-            _ => return,
-        };
-        let Some(pos) = state.mouse.position else {
-            // The pointer left the window; a release still ends what the
-            // press started.
-            if !pressed {
-                self.release_outside(button);
-            }
-            return;
-        };
-
-        if !pressed
-            && button == Button::Left
-            && (state.mouse.tab_drag.take().is_some() || state.mouse.divider_drag.take().is_some())
-        {
-            return;
+        let mut renderer = self.create_renderer(&window, transparent)?;
+        if let Some(warning) = renderer.take_font_warning() {
+            self.notify(Banner::config(Severity::Warning, vec![warning]));
         }
-        // A click on the banner pages through its messages or closes it.
-        if pressed
-            && let Some(banner) = &self.banner
-            && state.banner_contains(&self.config, banner, pos)
-        {
-            let width = state.window.inner_size().width as f32;
-            let (cell, scale) = (state.renderer.cell_metrics(), state.window.scale_factor());
-            let x = pos.x as f32;
-            let url = banner
-                .url
-                .clone()
-                .filter(|_| !banner.on_close(x, width, cell, scale));
-            let stays = url.is_none()
-                && self
-                    .banner
-                    .as_mut()
-                    .is_some_and(|banner| banner.click(x, width, cell, scale));
-            state.window.request_redraw();
-            if !stays && let Some(closed) = self.banner.take() {
-                // Closing the update banner means: not for this release.
-                if closed.title == update::BANNER
-                    && let Some(update) = &self.update
-                {
-                    update::dismiss(&update.version);
-                }
-            }
-            if let Some(url) = url {
-                self.open_url(&url);
-            }
-            return;
+        self.set_os_dark(None, window.theme() != Some(WindowTheme::Light));
+        let pane = self.spawn_first_pane()?;
+        self.window = Some(window.clone());
+        let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
+        state.update_badge = self.update_badge();
+        // The cell size is only known now that the renderer has the font.
+        // Where the size applies at once, there may be no `Resized` event.
+        let size = state.size_for_grid(&self.config);
+        if let Some(size) = state.window.request_inner_size(size) {
+            state.renderer.resize(size.width, size.height);
         }
-
-        // Window edges (undecorated windows) and the tab bar come first.
-        if pressed && button == Button::Left {
-            if let Some(direction) = state.resize_edge(pos) {
-                if !self.synthetic_input {
-                    let _ = state.window.drag_resize_window(direction);
-                }
-                return;
-            }
-            if let Some(bar) = state.tab_bar(&self.config)
-                && let Some(hit) = bar.hit(pos.x as f32, pos.y as f32)
-            {
-                match hit {
-                    BarHit::Tab(index) => {
-                        state.select_tab(index);
-                        state.mouse.tab_drag = Some(TabDrag {
-                            index,
-                            press_x: pos.x,
-                            moved: false,
-                        });
-                    }
-                    BarHit::Close(index) => self.request_close_tab(index),
-                    BarHit::NewTab => self.new_tab(None),
-                    BarHit::Empty => {
-                        // Double click maximizes, like a title bar.
-                        let now = Instant::now();
-                        let double = state
-                            .mouse
-                            .last_bar_click
-                            .is_some_and(|t| now.duration_since(t) < MULTI_CLICK_INTERVAL);
-                        if double {
-                            state.mouse.last_bar_click = None;
-                            let maximized = state.window.is_maximized();
-                            state.window.set_maximized(!maximized);
-                        } else {
-                            state.mouse.last_bar_click = Some(now);
-                            if !self.synthetic_input {
-                                let _ = state.window.drag_window();
-                            }
-                        }
-                    }
-                    BarHit::Minimize => state.window.set_minimized(true),
-                    BarHit::Maximize => {
-                        let maximized = state.window.is_maximized();
-                        state.window.set_maximized(!maximized);
-                    }
-                    BarHit::CloseWindow => self.request_close(CloseTarget::Window),
-                    BarHit::Update => self.open_update(),
-                }
-                return;
-            }
+        // macOS centered the window at its first size.
+        #[cfg(target_os = "macos")]
+        if !self.headless() {
+            center(&state.window);
         }
-        // Middle click closes a tab, like in browsers and iTerm2.
-        if pressed
-            && button == Button::Middle
-            && let Some(bar) = state.tab_bar(&self.config)
-            && let Some(BarHit::Tab(index) | BarHit::Close(index)) =
-                bar.hit(pos.x as f32, pos.y as f32)
-        {
-            self.request_close_tab(index);
-            return;
+        state.window.set_visible(true);
+        state.resize_terms(&self.config);
+        #[cfg(feature = "debug-server")]
+        if self.debug.enabled {
+            debug_server::focus(&mut state);
         }
-
-        if pressed
-            && button == Button::Left
-            && state.status_item_at(&self.config, &self.stats, pos) == Some(StatusItem::Update)
-        {
-            self.open_update();
-            return;
-        }
-        if pressed
-            && (state.search_bar_contains(&self.config, pos)
-                || state.status_bar_contains(&self.config, pos))
-        {
-            return;
-        }
-        if pressed
-            && button == Button::Left
-            && let Some((_, link)) = &state.mouse.hover_link
-        {
-            let url = link.url.clone();
-            self.open_url(&url);
-            return;
-        }
-        if pressed {
-            if button == Button::Left
-                && let Some(divider) = state.divider_at(&self.config, pos)
-            {
-                state.mouse.divider_drag = Some(divider);
-                return;
-            }
-            // Clicking a pane focuses it; the click then acts inside it.
-            if let Some(id) = state.pane_at(&self.config, pos) {
-                state.focus_pane(id);
-            }
-        }
-
-        let point = state.cell_at(&self.config, pos);
-        // Application mouse mode: forward presses and matching releases.
-        let mode = state.term().mode();
-        if pressed && state.reports_mouse(mode) {
-            state.report(Some(button), MouseAction::Press, point);
-            state.mouse.reported_button = Some(button);
-            // Where a release outside the window is reported.
-            state.mouse.last_reported_cell = Some((point.column, point.line));
-            return;
-        }
-        if !pressed && state.mouse.reported_button == Some(button) {
-            state.mouse.reported_button = None;
-            state.report(Some(button), MouseAction::Release, point);
-            return;
-        }
-
-        if button != Button::Left {
-            // Middle click pastes the primary selection, as on X11.
-            if pressed
-                && button == Button::Middle
-                && let Some(text) = self.primary_text()
-            {
-                self.paste(text);
-            }
-            return;
-        }
-        if pressed {
-            if state.modifiers.state().shift_key() && state.term().has_selection() {
-                // Shift+click extends the selection, keeping its kind.
-                state.term().update_selection(point);
-            } else {
-                let kind = match state
-                    .mouse
-                    .clicks
-                    .click(Instant::now(), point.column, point.line)
-                {
-                    2 => SelectionKind::Semantic,
-                    3 => SelectionKind::Lines,
-                    _ if state.modifiers.state().alt_key() => SelectionKind::Block,
-                    _ => SelectionKind::Simple,
-                };
-                state.term().start_selection(kind, point);
-            }
-            state.mouse.selecting = true;
-            state.window.request_redraw();
-        } else if state.mouse.selecting {
-            self.finish_selection();
-        }
-    }
-
-    /// The selection drag ended: copy what it selected.
-    fn finish_selection(&mut self) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        state.mouse.selecting = false;
-        state.mouse.autoscroll = None;
-        if let Some(text) = state.term().selection_text() {
-            if self.config.mouse.copy_on_select {
-                self.set_clipboard(text.clone());
-            }
-            self.set_primary(text);
-        }
-    }
-
-    /// A button went up while the pointer is outside the window: end drags,
-    /// the selection and a reported press without starting anything new.
-    fn release_outside(&mut self, button: Button) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        if button == Button::Left {
-            state.mouse.tab_drag = None;
-            state.mouse.divider_drag = None;
-        }
-        if state.mouse.reported_button == Some(button) {
-            state.mouse.reported_button = None;
-            if let Some((column, line)) = state.mouse.last_reported_cell {
-                let point = GridPoint {
-                    column,
-                    line,
-                    right_half: false,
-                };
-                state.report(Some(button), MouseAction::Release, point);
-            }
-        }
-        if button == Button::Left && state.mouse.selecting {
-            self.finish_selection();
-        }
-    }
-
-    fn cursor_moved(&mut self, pos: PhysicalPosition<f64>) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        state.mouse.position = Some(pos);
-        self.update_hover_link();
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let over_link = state.mouse.hover_link.is_some();
-
-        if let Some(divider) = &state.mouse.divider_drag {
-            let at = match divider.axis {
-                Axis::Vertical => pos.x,
-                Axis::Horizontal => pos.y,
-            } as f32;
-            let divider = divider.clone();
-            state.content_mut().tree.drag_divider(&divider, at);
-            state.resize_terms(&self.config);
-            state.window.request_redraw();
-            return;
-        }
-
-        let divider_icon = state.divider_at(&self.config, pos).map(|d| match d.axis {
-            Axis::Vertical => CursorIcon::ColResize,
-            Axis::Horizontal => CursorIcon::RowResize,
-        });
-        let icon = state
-            .resize_edge(pos)
-            .map(resize_cursor)
-            .or(divider_icon)
-            .unwrap_or(CursorIcon::Default);
-        let bar = state.tab_bar(&self.config);
-        let bar_hit = bar.as_ref().and_then(|b| b.hit(pos.x as f32, pos.y as f32));
-        let in_terminal = bar_hit.is_none() && icon == CursorIcon::Default;
-        let over_update = bar_hit == Some(BarHit::Update)
-            || state.status_item_at(&self.config, &self.stats, pos) == Some(StatusItem::Update);
-        state.window.set_cursor(if over_link || over_update {
-            CursorIcon::Pointer
-        } else if in_terminal {
-            CursorIcon::Text
-        } else {
-            icon
-        });
-
-        if bar_hit != state.mouse.hovered_bar {
-            state.mouse.hovered_bar = bar_hit;
-            state.window.request_redraw();
-        }
-
-        // Reorder tabs by dragging them along the bar.
-        if let Some(mut drag) = state.mouse.tab_drag {
-            if (pos.x - drag.press_x).abs() > TAB_DRAG_THRESHOLD {
-                drag.moved = true;
-            }
-            if drag.moved
-                && let Some(target) = bar.as_ref().and_then(|b| b.drop_index(pos.x as f32))
-                && target != drag.index
-            {
-                state.tabs.move_tab(drag.index, target);
-                drag.index = target;
-                state.window.request_redraw();
-            }
-            state.mouse.tab_drag = Some(drag);
-            return;
-        }
-
-        if state.mouse.selecting {
-            let point = state.cell_at(&self.config, pos);
-            state.term().update_selection(point);
-            // Past the top or bottom edge, keep scrolling while the
-            // pointer stays there; `about_to_wait` runs the steps.
-            let lines = state.autoscroll_lines(&self.config, pos);
-            state.mouse.autoscroll = match state.mouse.autoscroll {
-                _ if lines == 0 => None,
-                Some(scroll) => Some(Autoscroll { lines, ..scroll }),
-                None => Some(Autoscroll {
-                    lines,
-                    next: Instant::now() + AUTOSCROLL_INTERVAL,
-                }),
-            };
-            state.window.request_redraw();
-            return;
-        }
-        let over_focused = state.pane_at(&self.config, pos) == Some(state.content().focused);
-        if !in_terminal || !over_focused {
-            return;
-        }
-
-        let point = state.cell_at(&self.config, pos);
-        let mode = state.term().mode();
-        let cell = (point.column, point.line);
-        if state.reports_mouse(mode) && state.mouse.last_reported_cell != Some(cell) {
-            state.mouse.last_reported_cell = Some(cell);
-            let held = state.mouse.reported_button;
-            state.report(held, MouseAction::Motion, point);
-        }
-    }
-
-    fn mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let cell_height = state.renderer.cell_metrics().height as f64;
-        // Positive = scroll up (content moves down, towards older lines).
-        let lines = match delta {
-            MouseScrollDelta::LineDelta(_, y) => {
-                // High-resolution wheels send fractions of a notch; keep
-                // the remainder so they add up instead of rounding to 0.
-                let y = y as f64 * WHEEL_LINES;
-                if state.mouse.scroll_pixels * y < 0.0 {
-                    state.mouse.scroll_pixels = 0.0;
-                }
-                state.mouse.scroll_pixels += y * cell_height;
-                let lines = (state.mouse.scroll_pixels / cell_height).trunc();
-                state.mouse.scroll_pixels -= lines * cell_height;
-                lines as i32
-            }
-            MouseScrollDelta::PixelDelta(p) => {
-                // A leftover from the other direction must not eat this scroll.
-                if state.mouse.scroll_pixels * p.y < 0.0 {
-                    state.mouse.scroll_pixels = 0.0;
-                }
-                state.mouse.scroll_pixels += p.y;
-                let lines = (state.mouse.scroll_pixels / cell_height).trunc();
-                state.mouse.scroll_pixels -= lines * cell_height;
-                lines as i32
-            }
-        };
-        if lines == 0 {
-            return;
-        }
-        // The pane under the pointer gets the scroll, as it would when
-        // focused; focus stays where it is.
-        let pos = state.mouse.position;
-        let id = pos
-            .and_then(|pos| state.pane_at(&self.config, pos))
-            .unwrap_or(state.content().focused);
-        let Some(term) = state.content().pane(id).map(|pane| &pane.term) else {
-            return;
-        };
-        let mode = term.mode();
-        tracing::trace!(?delta, lines, ?mode, "mouse wheel");
-
-        if state.reports_mouse(mode) {
-            let Some(pos) = pos else {
-                return;
-            };
-            let point = state.cell_in(&self.config, id, pos);
-            let button = if lines > 0 {
-                Button::WheelUp
-            } else {
-                Button::WheelDown
-            };
-            for _ in 0..lines.unsigned_abs() {
-                state.report_to(id, Some(button), MouseAction::Press, point);
-            }
-        } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
-            // Full-screen apps without mouse support (less, man) get arrow keys.
-            let app_cursor = mode.contains(TermMode::APP_CURSOR);
-            let arrow: &[u8] = match (lines > 0, app_cursor) {
-                (true, true) => b"\x1bOA",
-                (true, false) => b"\x1b[A",
-                (false, true) => b"\x1bOB",
-                (false, false) => b"\x1b[B",
-            };
-            term.write(arrow.repeat(lines.unsigned_abs() as usize));
-        } else {
-            term.scroll(lines);
-            state.window.request_redraw();
-        }
+        Ok(state)
     }
 
     /// Draw the window, and capture the frame while the debug server
     /// records.
-    fn redraw(&mut self) -> Option<FrameStatus> {
+    fn redraw(&mut self, state: &mut WindowState) -> FrameStatus {
         #[cfg(feature = "debug-server")]
-        if let Some(status) = self.debug_redraw() {
-            return Some(status);
+        if let Some(status) = self.debug_redraw(state) {
+            return status;
         }
-        let state = self.state.as_mut()?;
-        Some(state.redraw(&self.config, &self.stats, self.banner.as_ref()))
+        state.redraw(&self.config, &self.stats, self.banner.as_ref())
     }
 
-    fn term_event(&mut self, pane: PaneId, event: TermEvent) {
+    fn redraw_requested(&mut self, state: &mut WindowState, event_loop: &ActiveEventLoop) {
+        // Keep the link underline on the text under the pointer.
+        state.refresh_hover_link(&self.config);
+        // The previous frame stays up while a new pane starts.
+        if state.reveal_holds(Instant::now()) {
+            return;
+        }
+        let status = self.redraw(state);
+        if status == FrameStatus::Skipped {
+            state.skipped_frames += 1;
+        } else {
+            state.skipped_frames = 0;
+        }
+        match status {
+            FrameStatus::Presented | FrameStatus::Paused => {}
+            // Retry a few times; a surface that keeps timing out must not
+            // spin. The next event redraws anyway.
+            FrameStatus::Skipped if state.skipped_frames <= MAX_FRAME_RETRIES => {
+                state.window.request_redraw();
+            }
+            FrameStatus::Skipped => {
+                tracing::debug!("giving up on this frame after repeated skips");
+            }
+            FrameStatus::Lost => {
+                tracing::warn!("surface lost, recreating renderer");
+                match self.create_renderer(&state.window, state.transparent) {
+                    Ok(renderer) => {
+                        state.renderer = renderer;
+                        state.window.request_redraw();
+                    }
+                    Err(err) => self.fail(event_loop, err),
+                }
+            }
+        }
+    }
+
+    fn term_event(&mut self, state: &mut WindowState, pane: PaneId, event: TermEvent) {
         #[cfg(feature = "debug-server")]
         if matches!(event, TermEvent::Wakeup) {
             self.debug_output();
         }
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
         let Some(index) = state.tabs.position(|c| c.contains(pane)) else {
             return;
         };
@@ -2152,18 +972,8 @@ impl App {
                     state.window.request_redraw();
                 }
             }
-            TermEvent::Title(_) | TermEvent::ResetTitle => {
-                let title = match event {
-                    TermEvent::Title(title) => Some(title),
-                    _ => None,
-                };
-                if let Some(tab) = state.tabs.get_mut(index)
-                    && let Some(p) = tab.content.pane_mut(pane)
-                {
-                    p.set_title(title);
-                }
-                state.window.request_redraw();
-            }
+            TermEvent::Title(title) => set_pane_title(state, index, pane, Some(title)),
+            TermEvent::ResetTitle => set_pane_title(state, index, pane, None),
             TermEvent::Bell => {
                 if !active && let Some(tab) = state.tabs.get_mut(index) {
                     tab.bell = true;
@@ -2173,110 +983,19 @@ impl App {
                 }
                 state.window.request_redraw();
             }
-            TermEvent::Exit => self.close_pane(pane),
+            TermEvent::Exit => self.close_pane(state, pane),
             TermEvent::ClipboardStore(text) => self.set_clipboard(text),
         }
     }
-}
 
-impl ApplicationHandler<UserEvent> for App {
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.exit_requested {
-            event_loop.exit();
-            return;
-        }
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        let now = Instant::now();
-        if state.blink.active && now >= state.blink.next_toggle {
-            state.blink.visible = !state.blink.visible;
-            state.blink.next_toggle = now + BLINK_INTERVAL;
-            state.window.request_redraw();
-        }
-        if state.title_refresh.is_some_and(|t| now >= t) {
-            // The redraw computes fresh titles and schedules no further one.
-            state.invalidate_titles();
-            state.window.request_redraw();
-        }
-        if let Some(scroll) = state.mouse.autoscroll
-            && now >= scroll.next
-            && let Some(pos) = state.mouse.position
-        {
-            state.term().scroll(scroll.lines);
-            let point = state.cell_at(&self.config, pos);
-            state.term().update_selection(point);
-            state.mouse.autoscroll = Some(Autoscroll {
-                next: now + AUTOSCROLL_INTERVAL,
-                ..scroll
-            });
-            state.window.request_redraw();
-        }
-        if state.reveal.is_some() && !state.reveal_holds(now) {
-            state.window.request_redraw();
-        }
-        // Sleep until the next timer, or until an event if there is none.
-        let deadline = [
-            state.reveal.map(|reveal| reveal.due()),
-            state.blink.active.then_some(state.blink.next_toggle),
-            state.title_refresh,
-            state.mouse.autoscroll.map(|scroll| scroll.next),
-        ]
-        .into_iter()
-        .flatten()
-        .min();
-        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
-    }
-
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // Only render on demand; no redraw loop while idle.
-        event_loop.set_control_flow(ControlFlow::Wait);
-        if self.state.is_some() {
-            return;
-        }
-        #[cfg(target_os = "macos")]
-        if self.menu_bar.is_none() {
-            self.menu_bar = crate::macos_menu::install(self.proxy.clone());
-        }
-        match self.create_window(event_loop) {
-            Ok(state) => {
-                state.window.request_redraw();
-                self.state = Some(state);
-            }
-            Err(err) => self.fail(event_loop, err),
-        }
-    }
-
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+    fn window_event(
+        &mut self,
+        state: &mut WindowState,
+        event_loop: &ActiveEventLoop,
+        event: WindowEvent,
+    ) {
         match event {
-            UserEvent::Term(pane, event) => self.term_event(pane, event),
-            UserEvent::ConfigChanged => self.reload_config(),
-            UserEvent::Menu(MenuCommand::Action(action)) => self.run_action(action),
-            UserEvent::Menu(MenuCommand::Quit) => self.request_close(CloseTarget::Window),
-            #[cfg(feature = "debug-server")]
-            UserEvent::Debug(call) => self.debug_call(call),
-            UserEvent::Update(checked) => self.update_checked(checked),
-            UserEvent::SystemStats(sample) => {
-                // Late samples from a monitor that was just stopped.
-                if self.system_monitor.is_none() {
-                    return;
-                }
-                self.stats.push(sample);
-                if let Some(state) = self.state.as_mut()
-                    && state.status_bar_changed(&self.config, &self.stats)
-                {
-                    state.window.request_redraw();
-                }
-            }
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(state) = self.state.as_mut() else {
-            return;
-        };
-        match event {
-            WindowEvent::CloseRequested => self.request_close(CloseTarget::Window),
+            WindowEvent::CloseRequested => self.request_close(state, CloseTarget::Window),
             // Minimized: keep the grids, don't reflow to a tiny size. Windows
             // reports 0x0 or the size of the minimized caption (160x28).
             WindowEvent::Resized(size)
@@ -2313,10 +1032,10 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ModifiersChanged(mods) => {
                 state.modifiers = mods;
-                self.update_hover_link();
+                state.update_hover_link(&self.config);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                self.keyboard_input(&KeyPress::from(&event))
+                self.keyboard_input(state, &KeyPress::from(&event));
             }
             WindowEvent::Ime(Ime::Preedit(text, _)) => {
                 state.preedit = (!text.is_empty()).then_some(text);
@@ -2324,59 +1043,22 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 state.preedit = None;
-                match state.search_and_term() {
-                    Some((bar, term)) => {
-                        bar.query.push_str(&text);
-                        bar.update(term);
-                        state.window.request_redraw();
-                    }
-                    None => state.type_bytes(text.into_bytes()),
-                }
+                state.type_text(&text);
             }
             WindowEvent::Ime(Ime::Disabled) => {
                 if state.preedit.take().is_some() {
                     state.window.request_redraw();
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => self.cursor_moved(position),
-            WindowEvent::CursorLeft { .. } => {
-                // A selection drag goes on outside the window (the button
-                // release still arrives), so keep its last position.
-                if !state.mouse.selecting {
-                    state.mouse.position = None;
-                }
-                let hovered = state.mouse.hovered_bar.take().is_some();
-                let link = state.mouse.hover_link.take().is_some();
-                if hovered || link {
-                    state.window.request_redraw();
-                }
-            }
+            WindowEvent::CursorMoved { position, .. } => self.cursor_moved(state, position),
+            WindowEvent::CursorLeft { .. } => state.cursor_left(),
             WindowEvent::MouseInput {
                 state: button_state,
                 button,
                 ..
-            } => self.mouse_input(button, button_state == ElementState::Pressed),
-            WindowEvent::MouseWheel { delta, .. } => self.mouse_wheel(delta),
-            WindowEvent::DroppedFile(path) => {
-                // Into the pane under the pointer, as its text.
-                if let Some(pos) = cursor_position(&state.window).or(state.mouse.position)
-                    && let Some(id) = state.pane_at(&self.config, pos)
-                {
-                    state.focus_pane(id);
-                }
-                let syntax = if !cfg!(windows) {
-                    PathSyntax::Posix
-                } else if state.content().focused_pane().wsl {
-                    PathSyntax::Wsl
-                } else if state.term().process_name().eq_ignore_ascii_case("cmd") {
-                    PathSyntax::Cmd
-                } else {
-                    PathSyntax::PowerShell
-                };
-                let path = path.to_string_lossy();
-                state.term().paste(&dropped_path(&path, syntax));
-                state.window.request_redraw();
-            }
+            } => self.mouse_input(state, button, button_state == ElementState::Pressed),
+            WindowEvent::MouseWheel { delta, .. } => state.mouse_wheel(&self.config, delta),
+            WindowEvent::DroppedFile(path) => self.drop_file(state, &path),
             WindowEvent::Occluded(occluded) => {
                 // Frames are paused while occluded; catch up once visible.
                 if !occluded {
@@ -2386,154 +1068,99 @@ impl ApplicationHandler<UserEvent> for App {
                 self.sync_system_monitor();
             }
             WindowEvent::ThemeChanged(theme) => {
-                self.os_dark = theme == WindowTheme::Dark;
-                if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
-                    let warning = self.update_palette();
-                    self.notify(Banner::config(
-                        Severity::Warning,
-                        warning.into_iter().collect(),
-                    ));
-                }
+                self.set_os_dark(Some(state), theme == WindowTheme::Dark);
             }
-            WindowEvent::RedrawRequested => {
-                // Keep the link underline on the text under the pointer.
-                self.refresh_hover_link();
-                let Some(state) = self.state.as_mut() else {
-                    return;
-                };
-                // The previous frame stays up while a new pane starts.
-                if state.reveal_holds(Instant::now()) {
-                    return;
-                }
-                let Some(status) = self.redraw() else {
-                    return;
-                };
-                let Some(state) = self.state.as_mut() else {
-                    return;
-                };
-                if status == FrameStatus::Skipped {
-                    state.skipped_frames += 1;
-                } else {
-                    state.skipped_frames = 0;
-                }
-                match status {
-                    FrameStatus::Presented | FrameStatus::Paused => {}
-                    // Retry a few times; a surface that keeps timing out
-                    // must not spin. The next event redraws anyway.
-                    FrameStatus::Skipped if state.skipped_frames <= MAX_FRAME_RETRIES => {
-                        state.window.request_redraw();
-                    }
-                    FrameStatus::Skipped => {
-                        tracing::debug!("giving up on this frame after repeated skips");
-                    }
-                    FrameStatus::Lost => {
-                        tracing::warn!("surface lost, recreating renderer");
-                        let (window, transparent) = (state.window.clone(), state.transparent);
-                        match self.create_renderer(&window, transparent) {
-                            Ok(renderer) => {
-                                if let Some(state) = self.state.as_mut() {
-                                    state.renderer = renderer;
-                                }
-                                window.request_redraw();
-                            }
-                            Err(err) => self.fail(event_loop, err),
-                        }
-                    }
-                }
-            }
+            WindowEvent::RedrawRequested => self.redraw_requested(state, event_loop),
             _ => {}
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use winit::keyboard::ModifiersState;
-
-    use super::*;
-
-    #[test]
-    fn pastes_with_line_breaks_are_confirmed() {
-        assert_eq!(paste_warning("ls -la"), None);
-        assert_eq!(
-            paste_warning("rm -rf build\n").as_deref(),
-            Some("the text has a line break and would run at once; paste again to run it")
-        );
-        assert_eq!(
-            paste_warning("cd /tmp\r\nls\n\nmake\n").as_deref(),
-            Some("3 lines would run at once; paste again to run them")
-        );
+/// Set the application's title of `pane` in the tab at `index`; `None`
+/// resets it.
+fn set_pane_title(state: &mut WindowState, index: usize, pane: PaneId, title: Option<String>) {
+    if let Some(tab) = state.tabs.get_mut(index)
+        && let Some(pane) = tab.content.pane_mut(pane)
+    {
+        pane.set_title(title);
     }
+    state.window.request_redraw();
+}
 
-    #[test]
-    fn dropped_paths_are_shell_words() {
-        let posix = |path| dropped_path(path, PathSyntax::Posix);
-        assert_eq!(posix("/tmp/a.txt"), "/tmp/a.txt ");
-        assert_eq!(
-            posix("/Users/me/My Files/it's (1).pdf"),
-            "/Users/me/My\\ Files/it\\'s\\ \\(1\\).pdf "
-        );
-        assert_eq!(posix("/tmp/Übung $x"), "/tmp/Übung\\ \\$x ");
-        assert_eq!(posix("/tmp/a\nb's"), "'/tmp/a\nb'\\''s' ");
-    }
-
-    #[test]
-    fn dropped_windows_paths_are_quoted_when_needed() {
-        let powershell = |path| dropped_path(path, PathSyntax::PowerShell);
-        assert_eq!(powershell(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
-        assert_eq!(
-            powershell(r"C:\Users\me\My Files\a&b.txt"),
-            r"'C:\Users\me\My Files\a&b.txt' "
-        );
-        assert_eq!(
-            powershell(r"C:\tmp\a$(calc)`n.txt"),
-            r"'C:\tmp\a$(calc)`n.txt' "
-        );
-        assert_eq!(powershell(r"C:\it's ‘x’"), r"'C:\it''s ‘‘x’’' ");
-
-        let cmd = |path| dropped_path(path, PathSyntax::Cmd);
-        assert_eq!(cmd(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
-        assert_eq!(cmd(r"C:\My Files\a&b.txt"), r#""C:\My Files\a&b.txt" "#);
-        assert_eq!(cmd(r"C:\100%PATH%.txt"), r#""C:\100"^%"PATH"^%".txt" "#);
-    }
-
-    #[test]
-    fn dropped_paths_in_wsl_are_translated() {
-        let wsl = |path| dropped_path(path, PathSyntax::Wsl);
-        assert_eq!(
-            wsl(r"C:\Users\me\My Files\a.txt"),
-            "/mnt/c/Users/me/My\\ Files/a.txt "
-        );
-        assert_eq!(wsl(r"D:\"), "/mnt/d/ ");
-        assert_eq!(wsl(r"\\wsl.localhost\Ubuntu\home\me\x"), "/home/me/x ");
-        assert_eq!(wsl(r"\\wsl$\Debian\etc"), "/etc ");
-        assert_eq!(wsl(r"\\?\C:\a"), "/mnt/c/a ");
-    }
-
-    #[test]
-    fn close_messages_name_the_programs() {
-        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            close_message(&names(&["vim"]), CloseTarget::Pane(PaneId(0))),
-            "vim is still running; close the pane again to end it"
-        );
-        assert_eq!(
-            close_message(&names(&["ssh", "vim", "ssh"]), CloseTarget::Window),
-            "ssh (2), vim are still running; quit again to end them"
-        );
-        assert_eq!(
-            close_message(&names(&["htop", "top"]), CloseTarget::Tab(PaneId(1))),
-            "htop, top are still running; close the tab again to end them"
-        );
-    }
-
-    #[test]
-    fn alt_is_meta_outside_macos() {
-        if cfg!(target_os = "macos") {
+impl ApplicationHandler<UserEvent> for App {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.core.exit_requested {
+            event_loop.exit();
             return;
         }
-        let alt = Modifiers::from(ModifiersState::ALT);
-        assert!(alt_is_meta(&alt, OptionAsMeta::None));
-        assert!(!alt_is_meta(&Modifiers::default(), OptionAsMeta::Both));
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        // Sleep until the next timer, or until an event if there is none.
+        let deadline = state.run_timers(&self.core.config, Instant::now());
+        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // Only render on demand; no redraw loop while idle.
+        event_loop.set_control_flow(ControlFlow::Wait);
+        if self.state.is_some() {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        if self.core.menu_bar.is_none() {
+            self.core.menu_bar = crate::macos_menu::install(self.core.proxy.clone());
+        }
+        match self.core.create_window(event_loop) {
+            Ok(state) => {
+                state.window.request_redraw();
+                self.state = Some(state);
+            }
+            Err(err) => self.core.fail(event_loop, err),
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        let core = &mut self.core;
+        let state = self.state.as_mut();
+        match event {
+            UserEvent::ConfigChanged => core.reload_config(state),
+            UserEvent::Update(checked) => core.update_checked(state, checked),
+            UserEvent::SystemStats(sample) => {
+                // Late samples from a monitor that was just stopped.
+                if core.system_monitor.is_none() {
+                    return;
+                }
+                core.stats.push(sample);
+                if let Some(state) = state
+                    && state.status_bar_changed(&core.config, &core.stats)
+                {
+                    state.window.request_redraw();
+                }
+            }
+            UserEvent::Menu(MenuCommand::Quit) => match state {
+                Some(state) => core.request_close(state, CloseTarget::Window),
+                None => core.exit_requested = true,
+            },
+            #[cfg(feature = "debug-server")]
+            UserEvent::Debug(call) => core.debug_call(state, call),
+            // The rest needs the window.
+            UserEvent::Term(pane, event) => {
+                if let Some(state) = state {
+                    core.term_event(state, pane, event);
+                }
+            }
+            UserEvent::Menu(MenuCommand::Action(action)) => {
+                if let Some(state) = state {
+                    core.run_action(state, action);
+                }
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let Some(state) = self.state.as_mut() {
+            self.core.window_event(state, event_loop, event);
+        }
     }
 }

@@ -28,13 +28,13 @@ use winit::keyboard::{
     Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKeyCode, PhysicalKey,
 };
 
-use super::App;
+use super::Core;
 use crate::actions::{Action, named_key};
 use crate::banner::Banner;
 use crate::event::{PaneId, UserEvent};
 use crate::input::{KeyEventKind, KeyPress};
-use crate::pane_tree::Rect;
 use crate::window::WindowState;
+use nuntio_render::Rect;
 
 /// How long a connection waits for the main thread to answer.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -305,22 +305,24 @@ fn call(request: Request, proxy: &EventLoopProxy<UserEvent>) -> Reply {
         .unwrap_or_else(|_| Reply::error("no reply from the main thread"))
 }
 
-impl App {
-    pub(crate) fn debug_call(&mut self, call: DebugCall) {
-        let reply = self
-            .debug_request(call.request)
-            .unwrap_or_else(Reply::error);
-        let _ = call.reply.send(reply);
+impl Core {
+    pub(super) fn debug_call(&mut self, state: Option<&mut WindowState>, call: DebugCall) {
+        let reply = match state {
+            Some(state) => self.debug_request(state, call.request),
+            None => Err("no window yet".into()),
+        };
+        let _ = call.reply.send(reply.unwrap_or_else(Reply::error));
     }
 
-    fn debug_request(&mut self, request: Request) -> Result<Reply, String> {
-        if self.state.is_none() {
-            return Err("no window yet".into());
-        }
+    fn debug_request(
+        &mut self,
+        state: &mut WindowState,
+        request: Request,
+    ) -> Result<Reply, String> {
         match request {
-            Request::State => Ok(Reply::ok(self.debug_state())),
+            Request::State => Ok(Reply::ok(self.debug_state(state))),
             Request::Text { pane } => {
-                let snapshot = self.pane_snapshot(pane)?;
+                let snapshot = pane_snapshot(state, pane)?;
                 Ok(Reply::ok(json!({
                     "columns": snapshot.columns,
                     "lines": snapshot.lines,
@@ -334,7 +336,7 @@ impl App {
                 from,
                 to,
             } => {
-                let snapshot = self.pane_snapshot(pane)?;
+                let snapshot = pane_snapshot(state, pane)?;
                 if line >= snapshot.lines {
                     return Err(format!("line {line} is outside the grid"));
                 }
@@ -344,7 +346,7 @@ impl App {
                     .collect();
                 Ok(Reply::ok(json!({ "cells": cells })))
             }
-            Request::Screenshot { pane } => self.screenshot(pane),
+            Request::Screenshot { pane } => self.screenshot(state, pane),
             Request::Key { keys } => {
                 let combos = keys
                     .iter()
@@ -352,37 +354,29 @@ impl App {
                     .collect::<Result<Vec<_>, _>>()?;
                 for combo in combos {
                     let (press, mods) = key_press(&combo);
-                    self.inject_key(press, mods);
+                    self.inject_key(state, press, mods);
                 }
                 Ok(Reply::ok(json!({})))
             }
             Request::Type { text } => {
-                let state = self.state.as_mut().expect("checked above");
-                match state.search_and_term() {
-                    Some((bar, term)) => {
-                        bar.query.push_str(&text);
-                        bar.update(term);
-                    }
-                    None => state.type_bytes(text.into_bytes()),
-                }
+                state.type_text(&text);
                 state.window.request_redraw();
                 Ok(Reply::ok(json!({})))
             }
             Request::Paste { text } => {
-                self.paste(text);
+                self.paste(state, text);
                 Ok(Reply::ok(json!({})))
             }
             Request::Action { name } => {
                 let action = Action::from_name(&name)?.ok_or("`none` is not an action")?;
-                self.run_action(action);
+                self.run_action(state, action);
                 Ok(Reply::ok(json!({})))
             }
             Request::Mouse(mouse) => {
-                self.inject_mouse(&mouse)?;
+                self.inject_mouse(state, &mouse)?;
                 Ok(Reply::ok(json!({})))
             }
             Request::Resize { width, height } => {
-                let state = self.state.as_mut().expect("checked above");
                 if let Some(size) = state
                     .window
                     .request_inner_size(PhysicalSize::new(width, height))
@@ -397,7 +391,6 @@ impl App {
                 minimized,
                 maximized,
             } => {
-                let state = self.state.as_ref().expect("checked above");
                 if let Some(minimized) = minimized {
                     state.window.set_minimized(minimized);
                 }
@@ -427,9 +420,8 @@ impl App {
         }
     }
 
-    fn debug_state(&mut self) -> Value {
+    fn debug_state(&mut self, state: &mut WindowState) -> Value {
         let config = &self.config;
-        let state = self.state.as_mut().expect("checked by the caller");
         let size = state.window.inner_size();
         let cell = state.renderer.cell_metrics();
         let layout = state.layout(config);
@@ -488,7 +480,7 @@ impl App {
             "cell": { "width": cell.width, "height": cell.height },
             "font_size": self.font_size,
             "tabs": tabs,
-            "search": state.search.as_ref().map(|bar| json!({ "query": bar.query, "regex": bar.regex })),
+            "search": state.search.as_ref().map(|bar| json!({ "query": bar.query(), "regex": bar.regex() })),
             "banner": banner,
             "pending_close": self.pending_close.is_some(),
             "pending_paste": self.pending_paste.is_some(),
@@ -497,23 +489,8 @@ impl App {
         })
     }
 
-    /// A pane of any tab, the focused one of the active tab by default.
-    fn pane_snapshot(&self, pane: Option<u64>) -> Result<Snapshot, String> {
-        let state = self.state.as_ref().expect("checked by the caller");
-        let pane = match pane {
-            None => state.content().focused_pane(),
-            Some(id) => state
-                .tabs
-                .iter()
-                .find_map(|tab| tab.content.pane(PaneId(id)))
-                .ok_or(format!("no pane {id}"))?,
-        };
-        Ok(pane.term.snapshot())
-    }
-
-    fn screenshot(&mut self, pane: Option<u64>) -> Result<Reply, String> {
+    fn screenshot(&mut self, state: &mut WindowState, pane: Option<u64>) -> Result<Reply, String> {
         let config = &self.config;
-        let state = self.state.as_mut().expect("checked by the caller");
         let area = match pane {
             None => None,
             Some(id) => Some(
@@ -540,69 +517,65 @@ impl App {
     }
 
     /// Press and release a key with `mods` held.
-    fn inject_key(&mut self, press: KeyPress, mods: ModifiersState) {
-        let Some(saved) = self.hold_modifiers(mods) else {
-            return;
-        };
+    fn inject_key(&mut self, state: &mut WindowState, press: KeyPress, mods: ModifiersState) {
+        let saved = hold_modifiers(state, mods);
         self.synthetic_input = true;
-        self.keyboard_input(&press);
-        self.keyboard_input(&KeyPress {
-            kind: KeyEventKind::Release,
-            ..press
-        });
+        self.keyboard_input(state, &press);
+        self.keyboard_input(
+            state,
+            &KeyPress {
+                kind: KeyEventKind::Release,
+                ..press
+            },
+        );
         self.synthetic_input = false;
-        if let Some(state) = self.state.as_mut() {
-            state.modifiers = saved;
-        }
+        state.modifiers = saved;
     }
 
-    /// Set the modifiers as if held; returns the real ones to restore.
-    fn hold_modifiers(&mut self, mods: ModifiersState) -> Option<Modifiers> {
-        let state = self.state.as_mut()?;
-        let saved = state.modifiers;
-        state.modifiers = Modifiers::from(mods);
-        Some(saved)
-    }
-
-    fn inject_mouse(&mut self, mouse: &MouseRequest) -> Result<(), String> {
-        let position = self.mouse_position(mouse)?;
+    fn inject_mouse(
+        &mut self,
+        state: &mut WindowState,
+        mouse: &MouseRequest,
+    ) -> Result<(), String> {
+        let position = self.mouse_position(state, mouse)?;
         let mods = parse_mods(&mouse.mods)?;
         let button = match mouse.button {
             ButtonName::Left => MouseButton::Left,
             ButtonName::Middle => MouseButton::Middle,
             ButtonName::Right => MouseButton::Right,
         };
-        let saved = self.hold_modifiers(mods).ok_or("no window")?;
+        let saved = hold_modifiers(state, mods);
         self.synthetic_input = true;
         if let Some(pos) = position {
-            self.cursor_moved(pos);
+            self.cursor_moved(state, pos);
         }
         match mouse.kind {
             MouseKind::Move => {}
-            MouseKind::Down => self.mouse_input(button, true),
-            MouseKind::Up => self.mouse_input(button, false),
+            MouseKind::Down => self.mouse_input(state, button, true),
+            MouseKind::Up => self.mouse_input(state, button, false),
             MouseKind::Click => {
                 for _ in 0..mouse.count {
-                    self.mouse_input(button, true);
-                    self.mouse_input(button, false);
+                    self.mouse_input(state, button, true);
+                    self.mouse_input(state, button, false);
                 }
             }
-            MouseKind::Scroll => self.mouse_wheel(MouseScrollDelta::LineDelta(0.0, mouse.lines)),
+            MouseKind::Scroll => {
+                let delta = MouseScrollDelta::LineDelta(0.0, mouse.lines);
+                state.mouse_wheel(&self.config, delta);
+            }
         }
         self.synthetic_input = false;
-        if let Some(state) = self.state.as_mut() {
-            state.modifiers = saved;
-            state.window.request_redraw();
-        }
+        state.modifiers = saved;
+        state.window.request_redraw();
         Ok(())
     }
 
     /// Where the request puts the pointer, if anywhere.
     fn mouse_position(
         &self,
+        state: &WindowState,
         mouse: &MouseRequest,
     ) -> Result<Option<PhysicalPosition<f64>>, String> {
-        let state = self.state.as_ref().expect("checked by the caller");
         match (mouse.x, mouse.y, mouse.column, mouse.line) {
             (Some(x), Some(y), None, None) => Ok(Some(PhysicalPosition::new(x, y))),
             (None, None, Some(column), Some(line)) => {
@@ -624,9 +597,8 @@ impl App {
     }
 
     /// Redraw while recording: the frame is also captured.
-    pub(crate) fn debug_redraw(&mut self) -> Option<FrameStatus> {
+    pub(super) fn debug_redraw(&mut self, state: &mut WindowState) -> Option<FrameStatus> {
         let recording = self.debug.recording.as_mut()?;
-        let state = self.state.as_mut()?;
         let room = recording.frames.len() < recording.max_frames;
         let (status, capture) = state
             .with_frame(
@@ -651,6 +623,24 @@ impl App {
         });
         Some(status)
     }
+}
+
+/// A pane of any tab, the focused one of the active tab by default.
+fn pane_snapshot(state: &WindowState, pane: Option<u64>) -> Result<Snapshot, String> {
+    let pane = match pane {
+        None => state.content().focused_pane(),
+        Some(id) => state
+            .tabs
+            .iter()
+            .find_map(|tab| tab.content.pane(PaneId(id)))
+            .ok_or(format!("no pane {id}"))?,
+    };
+    Ok(pane.term.snapshot())
+}
+
+/// Set the modifiers as if held; returns the real ones to restore.
+fn hold_modifiers(state: &mut WindowState, mods: ModifiersState) -> Modifiers {
+    std::mem::replace(&mut state.modifiers, Modifiers::from(mods))
 }
 
 /// Force focus on for a freshly created window.
@@ -890,9 +880,9 @@ fn recording_reply(recording: Recording) -> Reply {
     }
 }
 
-impl App {
+impl Core {
     /// A pane had output (for `idle_ms`).
-    pub(crate) fn debug_output(&mut self) {
+    pub(super) fn debug_output(&mut self) {
         self.debug.last_output = Some(Instant::now());
     }
 }

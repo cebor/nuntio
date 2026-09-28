@@ -1,12 +1,11 @@
 //! The find bar: query editing and drawing. The search itself runs in
 //! `nuntio_term`.
 
-use nuntio_render::{CellMetrics, UiRect, UiText};
-use nuntio_term::{MatchPosition, Rgb, Search, TermHandle};
+use nuntio_render::{Rect, UiRect, UiText};
+use nuntio_term::{MatchPosition, Rgb, Search, TermHandle, rgb};
 use unicode_width::UnicodeWidthStr;
 
-use crate::pane_tree::Rect;
-use crate::tab_bar::mix;
+use crate::style::{UiMetrics, framed_box, hairline, mix};
 
 /// Widest the bar gets, in cells.
 const MAX_CELLS: f32 = 44.0;
@@ -15,15 +14,11 @@ const MARGIN: f64 = 6.0;
 /// Space between the border and the text, in logical pixels.
 const PADDING: f64 = 4.0;
 /// Tint of the status text for errors and "no match".
-const ERROR_RED: Rgb = Rgb {
-    r: 0xff,
-    g: 0x55,
-    b: 0x55,
-};
+const ERROR_RED: Rgb = rgb(0xff5555);
 
 pub struct SearchBar {
-    pub query: String,
-    pub regex: bool,
+    query: String,
+    regex: bool,
     search: Option<Search>,
     /// The query is not a valid regex.
     error: Option<String>,
@@ -43,9 +38,37 @@ impl SearchBar {
         self.search.as_mut()
     }
 
+    #[cfg_attr(not(feature = "debug-server"), allow(dead_code))]
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    #[cfg_attr(not(feature = "debug-server"), allow(dead_code))]
+    pub fn regex(&self) -> bool {
+        self.regex
+    }
+
+    /// Add typed or pasted text to the query, and search.
+    pub fn append(&mut self, text: &str, term: &TermHandle) {
+        self.query.push_str(text);
+        self.update(term);
+    }
+
+    /// Delete the query's last character, and search.
+    pub fn backspace(&mut self, term: &TermHandle) {
+        self.query.pop();
+        self.update(term);
+    }
+
+    /// Switch between plain text and regex search.
+    pub fn toggle_regex(&mut self, term: &TermHandle) {
+        self.regex = !self.regex;
+        self.update(term);
+    }
+
     /// Recompile after the query or mode changed and jump to the nearest
     /// match above the current position.
-    pub fn update(&mut self, term: &TermHandle) {
+    fn update(&mut self, term: &TermHandle) {
         self.error = None;
         if self.query.is_empty() {
             self.search = None;
@@ -95,9 +118,10 @@ impl SearchBar {
     }
 
     /// Area of the bar: the top-right corner of the pane.
-    fn bounds(&self, pane: Rect, cell: CellMetrics, scale: f64) -> Rect {
-        let margin = (MARGIN * scale).round() as f32;
-        let padding = (PADDING * scale).round() as f32;
+    fn bounds(&self, pane: Rect, metrics: UiMetrics) -> Rect {
+        let cell = metrics.cell;
+        let margin = metrics.logical(MARGIN);
+        let padding = metrics.logical(PADDING);
         let width = (MAX_CELLS * cell.width as f32 + 2.0 * padding).min(pane.width - 2.0 * margin);
         Rect {
             x: pane.x + pane.width - margin - width,
@@ -107,41 +131,23 @@ impl SearchBar {
         }
     }
 
-    pub fn contains(&self, pane: Rect, cell: CellMetrics, scale: f64, x: f32, y: f32) -> bool {
-        self.bounds(pane, cell, scale).contains(x, y)
+    pub fn contains(&self, pane: Rect, metrics: UiMetrics, x: f32, y: f32) -> bool {
+        self.bounds(pane, metrics).contains(x, y)
     }
 
     pub fn draw(
         &self,
         pane: Rect,
-        cell: CellMetrics,
-        scale: f64,
+        metrics: UiMetrics,
         background: Rgb,
         foreground: Rgb,
     ) -> (Vec<UiRect>, Vec<UiText>) {
-        let bounds = self.bounds(pane, cell, scale);
+        let cell = metrics.cell;
+        let bounds = self.bounds(pane, metrics);
         let padding = (bounds.height - cell.height as f32) / 2.0;
-        let border = scale.round().max(1.0) as f32;
         let columns = ((bounds.width - 2.0 * padding) / cell.width as f32).max(0.0) as usize;
 
-        let rect = |r: Rect, color| UiRect {
-            x: r.x,
-            y: r.y,
-            width: r.width,
-            height: r.height,
-            color,
-            radius: 0.0,
-        };
-        let inner = Rect {
-            x: bounds.x + border,
-            y: bounds.y + border,
-            width: bounds.width - 2.0 * border,
-            height: bounds.height - 2.0 * border,
-        };
-        let rects = vec![
-            rect(bounds, mix(background, foreground, 0.35)),
-            rect(inner, mix(background, foreground, 0.12)),
-        ];
+        let rects = framed_box(bounds, hairline(metrics.scale), background, foreground);
 
         // "query▏" on the left, ".* status" on the right, cut to fit.
         let mut right = String::new();
@@ -167,22 +173,13 @@ impl SearchBar {
         let (x, y) = (bounds.x + padding, bounds.y + padding);
         let cw = cell.width as f32;
         let texts = vec![
-            UiText {
-                x,
+            UiText::new(x, y, format!("{query}▏"), foreground),
+            UiText::new(
+                x + columns.saturating_sub(right_width) as f32 * cw,
                 y,
-                text: format!("{query}▏"),
-                color: foreground,
-                bold: false,
-                small: false,
-            },
-            UiText {
-                x: x + columns.saturating_sub(right_width) as f32 * cw,
-                y,
-                text: right,
-                color: right_color,
-                bold: false,
-                small: false,
-            },
+                right,
+                right_color,
+            ),
         ];
         (rects, texts)
     }
@@ -226,15 +223,7 @@ fn tail(text: &str, columns: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const CELL: CellMetrics = CellMetrics {
-        width: 10,
-        height: 20,
-        baseline: 15,
-        underline_y: 17,
-        stroke: 1,
-        strikeout_y: 10,
-    };
+    use crate::style::test_metrics::*;
     const PANE: Rect = Rect {
         x: 0.0,
         y: 30.0,
@@ -245,7 +234,7 @@ mod tests {
     #[test]
     fn sits_top_right_and_fits_narrow_panes() {
         let bar = SearchBar::new();
-        let b = bar.bounds(PANE, CELL, 1.0);
+        let b = bar.bounds(PANE, METRICS);
         assert_eq!((b.x + b.width, b.y), (994.0, 36.0));
         assert_eq!(b.width, 448.0);
 
@@ -253,7 +242,7 @@ mod tests {
             width: 200.0,
             ..PANE
         };
-        assert_eq!(bar.bounds(narrow, CELL, 1.0).width, 188.0);
+        assert_eq!(bar.bounds(narrow, METRICS).width, 188.0);
     }
 
     #[test]
@@ -262,7 +251,7 @@ mod tests {
         bar.query = "foo".into();
         bar.regex = true;
         bar.error = Some("bad".into());
-        let (_, texts) = bar.draw(PANE, CELL, 1.0, Rgb::default(), Rgb::default());
+        let (_, texts) = bar.draw(PANE, METRICS, Rgb::default(), Rgb::default());
         assert_eq!(texts[0].text, "foo▏");
         assert_eq!(texts[1].text, ".* bad");
         // Right-aligned: 44 columns wide, starting after the padding.
@@ -292,7 +281,7 @@ mod tests {
             width: 120.0,
             ..PANE
         };
-        let (_, texts) = bar.draw(narrow, CELL, 1.0, Rgb::default(), Rgb::default());
+        let (_, texts) = bar.draw(narrow, METRICS, Rgb::default(), Rgb::default());
         assert!(texts[1].text.width() <= 10);
         assert!(texts[1].x >= narrow.x);
     }

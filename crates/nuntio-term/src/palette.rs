@@ -15,7 +15,8 @@ pub struct Palette {
     pub search_current: Rgb,
 }
 
-const fn rgb(hex: u32) -> Rgb {
+/// A color from its `0xRRGGBB` value.
+pub const fn rgb(hex: u32) -> Rgb {
     Rgb {
         r: (hex >> 16) as u8,
         g: (hex >> 8) as u8,

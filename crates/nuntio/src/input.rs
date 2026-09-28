@@ -8,7 +8,7 @@ use nuntio_term::TermMode;
 
 use crate::kitty_keys;
 use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, KeyCode, KeyLocation, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +71,25 @@ pub struct KeyInput<'a> {
     pub super_key: bool,
 }
 
-impl KeyInput<'_> {
+impl<'a> KeyInput<'a> {
+    /// `event` with the modifiers held while it happened; `meta` tells
+    /// whether Alt acts as Meta (see `KeyInput::meta`).
+    pub fn new(event: &'a KeyPress, mods: ModifiersState, meta: bool) -> Self {
+        Self {
+            key: &event.logical,
+            unmodified: &event.unmodified,
+            text: event.text.as_deref(),
+            location: event.location,
+            physical: event.physical,
+            event: event.kind,
+            shift: mods.shift_key(),
+            ctrl: mods.control_key(),
+            meta,
+            option: cfg!(target_os = "macos") && mods.alt_key() && !meta,
+            super_key: mods.super_key(),
+        }
+    }
+
     /// xterm modifier parameter: 1 + Shift(1) + Alt(2) + Ctrl(4).
     fn modifier_param(&self) -> u8 {
         1 + self.shift as u8 + 2 * self.meta as u8 + 4 * self.ctrl as u8
@@ -144,8 +162,8 @@ pub(crate) fn altgr_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
 /// bar), or `None` for a shortcut or a key without text. Option on macOS
 /// composes characters like "@" unless it acts as Meta, and AltGr types
 /// them on Windows; Ctrl, Meta and Cmd/Super combinations are shortcuts.
-pub fn field_text<'a>(input: &KeyInput<'a>, super_key: bool) -> Option<&'a str> {
-    if super_key {
+pub fn field_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
+    if input.super_key {
         return None;
     }
     if let Some(text) = altgr_text(input) {
@@ -544,7 +562,7 @@ mod tests {
                 option: false,
                 super_key,
             };
-            field_text(&input, super_key).map(str::to_owned)
+            field_text(&input).map(str::to_owned)
         };
         let ctrl_alt = Mods {
             ctrl: true,

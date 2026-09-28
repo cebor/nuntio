@@ -11,7 +11,7 @@ mod url;
 pub use alacritty_terminal::term::TermMode;
 pub use alacritty_terminal::vte::ansi::Rgb;
 pub use osc_cwd::ReportedDir;
-pub use palette::Palette;
+pub use palette::{Palette, rgb};
 pub use pane::{
     GridPoint, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent, TermHandle, TermOptions,
     TermSize,

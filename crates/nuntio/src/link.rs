@@ -5,12 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
-use nuntio_render::{CellMetrics, UiRect, UiText};
+use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
-use crate::pane_tree::Rect;
-use crate::tab_bar::{mix, truncate};
+use crate::style::{UiMetrics, framed_box, hairline, truncate};
 
 /// Distance from the pane's bottom corner, in logical pixels.
 const MARGIN: f64 = 6.0;
@@ -171,15 +170,10 @@ fn program_extension(name: &str) -> Option<&str> {
 
 /// Area of the hint for `columns` cells of text: the bottom-left corner of
 /// the pane, or the bottom-right one while the pointer is in the way.
-fn hint_bounds(
-    columns: usize,
-    pane: Rect,
-    pointer: (f32, f32),
-    cell: CellMetrics,
-    scale: f64,
-) -> Rect {
-    let margin = (MARGIN * scale).round() as f32;
-    let padding = (PADDING * scale).round() as f32;
+fn hint_bounds(columns: usize, pane: Rect, pointer: (f32, f32), metrics: UiMetrics) -> Rect {
+    let cell = metrics.small;
+    let margin = metrics.logical(MARGIN);
+    let padding = metrics.logical(PADDING);
     let width = (columns as f32 * cell.width as f32 + 2.0 * padding)
         .min(pane.width - 2.0 * margin)
         .max(0.0);
@@ -200,65 +194,32 @@ fn hint_bounds(
     }
 }
 
-/// Draw where the link `url` leads, in `pane`. `cell` is the size of the
-/// small UI font.
+/// Draw where the link `url` leads, in `pane`, in the small UI font.
 pub fn draw_hint(
     url: &str,
     pane: Rect,
     pointer: (f32, f32),
-    cell: CellMetrics,
-    scale: f64,
+    metrics: UiMetrics,
     background: Rgb,
     foreground: Rgb,
 ) -> (Vec<UiRect>, Vec<UiText>) {
-    let padding = (PADDING * scale).round() as f32;
-    let margin = (MARGIN * scale).round() as f32;
-    let fits = ((pane.width - 2.0 * (margin + padding)) / cell.width as f32).max(0.0) as usize;
+    let padding = metrics.logical(PADDING);
+    let margin = metrics.logical(MARGIN);
+    let fits =
+        ((pane.width - 2.0 * (margin + padding)) / metrics.small.width as f32).max(0.0) as usize;
     // The start names the host and scheme; cut the end.
     let text = truncate(url, fits);
-    let bounds = hint_bounds(text.width(), pane, pointer, cell, scale);
-    let border = scale.round().max(1.0) as f32;
-    let rect = |r: Rect, color| UiRect {
-        x: r.x,
-        y: r.y,
-        width: r.width,
-        height: r.height,
-        color,
-        radius: 0.0,
-    };
-    let inner = Rect {
-        x: bounds.x + border,
-        y: bounds.y + border,
-        width: bounds.width - 2.0 * border,
-        height: bounds.height - 2.0 * border,
-    };
-    let rects = vec![
-        rect(bounds, mix(background, foreground, 0.35)),
-        rect(inner, mix(background, foreground, 0.12)),
-    ];
-    let texts = vec![UiText {
-        x: bounds.x + padding,
-        y: bounds.y + padding,
-        text,
-        color: foreground,
-        bold: false,
-        small: true,
-    }];
+    let bounds = hint_bounds(text.width(), pane, pointer, metrics);
+    let rects = framed_box(bounds, hairline(metrics.scale), background, foreground);
+    let texts = vec![UiText::new(bounds.x + padding, bounds.y + padding, text, foreground).small()];
     (rects, texts)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::test_metrics::*;
 
-    const CELL: CellMetrics = CellMetrics {
-        width: 10,
-        height: 20,
-        baseline: 15,
-        underline_y: 17,
-        stroke: 1,
-        strikeout_y: 10,
-    };
     const PANE: Rect = Rect {
         x: 0.0,
         y: 30.0,
@@ -349,7 +310,7 @@ mod tests {
 
     #[test]
     fn hint_sits_bottom_left_and_dodges_the_pointer() {
-        let bounds = |pointer| hint_bounds(20, PANE, pointer, CELL, 1.0);
+        let bounds = |pointer| hint_bounds(20, PANE, pointer, METRICS);
         let left = bounds((500.0, 100.0));
         assert_eq!((left.x, left.y + left.height), (6.0, 624.0));
         assert_eq!(left.width, 206.0);
@@ -369,8 +330,7 @@ mod tests {
             url,
             narrow,
             (0.0, 0.0),
-            CELL,
-            1.0,
+            METRICS,
             Rgb::default(),
             Rgb::default(),
         );

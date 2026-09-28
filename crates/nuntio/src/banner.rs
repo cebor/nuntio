@@ -2,12 +2,16 @@
 //! errors. Clicking it shows the next message (or opens its link), the ×
 //! dismisses it.
 
-use nuntio_render::{CellMetrics, UiRect, UiText};
-use nuntio_term::Rgb;
+use nuntio_render::{Rect, UiRect, UiText};
+use nuntio_term::rgb;
+
+use crate::style::UiMetrics;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const CONFIG_ERROR: &str = "Config error, not applied";
 const CONFIG_WARNING: &str = "Config warning";
+/// Space above and below the text, in logical pixels.
+const PADDING: f64 = 4.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -71,8 +75,8 @@ impl Banner {
     /// Handle a click at `x`: the × (or a banner with only one message)
     /// closes it, anywhere else shows the next message. Returns whether the
     /// banner stays open.
-    pub fn click(&mut self, x: f32, window_width: f32, cell: CellMetrics, scale: f64) -> bool {
-        if self.on_close(x, window_width, cell, scale) || self.messages.len() == 1 {
+    pub fn click(&mut self, x: f32, window_width: f32, metrics: UiMetrics) -> bool {
+        if self.on_close(x, window_width, metrics) || self.messages.len() == 1 {
             return false;
         }
         self.shown = (self.shown + 1) % self.messages.len();
@@ -80,32 +84,27 @@ impl Banner {
     }
 
     /// `x` is on the ×.
-    pub fn on_close(&self, x: f32, window_width: f32, cell: CellMetrics, scale: f64) -> bool {
-        let (_, height) = self.bounds(0.0, cell, scale);
+    pub fn on_close(&self, x: f32, window_width: f32, metrics: UiMetrics) -> bool {
+        let cell = metrics.cell;
+        let (_, height) = self.bounds(0.0, metrics);
         let padding = (height - cell.height as f32) / 2.0;
         x >= window_width - padding - 3.0 * cell.width as f32
     }
 
     /// Top edge and height of the banner, which ends at `bottom`.
-    pub fn bounds(&self, bottom: f32, cell: CellMetrics, scale: f64) -> (f32, f32) {
-        let padding = (4.0 * scale).round() as f32;
-        let height = cell.height as f32 + 2.0 * padding;
+    pub fn bounds(&self, bottom: f32, metrics: UiMetrics) -> (f32, f32) {
+        let height = metrics.cell.height as f32 + 2.0 * metrics.logical(PADDING);
         (bottom - height, height)
     }
 
-    pub fn contains(&self, y: f32, bottom: f32, cell: CellMetrics, scale: f64) -> bool {
-        let (top, height) = self.bounds(bottom, cell, scale);
+    pub fn contains(&self, y: f32, bottom: f32, metrics: UiMetrics) -> bool {
+        let (top, height) = self.bounds(bottom, metrics);
         y >= top && y < top + height
     }
 
-    pub fn draw(
-        &self,
-        window_width: f32,
-        bottom: f32,
-        cell: CellMetrics,
-        scale: f64,
-    ) -> (UiRect, UiText) {
-        let (top, height) = self.bounds(bottom, cell, scale);
+    pub fn draw(&self, window_width: f32, bottom: f32, metrics: UiMetrics) -> (UiRect, UiText) {
+        let cell = metrics.cell;
+        let (top, height) = self.bounds(bottom, metrics);
         let (background, foreground) = match self.severity {
             Severity::Error => (rgb(0xb3261e), rgb(0xffffff)),
             Severity::Warning => (rgb(0x7a5c00), rgb(0xffffff)),
@@ -119,22 +118,8 @@ impl Banner {
         let pad = columns.saturating_sub(2).saturating_sub(text.width());
         let text = format!("{text}{} ×", " ".repeat(pad));
         (
-            UiRect {
-                x: 0.0,
-                y: top,
-                width: window_width,
-                height,
-                color: background,
-                radius: 0.0,
-            },
-            UiText {
-                x: padding,
-                y: top + padding,
-                text,
-                color: foreground,
-                bold: false,
-                small: false,
-            },
+            UiRect::fill(Rect::new(0.0, top, window_width, height), background),
+            UiText::new(padding, top + padding, text, foreground),
         )
     }
 }
@@ -150,26 +135,10 @@ fn fit(text: &str, columns: usize) -> String {
         .collect()
 }
 
-const fn rgb(hex: u32) -> Rgb {
-    Rgb {
-        r: (hex >> 16) as u8,
-        g: (hex >> 8) as u8,
-        b: hex as u8,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const CELL: CellMetrics = CellMetrics {
-        width: 10,
-        height: 20,
-        baseline: 15,
-        underline_y: 17,
-        stroke: 1,
-        strikeout_y: 10,
-    };
+    use crate::style::test_metrics::*;
 
     #[test]
     fn empty_messages_give_no_banner() {
@@ -189,15 +158,15 @@ mod tests {
     fn clicks_page_through_messages_and_the_cross_closes() {
         let mut banner =
             Banner::config(Severity::Warning, vec!["a".into(), "b".into(), "c".into()]).unwrap();
-        assert!(banner.click(10.0, 400.0, CELL, 1.0));
+        assert!(banner.click(10.0, 400.0, METRICS));
         assert_eq!(banner.text(), "Config warning (2/3): b");
-        assert!(banner.click(10.0, 400.0, CELL, 1.0));
-        assert!(banner.click(10.0, 400.0, CELL, 1.0));
+        assert!(banner.click(10.0, 400.0, METRICS));
+        assert!(banner.click(10.0, 400.0, METRICS));
         assert_eq!(banner.text(), "Config warning (1/3): a", "wraps around");
-        assert!(!banner.click(395.0, 400.0, CELL, 1.0), "the ×");
+        assert!(!banner.click(395.0, 400.0, METRICS), "the ×");
 
         let mut single = Banner::new(Severity::Warning, "Link", vec!["x".into()]).unwrap();
-        assert!(!single.click(10.0, 400.0, CELL, 1.0));
+        assert!(!single.click(10.0, 400.0, METRICS));
     }
 
     #[test]
@@ -206,17 +175,17 @@ mod tests {
             .unwrap()
             .with_url("https://example.com".into());
         assert_eq!(banner.url.as_deref(), Some("https://example.com"));
-        assert!(!banner.on_close(10.0, 400.0, CELL, 1.0));
-        assert!(banner.on_close(395.0, 400.0, CELL, 1.0));
+        assert!(!banner.on_close(10.0, 400.0, METRICS));
+        assert!(banner.on_close(395.0, 400.0, METRICS));
     }
 
     #[test]
     fn sits_at_the_bottom_and_fits_the_width() {
         let banner = Banner::config(Severity::Error, vec!["x".repeat(500)]).unwrap();
-        let (rect, text) = banner.draw(400.0, 600.0, CELL, 1.0);
+        let (rect, text) = banner.draw(400.0, 600.0, METRICS);
         assert_eq!((rect.y, rect.height), (572.0, 28.0));
-        assert!(banner.contains(580.0, 600.0, CELL, 1.0));
-        assert!(!banner.contains(560.0, 600.0, CELL, 1.0));
+        assert!(banner.contains(580.0, 600.0, METRICS));
+        assert!(!banner.contains(560.0, 600.0, METRICS));
         // 400px minus padding fit 39 columns.
         assert_eq!(text.text.chars().count(), 39);
         assert!(text.text.ends_with(" ×"));
@@ -225,7 +194,7 @@ mod tests {
     #[test]
     fn wide_text_keeps_the_close_button_at_the_edge() {
         let banner = Banner::config(Severity::Warning, vec!["日本".into()]).unwrap();
-        let (_, text) = banner.draw(400.0, 600.0, CELL, 1.0);
+        let (_, text) = banner.draw(400.0, 600.0, METRICS);
         assert_eq!(text.text.width(), 39);
         assert!(text.text.ends_with(" ×"));
     }
