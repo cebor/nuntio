@@ -74,9 +74,12 @@ impl Config {
 
     /// At least one of the three update indicators is switched on.
     pub fn update_indicators(&self) -> bool {
-        self.updates.banner
-            || self.updates.tab_bar
-            || self.status_bar.items.contains(&StatusItem::Update)
+        self.updates.banner || self.updates.tab_bar || self.updates.status_bar
+    }
+
+    /// The `update` status bar item is switched on and placed in the items.
+    pub fn update_in_status_bar(&self) -> bool {
+        self.updates.status_bar && self.status_bar.items.contains(&StatusItem::Update)
     }
 
     /// Look for a newer release on GitHub once a day: while the check is
@@ -85,7 +88,7 @@ impl Config {
         self.updates.check
             && (self.updates.banner
                 || self.updates.tab_bar
-                || (self.status_bar.enabled && self.status_bar.items.contains(&StatusItem::Update)))
+                || (self.status_bar.enabled && self.update_in_status_bar()))
     }
 }
 
@@ -413,8 +416,7 @@ impl Default for ThemeSelection {
     }
 }
 
-/// The update check and where a newer release is announced. The `update`
-/// status bar item is the third indicator.
+/// The update check and where a newer release is announced.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Updates {
@@ -424,6 +426,8 @@ pub struct Updates {
     pub banner: bool,
     /// An arrow in the tab bar.
     pub tab_bar: bool,
+    /// The `update` status bar item, where `status_bar.items` places it.
+    pub status_bar: bool,
 }
 
 impl Default for Updates {
@@ -432,6 +436,7 @@ impl Default for Updates {
             check: false,
             banner: true,
             tab_bar: true,
+            status_bar: false,
         }
     }
 }
@@ -630,12 +635,16 @@ action = "split_horizontal"
         assert!(check("[updates]\ncheck = true"));
         assert!(!check("[updates]\nbanner = true\ntab_bar = true"));
         let none = "[updates]\ncheck = true\nbanner = false\ntab_bar = false";
-        assert!(!check(none));
-        assert!(check(&format!(
-            "{none}\n[status_bar]\nenabled = true\nitems = [\"update\"]"
-        )));
+        let bar = format!("{none}\nstatus_bar = true");
+        assert!(!check(&bar), "the item isn't placed");
+        let placed = "[status_bar]\nenabled = true\nitems = [\"update\"]";
+        assert!(check(&format!("{bar}\n{placed}")));
         assert!(
-            !check(&format!("{none}\n[status_bar]\nitems = [\"update\"]")),
+            !check(&format!("{none}\n{placed}")),
+            "the item is switched off"
+        );
+        assert!(
+            !check(&format!("{bar}\n[status_bar]\nitems = [\"update\"]")),
             "the status bar is off"
         );
     }

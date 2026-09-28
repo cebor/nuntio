@@ -182,6 +182,17 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
                 .map(|entry| match *entry {
                     Entry::Item { value, on } => {
                         let mark = if on { "[x] " } else { "[ ] " };
+                        if app.item_disabled(value) {
+                            // Switched off elsewhere, but placed here as usual.
+                            let style = tone(Tone::Warn);
+                            let style = if on {
+                                style
+                            } else {
+                                style.add_modifier(Modifier::DIM)
+                            };
+                            let text = format!("{mark}{value} (off under Updates)");
+                            return ListItem::new(Line::styled(text, style));
+                        }
                         let style = if on { Style::new() } else { tone(Tone::Dim) };
                         ListItem::new(Line::styled(format!("{mark}{value}"), style))
                     }

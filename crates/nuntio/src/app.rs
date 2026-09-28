@@ -743,8 +743,12 @@ impl App {
     }
 
     fn set_update(&mut self, update: Option<Update>) {
-        self.stats
-            .set_update(update.as_ref().map(|u| u.version.clone()));
+        self.stats.set_update(
+            update
+                .as_ref()
+                .filter(|_| self.config.updates.status_bar)
+                .map(|u| u.version.clone()),
+        );
         self.update = update;
         if let Some(state) = self.state.as_mut() {
             state.update_badge = self.update.is_some() && self.config.updates.tab_bar;
@@ -806,6 +810,9 @@ impl App {
         self.sync_update_checker();
         if old.updates.banner && !self.config.updates.banner {
             self.dismiss_banner(update::BANNER);
+        }
+        if old.updates.status_bar != self.config.updates.status_bar {
+            self.set_update(self.update.clone());
         }
 
         let chrome_changed = if cfg!(target_os = "macos") {

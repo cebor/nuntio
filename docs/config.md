@@ -128,10 +128,11 @@ rainbow = false
 [updates]
 # Ask GitHub once a day for a newer release.
 check = false
-# Where a newer release is announced (the `update` status bar item is
-# the third indicator).
+# Where a newer release is announced (the status bar item where
+# `status_bar.items` places `update`).
 banner = true
 tab_bar = true
+status_bar = false
 
 [mouse]
 copy_on_select = false
@@ -213,7 +214,7 @@ Each item starts with an icon:
 - `network`: throughput of the physical interfaces (loopback, container and VM bridges such as `docker0` are left out, so traffic isn't counted twice). Download grows up from the middle of the graph, upload down. The download rate is shown left of the graph, the upload rate right of it; rates under 0.1 K show as `0K`.
 - `battery`: charge level, with ⚡ while plugged in; the graph shows the level over about the last hour, one bar per minute. Hidden on machines without a battery.
 - `datetime`: the local date and time.
-- `update`: the version of a newer nuntio release; click it to open the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one.
+- `update`: the version of a newer nuntio release; click it to open the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one and `updates.status_bar` is on.
 
 #### Springs
 
@@ -236,13 +237,14 @@ While the bar is shown, nuntio samples the system and redraws once per second. W
 
 ### `[updates]`
 
-With `check` on, nuntio asks GitHub once a day whether a newer release exists. Nothing is downloaded or installed. Three indicators announce a newer release: `banner`, `tab_bar` and the `update` item in `status_bar.items`. The check needs at least one of them: with all three off it doesn't run, and in `nuntio-config`, turning off the last one turns `check` off too. Indicators can stay on while `check` is off. nuntio built from source compares the version of your checkout and suggests `git pull` instead. The `check_for_updates` action checks right away and always answers with a banner, even with `check` off.
+With `check` on, nuntio asks GitHub once a day whether a newer release exists. Nothing is downloaded or installed. Three indicators announce a newer release: `banner`, `tab_bar` and `status_bar`. The check needs at least one of them: with all three off (or only `status_bar` on while the bar is off or `update` isn't in `status_bar.items`) it doesn't run, and in `nuntio-config`, turning off the last one turns `check` off too. Indicators can stay on while `check` is off. nuntio built from source compares the version of your checkout and suggests `git pull` instead. The `check_for_updates` action checks right away and always answers with a banner, even with `check` off.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `check` | bool | `false` | Ask GitHub once a day whether a newer release exists. Off by default. |
 | `banner` | bool | `true` | Announce a newer release with a banner at the bottom of the window. Click it for the release notes, or × to not show it again for that version. |
 | `tab_bar` | bool | `true` | Show an arrow in the tab bar while a newer release exists; click it for the release page. |
+| `status_bar` | bool | `false` | Show the version of a newer release in the status bar; click it for the release page. Its place is the `update` item in `status_bar.items`, so it also needs that item and the bar on. In `nuntio-config`, turning it on adds `update` to the items (before the last one) if it's missing; turning it off leaves the items alone. |
 
 ### `[mouse]`
 

@@ -10,7 +10,9 @@ use unicode_width::UnicodeWidthStr;
 
 use nuntio_config::schema::{Kind, SETTINGS, SPRING, Section, Setting};
 use nuntio_config::toml_edit::{self, InlineTable};
-use nuntio_config::{ACTIONS, Config, ConfigDoc, KeyCombo, Keybinding, ThemeSelection, ThemeSet};
+use nuntio_config::{
+    ACTIONS, Config, ConfigDoc, KeyCombo, Keybinding, StatusItem, ThemeSelection, ThemeSet,
+};
 
 use crate::args;
 use crate::detect::Found;
@@ -151,6 +153,7 @@ pub fn bar_preview(entries: &[Entry], width: usize) -> String {
     out
 }
 
+const UPDATES_STATUS_BAR: &str = "updates.status_bar";
 const STATUS_ITEMS: &str = "status_bar.items";
 const UPDATE_ITEM: &str = "update";
 
@@ -163,8 +166,6 @@ pub enum Row {
     Theme(ThemeSlot),
     Keybinding(usize),
     AddKeybinding,
-    /// Whether `update` is in the status bar items.
-    UpdateStatusItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -455,10 +456,31 @@ impl App {
         let mut doc = self.doc.clone();
         edit(&mut doc);
         let mut note = None;
+        let loaded = nuntio_config::parse(&doc.to_string());
+        // Switching the status bar indicator on places its item, before the
+        // last one, which keeps its place at the right edge. Switching it
+        // off leaves the items alone.
+        if let Ok(loaded) = &loaded
+            && loaded.config.updates.status_bar
+            && !self.config.updates.status_bar
+            && !loaded.config.status_bar.items.contains(&StatusItem::Update)
+        {
+            let mut items: Vec<&str> = value_at(&self.values, STATUS_ITEMS)
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .collect();
+            items.insert(items.len().saturating_sub(1), UPDATE_ITEM);
+            doc.set(
+                STATUS_ITEMS,
+                items.into_iter().collect::<toml_edit::Array>(),
+            );
+        }
         // An update check without an indicator must not exist: turning off
         // the last indicator turns the check off too, and the check can't
         // be turned on without one.
-        if let Ok(loaded) = nuntio_config::parse(&doc.to_string())
+        if let Ok(loaded) = loaded
             && loaded.config.updates.check
             && !loaded.config.update_indicators()
         {
@@ -577,53 +599,14 @@ impl App {
                     .chain([Row::AddKeybinding])
                     .collect()
             }
-            _ => {
-                let mut rows: Vec<Row> = SETTINGS
-                    .iter()
-                    .filter(|s| s.section == section && s.kind != Kind::Theme)
-                    // A choice with a single value offers nothing to choose.
-                    .filter(|s| !matches!(s.kind, Kind::Choice(values) if values.len() < 2))
-                    .map(Row::Setting)
-                    .collect();
-                if section == Section::Updates {
-                    rows.push(Row::UpdateStatusItem);
-                }
-                rows
-            }
+            _ => SETTINGS
+                .iter()
+                .filter(|s| s.section == section && s.kind != Kind::Theme)
+                // A choice with a single value offers nothing to choose.
+                .filter(|s| !matches!(s.kind, Kind::Choice(values) if values.len() < 2))
+                .map(Row::Setting)
+                .collect(),
         }
-    }
-
-    /// The status bar items as they are in effect.
-    fn status_items(&self) -> Vec<&str> {
-        value_at(&self.values, STATUS_ITEMS)
-            .and_then(|v| v.as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str())
-            .collect()
-    }
-
-    fn update_in_status_bar(&self) -> bool {
-        self.status_items().contains(&UPDATE_ITEM)
-    }
-
-    /// Add `update` to the status bar items or remove it. It goes before
-    /// the last item, which keeps its place at the right edge.
-    fn set_update_in_status_bar(&mut self, on: bool) {
-        if on == self.update_in_status_bar() {
-            return;
-        }
-        let mut items: Vec<String> = self
-            .status_items()
-            .into_iter()
-            .filter(|i| *i != UPDATE_ITEM)
-            .map(str::to_owned)
-            .collect();
-        if on {
-            items.insert(items.len().saturating_sub(1), UPDATE_ITEM.into());
-        }
-        let items: toml_edit::Array = items.iter().map(String::as_str).collect();
-        self.commit(|doc| doc.set(STATUS_ITEMS, items));
     }
 
     pub fn current_row(&self) -> Option<Row> {
@@ -653,7 +636,6 @@ impl App {
                 }
             }
             Row::AddKeybinding => "+ Add keybinding".into(),
-            Row::UpdateStatusItem => "Status bar item".into(),
         }
     }
 
@@ -689,10 +671,6 @@ impl App {
                 (Tone::Normal, action)
             }
             Row::AddKeybinding => (Tone::Dim, String::new()),
-            Row::UpdateStatusItem => {
-                let on = self.update_in_status_bar();
-                (Tone::Normal, if on { "on" } else { "off" }.into())
-            }
         }
     }
 
@@ -703,7 +681,6 @@ impl App {
             Row::FollowOs | Row::Theme(_) => self.doc.is_set("theme"),
             Row::Keybinding(_) => true,
             Row::AddKeybinding => false,
-            Row::UpdateStatusItem => self.doc.is_set(STATUS_ITEMS),
         }
     }
 
@@ -765,6 +742,16 @@ impl App {
                     if let Some(v) = variants.iter().find(|v| v.value == value) {
                         lines.push((Tone::Normal, v.help.into()));
                     }
+                    if let Entry::Item { value, .. } = entry
+                        && self.item_disabled(value)
+                    {
+                        lines.push((
+                            Tone::Warn,
+                            "Switched off under Updates → Status bar item: it keeps its place \
+                             but isn't shown."
+                                .into(),
+                        ));
+                    }
                     if entry == (Entry::Spring { implicit: true }) {
                         lines.push((
                             Tone::Dim,
@@ -811,6 +798,17 @@ impl App {
                         format!("Only has an effect on {}.", platform.label()),
                     ));
                 }
+                if s.path == UPDATES_STATUS_BAR && self.config.updates.status_bar {
+                    let bar = &self.config.status_bar;
+                    if !bar.items.contains(&StatusItem::Update) {
+                        lines.push((
+                            Tone::Warn,
+                            "Not placed yet: turn on `update` under Status bar → Items.".into(),
+                        ));
+                    } else if !bar.enabled {
+                        lines.push((Tone::Warn, "The status bar is off.".into()));
+                    }
+                }
             }
             Row::FollowOs => lines.push((
                 Tone::Normal,
@@ -840,22 +838,6 @@ impl App {
                 "Bind a key combination to an action, or to `none` to pass it to the terminal."
                     .into(),
             )),
-            Row::UpdateStatusItem => {
-                lines.push((
-                    Tone::Normal,
-                    "Show the version of a newer nuntio release in the status bar; click it for \
-                     the release page."
-                        .into(),
-                ));
-                if !self.config.status_bar.enabled {
-                    lines.push((Tone::Warn, "The status bar is off.".into()));
-                }
-                lines.push((
-                    Tone::Dim,
-                    "It is the `update` item under Status bar → Items, where it can be moved."
-                        .into(),
-                ));
-            }
         }
         lines
     }
@@ -1027,7 +1009,6 @@ impl App {
                 self.commit(|doc| doc.set("theme", theme_value(&new)));
                 self.clamp_row();
             }
-            Row::UpdateStatusItem => self.set_update_in_status_bar(!self.update_in_status_bar()),
             _ => {}
         }
     }
@@ -1039,7 +1020,7 @@ impl App {
         };
         match row {
             Row::Setting(s) => self.edit_setting(s),
-            Row::FollowOs | Row::UpdateStatusItem => self.adjust(1),
+            Row::FollowOs => self.adjust(1),
             Row::Theme(slot) => self.open_theme_picker(slot),
             Row::Keybinding(i) => self.edit_binding_key(Some(i)),
             Row::AddKeybinding => self.edit_binding_key(None),
@@ -1063,8 +1044,6 @@ impl App {
                 self.clamp_row();
             }
             Row::AddKeybinding => {}
-            // Resetting the whole list would lose the user's order.
-            Row::UpdateStatusItem => self.set_update_in_status_bar(false),
         }
     }
 
@@ -1572,6 +1551,12 @@ impl App {
         entries
     }
 
+    /// An item of an ordered set that is switched off elsewhere: the
+    /// `update` status bar item while its switch under Updates is off.
+    pub fn item_disabled(&self, value: &str) -> bool {
+        value == UPDATE_ITEM && !self.config.updates.status_bar
+    }
+
     fn items_key(&mut self, key: Key, setting: &'static Setting, mut selected: usize) {
         let mut entries = self.item_entries(setting);
         let last = entries.len().saturating_sub(1);
@@ -1806,29 +1791,12 @@ mod tests {
 
     #[test]
     fn update_check_needs_an_indicator() {
-        let (mut app, memory) = app(Some(
-            "[updates]\nbanner = false\n\n[status_bar]\nenabled = true\nitems = [\"cpu\", \"datetime\"]\n",
-        ));
-        let rows = app.rows(Section::Updates);
-        assert_eq!(rows.last(), Some(&Row::UpdateStatusItem));
-
+        let (mut app, memory) = app(Some("[updates]\nbanner = false\nstatus_bar = true\n"));
         go_to(&mut app, "updates.check");
         app.key(Key::Char(' '));
-        assert!(app.config.update_check());
-
-        // The status bar item goes before the last item, which stays at
-        // the right edge.
-        app.row = rows.len() - 1;
-        app.key(Key::Char(' '));
-        assert!(
-            memory
-                .text()
-                .contains("items = [\"cpu\", \"update\", \"datetime\"]")
-        );
-        assert_eq!(app.row_value(Row::UpdateStatusItem).1, "on");
+        assert!(app.config.updates.check);
 
         // Indicators can be on while the check is off.
-        go_to(&mut app, "updates.check");
         app.key(Key::Char(' '));
         assert!(!app.config.updates.check);
         assert!(app.config.update_indicators());
@@ -1839,14 +1807,13 @@ mod tests {
         go_to(&mut app, "updates.tab_bar");
         app.key(Key::Char(' '));
         assert!(app.config.updates.check, "the status bar item is left");
-        app.row = rows.len() - 1;
-        app.key(Key::Char('d'));
+        go_to(&mut app, "updates.status_bar");
+        app.key(Key::Char(' '));
         assert!(!app.config.update_indicators());
         assert!(!app.config.updates.check);
         assert!(app.message.is_some());
         app.key(Key::Char('u'));
         assert!(app.config.updates.check);
-        assert_eq!(app.row_value(Row::UpdateStatusItem).1, "on");
         app.key(Key::Enter);
         assert!(!app.config.updates.check);
 
@@ -1857,6 +1824,78 @@ mod tests {
         assert!(!app.config.updates.check);
         assert_eq!(memory.text(), before);
         assert_eq!(app.message.as_ref().map(|m| m.0), Some(Tone::Warn));
+    }
+
+    #[test]
+    fn update_status_bar_switch_places_its_item() {
+        let (mut app, memory) = app(Some(
+            "[status_bar]\nenabled = true\nitems = [\"cpu\", \"datetime\"]\n",
+        ));
+        go_to(&mut app, "updates.status_bar");
+        let row = app.current_row().unwrap();
+        assert!(app.item_disabled("update"));
+        assert!(!app.item_disabled("cpu"));
+
+        // On places the item before the last one, which stays at the right
+        // edge.
+        app.key(Key::Char(' '));
+        assert!(app.config.update_in_status_bar());
+        assert!(app.row_is_set(row));
+        assert!(
+            memory
+                .text()
+                .contains("items = [\"cpu\", \"update\", \"datetime\"]")
+        );
+        // Off, here back to the default, leaves the items alone and no mark
+        // behind.
+        app.key(Key::Char('d'));
+        assert!(!app.config.updates.status_bar);
+        assert!(!app.row_is_set(row));
+        assert!(memory.text().contains("\"update\""));
+        assert!(app.item_disabled("update"));
+
+        // The item is placed under Status bar independently.
+        go_to(&mut app, "status_bar.items");
+        app.key(Key::Enter);
+        let setting = SETTINGS
+            .iter()
+            .find(|s| s.path == "status_bar.items")
+            .unwrap();
+        let update = app
+            .item_entries(setting)
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    Entry::Item {
+                        value: "update",
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        for _ in 0..update {
+            app.key(Key::Down);
+        }
+        app.key(Key::Char(' '));
+        assert!(!memory.text().contains("\"update\""));
+        assert!(!app.config.updates.status_bar);
+        app.key(Key::Char(' '));
+        assert!(memory.text().contains("\"update\""));
+        assert!(!app.config.updates.status_bar);
+        app.key(Key::Esc);
+
+        // Switching on with the item placed keeps its place.
+        let items = |text: String| {
+            text.lines()
+                .find(|l| l.starts_with("items"))
+                .map(str::to_owned)
+        };
+        let before = items(memory.text());
+        go_to(&mut app, "updates.status_bar");
+        app.key(Key::Char(' '));
+        assert!(app.config.update_in_status_bar());
+        assert_eq!(items(memory.text()), before);
     }
 
     #[test]

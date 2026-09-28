@@ -300,6 +300,14 @@ pub static SETTINGS: &[Setting] = &[
         "Show an arrow in the tab bar while a newer nuntio release exists; click it for the release page.",
     ),
     setting(
+        "updates.status_bar",
+        Section::Updates,
+        "Status bar item",
+        Kind::Bool,
+        "Show the version of a newer nuntio release in the status bar; click it for the release page. \
+         Where it goes is set by the `update` item under Status bar → Items; turning this on puts it there if it's missing.",
+    ),
+    setting(
         "theme",
         Section::Theme,
         "Theme",
