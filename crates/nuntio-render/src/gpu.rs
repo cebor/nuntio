@@ -119,6 +119,10 @@ impl GpuContext {
     /// Frames report `Lost` from now on.
     pub fn release_surface(&mut self) {
         self.surface = None;
+        // The last frame's back buffer is kept by the device until its
+        // submission is cleaned up, and with it the swapchain (on DX12 the
+        // successor's configure fails with "Access is denied").
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
     }
 
     /// Have macOS convert the frames from sRGB, which the theme colors are,
