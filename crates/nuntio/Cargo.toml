@@ -1,6 +1,6 @@
 [package]
 name = "nuntio"
-description = "A fast, GPU-rendered terminal emulator modeled on iTerm2"
+description = "A fast, GPU-rendered terminal emulator"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

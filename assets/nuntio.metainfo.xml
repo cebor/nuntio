@@ -12,9 +12,9 @@
   </developer>
   <description>
     <p>
-      nuntio is a terminal emulator modeled on iTerm2: one window with tabs
-      and split panes, rendered on the GPU and configured with a single TOML
-      file that reloads while you type.
+      nuntio is a terminal emulator with one window, tabs and split panes,
+      rendered on the GPU and configured with a single TOML file that
+      reloads while you type.
     </p>
     <ul>
       <li>Tabs and split panes, with keyboard and mouse control</li>
