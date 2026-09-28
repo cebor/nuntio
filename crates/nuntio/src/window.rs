@@ -998,13 +998,26 @@ impl WindowState {
         mouse::reporting_enabled(mode) && !self.modifiers.state().shift_key()
     }
 
-    pub fn report(&mut self, button: Option<Button>, action: MouseAction, point: GridPoint) {
-        let mode = self.term().mode();
+    pub fn report(&self, button: Option<Button>, action: MouseAction, point: GridPoint) {
+        self.report_to(self.content().focused, button, action, point);
+    }
+
+    /// Report a mouse event to pane `id` of the active tab, focused or not.
+    pub fn report_to(
+        &self,
+        id: PaneId,
+        button: Option<Button>,
+        action: MouseAction,
+        point: GridPoint,
+    ) {
+        let Some(term) = self.content().pane(id).map(|pane| &pane.term) else {
+            return;
+        };
         let mods = self.mouse_mods();
         if let Some(bytes) =
-            mouse::encode_report(button, action, mods, point.column, point.line, mode)
+            mouse::encode_report(button, action, mods, point.column, point.line, term.mode())
         {
-            self.term().write(bytes);
+            term.write(bytes);
         }
     }
 

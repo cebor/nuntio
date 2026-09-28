@@ -2070,40 +2070,33 @@ impl App {
                 lines as i32
             }
         };
-        let mode = state.term().mode();
-        tracing::trace!(?delta, lines, ?mode, "mouse wheel");
         if lines == 0 {
             return;
         }
-
-        // Scrolling over a background pane scrolls its history without
-        // moving focus.
-        let hovered = state
-            .mouse
-            .position
-            .and_then(|pos| state.pane_at(&self.config, pos));
-        if let Some(id) = hovered
-            && id != state.content().focused
-        {
-            if let Some(pane) = state.content().pane(id) {
-                pane.term.scroll(lines);
-            }
-            state.window.request_redraw();
+        // The pane under the pointer gets the scroll, as it would when
+        // focused; focus stays where it is.
+        let pos = state.mouse.position;
+        let id = pos
+            .and_then(|pos| state.pane_at(&self.config, pos))
+            .unwrap_or(state.content().focused);
+        let Some(term) = state.content().pane(id).map(|pane| &pane.term) else {
             return;
-        }
+        };
+        let mode = term.mode();
+        tracing::trace!(?delta, lines, ?mode, "mouse wheel");
 
         if state.reports_mouse(mode) {
-            let Some(pos) = state.mouse.position else {
+            let Some(pos) = pos else {
                 return;
             };
-            let point = state.cell_at(&self.config, pos);
+            let point = state.cell_in(&self.config, id, pos);
             let button = if lines > 0 {
                 Button::WheelUp
             } else {
                 Button::WheelDown
             };
             for _ in 0..lines.unsigned_abs() {
-                state.report(Some(button), MouseAction::Press, point);
+                state.report_to(id, Some(button), MouseAction::Press, point);
             }
         } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
             // Full-screen apps without mouse support (less, man) get arrow keys.
@@ -2114,11 +2107,9 @@ impl App {
                 (false, true) => b"\x1bOB",
                 (false, false) => b"\x1b[B",
             };
-            state
-                .term()
-                .write(arrow.repeat(lines.unsigned_abs() as usize));
+            term.write(arrow.repeat(lines.unsigned_abs() as usize));
         } else {
-            state.term().scroll(lines);
+            term.scroll(lines);
             state.window.request_redraw();
         }
     }
