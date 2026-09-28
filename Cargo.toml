@@ -10,7 +10,7 @@ edition = "2024"
 # Checked in CI; the highest a dependency needs (sysinfo).
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-authors = ["Felix Itzenplitz <felix+nuntio@stkn.org>"]
+authors = ["Felix Itzenplitz"]
 repository = "https://github.com/cebor/nuntio"
 homepage = "https://cebor.github.io/nuntio/"
 

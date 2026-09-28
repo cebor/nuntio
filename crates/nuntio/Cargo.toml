@@ -57,7 +57,7 @@ winresource = "0.1"
 workspace = true
 
 [package.metadata.deb]
-maintainer = "Felix Itzenplitz <felix+nuntio@stkn.org>"
+maintainer = "Felix Itzenplitz <1576120+cebor@users.noreply.github.com>"
 copyright = "2026, Felix Itzenplitz"
 section = "x11"
 priority = "optional"
