@@ -161,11 +161,26 @@ fn site(serve: bool) -> Result<()> {
         site.join("content/docs/config.md"),
         site_config_page(&config)?,
     )?;
-    let privacy = fs::read_to_string(root.join("PRIVACY.md"))?;
-    fs::write(
-        site.join("content/privacy.md"),
-        site_privacy_page(&privacy)?,
-    )?;
+    for (file, page, title, description) in [
+        (
+            "PRIVACY.md",
+            "privacy.md",
+            "Privacy policy",
+            "nuntio collects no data. What the app and the website do and don't do.",
+        ),
+        (
+            "CODE_SIGNING.md",
+            "code-signing.md",
+            "Code signing policy",
+            "Which nuntio files are signed, by whom, and how.",
+        ),
+    ] {
+        let markdown = fs::read_to_string(root.join(file))?;
+        fs::write(
+            site.join("content").join(page),
+            site_plain_page(file, &markdown, title, description)?,
+        )?;
+    }
     copy(&root.join("assets/icon.svg"), &site.join("static/icon.svg"))?;
     copy(
         &root.join("assets/icons/png/32.png"),
@@ -218,18 +233,19 @@ fn site_config_page(markdown: &str) -> Result<String> {
     ))
 }
 
-/// Turn `PRIVACY.md` into a Zola page at `privacy/`, linked from the footer.
-fn site_privacy_page(markdown: &str) -> Result<String> {
+/// Turn a policy file from the repo root (`PRIVACY.md`, `CODE_SIGNING.md`)
+/// into a Zola page, linked from the footer.
+fn site_plain_page(file: &str, markdown: &str, title: &str, description: &str) -> Result<String> {
     let body = markdown
-        .strip_prefix("# Privacy policy\n")
-        .context("PRIVACY.md must start with `# Privacy policy`")?;
+        .strip_prefix(&format!("# {title}\n"))
+        .with_context(|| format!("{file} must start with `# {title}`"))?;
     ensure!(
         body.match_indices("](")
             .all(|(i, _)| body[i + 2..].starts_with("https://")),
-        "PRIVACY.md may only link to absolute URLs"
+        "{file} may only link to absolute URLs"
     );
     Ok(format!(
-        "+++\ntitle = \"Privacy policy\"\ndescription = \"nuntio collects no data. What the app and the website do and don't do.\"\ntemplate = \"plain.html\"\n+++\n{body}"
+        "+++\ntitle = \"{title}\"\ndescription = \"{description}\"\ntemplate = \"plain.html\"\n+++\n{body}"
     ))
 }
 

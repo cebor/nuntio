@@ -189,7 +189,7 @@ Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to bu
 
 ## Security and privacy
 
-Please report security problems privately as described in [SECURITY.md](SECURITY.md). nuntio collects no data; see the [privacy policy](PRIVACY.md).
+Please report security problems privately as described in [SECURITY.md](SECURITY.md). nuntio collects no data; see the [privacy policy](PRIVACY.md). How Windows releases are signed is described in the [code signing policy](CODE_SIGNING.md).
 
 ## License
 
