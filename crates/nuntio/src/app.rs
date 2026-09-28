@@ -9,7 +9,8 @@ use nuntio_config::{
 };
 use nuntio_render::{FrameStatus, Renderer};
 use nuntio_term::{
-    Palette, Rgb, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode, TermOptions,
+    GridPoint, Palette, Rgb, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
+    TermOptions,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -1700,14 +1701,19 @@ impl App {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        let Some(pos) = state.mouse.position else {
-            return;
-        };
         let button = match button {
             MouseButton::Left => Button::Left,
             MouseButton::Middle => Button::Middle,
             MouseButton::Right => Button::Right,
             _ => return,
+        };
+        let Some(pos) = state.mouse.position else {
+            // The pointer left the window; a release still ends what the
+            // press started.
+            if !pressed {
+                self.release_outside(button);
+            }
+            return;
         };
 
         if !pressed
@@ -1850,6 +1856,8 @@ impl App {
         if pressed && state.reports_mouse(mode) {
             state.report(Some(button), MouseAction::Press, point);
             state.mouse.reported_button = Some(button);
+            // Where a release outside the window is reported.
+            state.mouse.last_reported_cell = Some((point.column, point.line));
             return;
         }
         if !pressed && state.mouse.reported_button == Some(button) {
@@ -1888,14 +1896,48 @@ impl App {
             state.mouse.selecting = true;
             state.window.request_redraw();
         } else if state.mouse.selecting {
-            state.mouse.selecting = false;
-            state.mouse.autoscroll = None;
-            if let Some(text) = state.term().selection_text() {
-                if self.config.mouse.copy_on_select {
-                    self.set_clipboard(text.clone());
-                }
-                self.set_primary(text);
+            self.finish_selection();
+        }
+    }
+
+    /// The selection drag ended: copy what it selected.
+    fn finish_selection(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        state.mouse.selecting = false;
+        state.mouse.autoscroll = None;
+        if let Some(text) = state.term().selection_text() {
+            if self.config.mouse.copy_on_select {
+                self.set_clipboard(text.clone());
             }
+            self.set_primary(text);
+        }
+    }
+
+    /// A button went up while the pointer is outside the window: end drags,
+    /// the selection and a reported press without starting anything new.
+    fn release_outside(&mut self, button: Button) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if button == Button::Left {
+            state.mouse.tab_drag = None;
+            state.mouse.divider_drag = None;
+        }
+        if state.mouse.reported_button == Some(button) {
+            state.mouse.reported_button = None;
+            if let Some((column, line)) = state.mouse.last_reported_cell {
+                let point = GridPoint {
+                    column,
+                    line,
+                    right_half: false,
+                };
+                state.report(Some(button), MouseAction::Release, point);
+            }
+        }
+        if button == Button::Left && state.mouse.selecting {
+            self.finish_selection();
         }
     }
 
