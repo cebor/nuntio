@@ -209,6 +209,8 @@ pub struct TermHandle {
     /// The shell's pid, once known.
     shell_pid: OnceLock<u32>,
     shell_name: String,
+    /// The pane runs a one-off command, not a shell.
+    runs_command: bool,
     /// The directory the shell last reported (OSC 7, OSC 9;9).
     reported_dir: Arc<Mutex<Option<ReportedDir>>>,
 }
@@ -262,6 +264,7 @@ impl TermHandle {
         // on macOS as well.
         let via_login =
             cfg!(target_os = "macos") && (options.shell.is_none() || options.login_shell);
+        let runs_command = options.shell.is_some() && !options.login_shell;
         let shell = match options.shell {
             #[cfg(target_os = "macos")]
             Some(shell) if options.login_shell => Some(login_command(&shell)),
@@ -301,6 +304,7 @@ impl TermHandle {
             via_login,
             shell_pid: OnceLock::new(),
             shell_name,
+            runs_command,
             reported_dir,
         })
     }
@@ -410,7 +414,12 @@ impl TermHandle {
     }
 
     /// Whether the shell waits at its prompt, if it can be determined.
+    /// `None` for a pane that runs a command: there is no prompt, and the
+    /// command itself is the process group leader.
     pub fn foreground_is_shell(&self) -> Option<bool> {
+        if self.runs_command {
+            return None;
+        }
         self.shell_pid().and_then(process::foreground_is_shell)
     }
 

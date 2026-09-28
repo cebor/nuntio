@@ -195,6 +195,15 @@ fn foreground_process_and_directory() {
     );
 }
 
+/// A pane that runs a command has no prompt, even though the command is
+/// its own process group leader.
+#[test]
+#[cfg(unix)]
+fn a_command_is_not_an_idle_shell() {
+    let (handle, _rx) = spawn("exec sleep 5");
+    assert_eq!(handle.foreground_is_shell(), None);
+}
+
 #[test]
 fn reported_directory() {
     let (handle, rx) = spawn(r"printf '\033]7;file://box/home/me/My%%20Files\033\\'");
