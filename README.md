@@ -48,7 +48,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Status bar** (optional): live graphs of CPU, memory and network, the battery level and the time, as in iTerm2.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.
 
-<img src="assets/screenshots/find-bar.png" width="656" alt="The find bar searching for &quot;tab&quot; in git log, with five matches highlighted and a match count of 5/5">
+![The find bar searching for "tab" in git log, with five matches highlighted and a match count of 5/5](assets/screenshots/find-bar.png)
 
 ## Installation
 
