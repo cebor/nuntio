@@ -281,12 +281,44 @@ pub fn write_config(path: &Path, contents: &str) -> io::Result<()> {
         name.to_string_lossy(),
         std::process::id()
     ));
-    std::fs::write(&temp, contents)?;
-    if let Ok(meta) = std::fs::metadata(&target) {
-        let _ = std::fs::set_permissions(&temp, meta.permissions());
-    }
+    let permissions = std::fs::metadata(&target).ok().map(|m| m.permissions());
+    write_new(&temp, contents, permissions.as_ref())?;
     std::fs::rename(&temp, &target).inspect_err(|_| {
         let _ = std::fs::remove_file(&temp);
+    })
+}
+
+/// Create `path` with `contents`, readable only as `permissions` allow from
+/// the start: a private config must not be readable while it is written.
+/// A leftover file (or a symlink planted there) is replaced, not followed.
+fn write_new(
+    path: &Path,
+    contents: &str,
+    permissions: Option<&std::fs::Permissions>,
+) -> io::Result<()> {
+    use std::io::Write;
+
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+        _ => {}
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(permissions) = permissions {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(permissions.mode() & 0o777);
+    }
+    let mut file = options.open(path)?;
+    let written = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| match permissions {
+            // The umask may have taken bits away; Windows' read-only flag too.
+            Some(permissions) => file.set_permissions(permissions.clone()),
+            None => Ok(()),
+        });
+    written.inspect_err(|_| {
+        let _ = std::fs::remove_file(path);
     })
 }
 
@@ -524,5 +556,28 @@ mod tests {
             "scrollback = 3\n"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_configs_stay_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("private");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // A stale temp file, even a symlink, is replaced rather than written through.
+        let temp = dir.join(format!(".config.toml.{}.tmp", std::process::id()));
+        let elsewhere = dir.join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, &temp).unwrap();
+        write_config(&path, "scrollback = 4\n").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let followed = elsewhere.exists();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(text, "scrollback = 4\n");
+        assert!(!followed, "wrote through the planted symlink");
     }
 }
