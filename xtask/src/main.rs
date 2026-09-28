@@ -497,20 +497,43 @@ fn package_macos(dist: &Path, version: &str) -> Result<()> {
     #[cfg(unix)]
     std::os::unix::fs::symlink("/Applications", stage.join("Applications"))?;
     let dmg = dist.join(format!("{NAME}-{version}-macos-universal.dmg"));
-    run(Command::new("hdiutil")
-        .args([
-            "create",
-            "-volname",
-            NAME,
-            "-format",
-            "UDZO",
-            "-ov",
-            "-srcfolder",
-        ])
-        .arg(&stage)
-        .arg(&dmg))?;
+    // LZMA-compressed (ULMO, macOS 10.15+): the smallest read-only format.
+    // diskutil fails on UDZO with this content (error 156) and has no
+    // option to overwrite an existing image.
+    match fs::remove_file(&dmg) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    if diskutil_image_available() {
+        run(Command::new("diskutil")
+            .args([
+                "image",
+                "create",
+                "from",
+                "--format",
+                "ULMO",
+                "--volumeName",
+                NAME,
+            ])
+            .arg(&stage)
+            .arg(&dmg))?;
+    } else {
+        // Deprecated since `diskutil image` exists; kept for older macOS.
+        run(Command::new("hdiutil")
+            .args(["create", "-volname", NAME, "-format", "ULMO", "-srcfolder"])
+            .arg(&stage)
+            .arg(&dmg))?;
+    }
     eprintln!("package written to {}", dmg.display());
     Ok(())
+}
+
+/// `diskutil image` replaces `hdiutil create` on recent macOS versions.
+fn diskutil_image_available() -> bool {
+    Command::new("diskutil")
+        .args(["image", "create", "from", "--help"])
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 fn package_windows(dist: &Path, version: &str) -> Result<()> {
