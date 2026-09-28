@@ -453,6 +453,12 @@ impl Renderer {
                 tracing::warn!("screen content does not fit into the glyph atlas");
             }
             self.atlas_overflow = !fits;
+            if !fits {
+                // Draw what was laid out; the UI part ends where it stopped.
+                let len = self.instances.len();
+                self.ui_start = self.ui_start.min(len);
+                self.cutout_start = len;
+            }
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
@@ -535,6 +541,9 @@ impl Renderer {
     fn build_instances(&mut self, frame: &Frame) -> Result<(), AtlasFull> {
         self.instances.clear();
         self.pane_batches.clear();
+        // Not reached yet; stale indices would point into the last frame.
+        self.ui_start = usize::MAX;
+        self.cutout_start = usize::MAX;
         for pane in frame.panes {
             let start = self.instances.len() as u32;
             self.push_pane(pane.snapshot, pane.x, pane.y)?;
