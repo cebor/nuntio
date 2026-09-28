@@ -23,7 +23,7 @@ Always pass `--workspace` to clippy and tests: `default-members` contains only `
 To look at the running terminal or try out a change, use the debug server instead of asking the user for screenshots:
 
 ```sh
-cargo xtask drive start                  # build with --features debug-server, start in the background (empty config)
+cargo xtask drive start                  # build with --features debug-server, start headless in the background (empty config)
 cargo xtask drive wait-idle              # until no pane had output for 300 ms
 cargo xtask drive shot                   # target/nuntio-debug/shot.png, look at it with Read
 cargo xtask drive text                   # visible lines of the focused pane; `state` for tabs/panes/banner as JSON
@@ -33,6 +33,8 @@ cargo xtask drive stop                   # `drive help` lists everything; `drive
 ```
 
 The server (`crates/nuntio/src/debug_server.rs`, a child module of `app.rs`) is only compiled with the `debug-server` feature, never in packages. Input goes through the real paths (`keyboard_input`, `mouse_input`, `run_action`); screenshots are rendered offscreen (`Renderer::capture`), so they work while the window is covered. The window opens without taking focus and acts as focused.
+
+Always test headless, the default: nothing shows up on the user's desktop. Use `drive start --visible` only when the user wants to watch. Headless means off-screen and out of the taskbar on Windows and macOS (`--headless`; a hidden window would get no redraws on Windows), and an Xvfb X server on Linux and WSL (needs `xvfb-run` and Mesa's Vulkan driver; there `state` reports `headless: false`, since the whole display is invisible). macOS is untested.
 
 ## Architecture
 
