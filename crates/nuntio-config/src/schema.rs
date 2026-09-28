@@ -426,6 +426,14 @@ pub static SETTINGS: &[Setting] = &[
         "What a tab shows as its title.",
     ),
     setting(
+        "tabs.inherit_directory",
+        Section::Tabs,
+        "Inherit directory",
+        Kind::Bool,
+        "Open a new tab in the working directory of the focused pane instead \
+         of the home directory.",
+    ),
+    setting(
         "panes.dim_inactive",
         Section::Panes,
         "Dim inactive",

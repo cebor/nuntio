@@ -1121,13 +1121,14 @@ impl App {
         }
     }
 
-    /// Start a shell, or `command`, in the focused pane's directory for a
-    /// new tab or split. Failures are shown in a banner.
-    fn spawn_in_focused_cwd(&mut self, command: Option<Vec<String>>) -> Option<Pane> {
-        let cwd = self
-            .state
-            .as_ref()
-            .and_then(|s| s.term().working_directory());
+    /// Start a shell, or `command`, for a new tab or split: in the focused
+    /// pane's directory with `inherit`, otherwise at home. Failures are
+    /// shown in a banner.
+    fn spawn_for_focused(&mut self, command: Option<Vec<String>>, inherit: bool) -> Option<Pane> {
+        let cwd = match self.state.as_ref().filter(|_| inherit) {
+            Some(state) => state.term().working_directory(),
+            None => dirs::home_dir(),
+        };
         self.spawn_pane(cwd, command)
             .inspect_err(|err| {
                 self.notify(Banner::new(
@@ -1141,7 +1142,8 @@ impl App {
 
     /// Open a tab with a shell, or with `command` instead.
     fn new_tab(&mut self, command: Option<Vec<String>>) {
-        let Some(pane) = self.spawn_in_focused_cwd(command) else {
+        let inherit = self.config.tabs.inherit_directory;
+        let Some(pane) = self.spawn_for_focused(command, inherit) else {
             return;
         };
         let Some(state) = self.state.as_mut() else {
@@ -1159,7 +1161,7 @@ impl App {
 
     /// Split the focused pane; the new pane starts in the same directory.
     fn split(&mut self, axis: Axis) {
-        let Some(pane) = self.spawn_in_focused_cwd(None) else {
+        let Some(pane) = self.spawn_for_focused(None, true) else {
             return;
         };
         let Some(state) = self.state.as_mut() else {

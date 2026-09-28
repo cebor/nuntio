@@ -239,6 +239,8 @@ pub enum TabTitle {
 pub struct Tabs {
     pub hide_when_single: bool,
     pub title: TabTitle,
+    /// New tabs start in the focused pane's directory instead of at home.
+    pub inherit_directory: bool,
 }
 
 impl Default for Tabs {
@@ -246,6 +248,7 @@ impl Default for Tabs {
         Self {
             hide_when_single: true,
             title: TabTitle::default(),
+            inherit_directory: false,
         }
     }
 }
@@ -560,6 +563,7 @@ macos_titlebar = "none"
 [tabs]
 hide_when_single = true
 title = "process"
+inherit_directory = true
 
 [panes]
 dim_inactive = 0.15
@@ -595,6 +599,7 @@ action = "split_horizontal"
         assert_eq!(cfg.window.decorations, Decorations::System);
         assert_eq!(cfg.window.effective_macos_titlebar(), MacosTitlebar::None);
         assert_eq!(cfg.tabs.title, TabTitle::Process);
+        assert!(cfg.tabs.inherit_directory);
         assert!(cfg.status_bar.visible());
         assert_eq!(cfg.status_bar.position, StatusBarPosition::Top);
         assert_eq!(
