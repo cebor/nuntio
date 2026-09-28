@@ -90,6 +90,9 @@ confirm_paste = true
 # Programs may turn on the kitty keyboard protocol.
 kitty_keyboard = true
 
+# Look for a newer release on GitHub once a day.
+update_check = false
+
 # One theme name…
 theme = "iTerm2 Default"
 # …or a pair that follows the OS appearance (replace the line above):
@@ -150,6 +153,7 @@ option_as_meta = "none"
 | `clipboard_write` | bool | `true` | Let programs copy to the clipboard with OSC 52, e.g. vim or tmux over ssh. Programs can never read the clipboard, so a program can't see what you copied, but one could replace it before you paste. |
 | `confirm_paste` | bool | `true` | Ask before pasting text with line breaks where the program doesn't use bracketed paste, so the shell would run each line at once. A banner says how many lines would run; pasting again within 5 seconds confirms. Shells that use bracketed paste (bash 5.1 and later, zsh and fish do) show pasted lines without running them, so nuntio doesn't ask there. |
 | `kitty_keyboard` | bool | `true` | Let programs turn on the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/). Programs that use it (neovim, helix, fish 4 and others) can then tell keys like Ctrl+I and Tab or Esc and Alt apart and see key releases. It only applies while a program asks for it; turn it off if one misbehaves. |
+| `update_check` | bool | `false` | Ask GitHub once a day whether a newer nuntio release exists. If so, a banner says so (click it for the release notes, or × to not show it again for that version), and an arrow appears in the tab bar and as the `update` status bar item. Nothing is downloaded or installed. nuntio built from source compares the version of your checkout and suggests `git pull` instead. The `check_for_updates` action checks right away, even with this off. |
 | `theme` | string or table | `"iTerm2 Default"` | A theme name, or `{ light = "…", dark = "…" }` to follow the OS appearance. See [Themes](#themes). |
 
 ### `[font]`
@@ -205,6 +209,7 @@ Each item starts with an icon:
 - `network`: throughput of the physical interfaces (loopback, container and VM bridges such as `docker0` are left out, so traffic isn't counted twice). Download grows up from the middle of the graph, upload down. The download rate is shown left of the graph, the upload rate right of it; rates under 0.1 K show as `0K`.
 - `battery`: charge level, with ⚡ while plugged in; the graph shows the level over about the last hour, one bar per minute. Hidden on machines without a battery.
 - `datetime`: the local date and time.
+- `update`: the version of a newer nuntio release; click it to open the release page. Shown only while [`update_check`](#top-level) (or the `check_for_updates` action) has found one.
 
 #### Springs
 
@@ -379,4 +384,5 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `clear_scrollback` | Clear the history of the focused pane |
 | `reload_config` | Reload the config file |
 | `open_settings` | Open `nuntio-config` in a new tab |
+| `check_for_updates` | Look for a newer nuntio release now, even with `update_check` off |
 | `none` | Unbind the key combination |

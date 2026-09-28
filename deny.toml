@@ -21,6 +21,9 @@ allow = [
     "BSD-3-Clause",
     "BSL-1.0",
     "CC0-1.0",
+    # webpki-roots: Mozilla's CA certificates, which the update check
+    # trusts. The license covers the data only.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MPL-2.0",

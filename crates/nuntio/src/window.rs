@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use nuntio_config::{Config, StatusBarPosition, TabTitle};
+use nuntio_config::{Config, StatusBarPosition, StatusItem, TabTitle};
 use nuntio_render::{CellMetrics, Frame, FrameStatus, PaneView, Renderer, UiRect, UiText};
 use nuntio_term::{
     CursorStyle, GridPoint, Link, Rgb, Snapshot, TermHandle, TermMode, TermSize, UnderlineStyle,
@@ -321,6 +321,8 @@ pub struct WindowState {
     /// wouldn't change it.
     status_drawn: Option<(Vec<UiRect>, Vec<UiText>)>,
     title: String,
+    /// A newer release exists: the tab bar shows a badge.
+    pub update_badge: bool,
 }
 
 impl WindowState {
@@ -354,6 +356,7 @@ impl WindowState {
             ime_cell: None,
             status_drawn: None,
             title: String::new(),
+            update_badge: false,
         }
     }
 
@@ -448,6 +451,7 @@ impl WindowState {
             left_inset as f32,
             min_height as f32,
             self.chrome == Chrome::Undecorated,
+            self.update_badge,
         ))
     }
 
@@ -509,6 +513,20 @@ impl WindowState {
         }
         self.status_drawn = drawn;
         true
+    }
+
+    /// The status bar item at `pos`, for clicks.
+    pub fn status_item_at(
+        &self,
+        config: &Config,
+        stats: &Stats,
+        pos: PhysicalPosition<f64>,
+    ) -> Option<StatusItem> {
+        if !self.status_bar_contains(config, pos) {
+            return None;
+        }
+        self.status_bar(config, stats, &datetime(config))?
+            .item_at(pos.x as f32)
     }
 
     /// The pointer is over the status bar.

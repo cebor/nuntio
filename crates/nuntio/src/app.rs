@@ -31,6 +31,7 @@ use crate::search_bar::SearchBar;
 use crate::status_bar::Stats;
 use crate::sysmon::SystemMonitor;
 use crate::tab_bar::BarHit;
+use crate::update::{self, Build, Checker, Update};
 use crate::window::{
     AUTOSCROLL_INTERVAL, Autoscroll, BLINK_INTERVAL, Chrome, DEFAULT_TITLE, Pane, TabContent,
     TabDrag, WindowState,
@@ -502,6 +503,10 @@ pub struct App {
     /// The window is hidden (minimized or covered); sampling pauses.
     occluded: bool,
     stats: Stats,
+    /// The daily update check, while `update_check` is on.
+    update_checker: Option<Checker>,
+    /// A newer release, once a check found one.
+    update: Option<Update>,
     clipboard: Option<arboard::Clipboard>,
     /// Current font size in points; changed by zoom shortcuts.
     font_size: f32,
@@ -563,6 +568,8 @@ impl App {
             system_monitor: None,
             occluded: false,
             stats: Stats::default(),
+            update_checker: None,
+            update: None,
             clipboard,
             next_pane_id: 0,
             state: None,
@@ -579,6 +586,7 @@ impl App {
         };
         let theme_warning = app.update_palette();
         app.sync_system_monitor();
+        app.sync_update_checker();
         app.notify(Banner::config(
             Severity::Warning,
             theme_warnings
@@ -599,6 +607,7 @@ impl App {
             match new.severity {
                 Severity::Error => tracing::error!("{message}"),
                 Severity::Warning => tracing::warn!("{message}"),
+                Severity::Info => tracing::info!("{message}"),
             }
         }
         self.banner = match self.banner.take() {
@@ -670,6 +679,90 @@ impl App {
         }
     }
 
+    /// Start or stop the daily update check to match `update_check`.
+    fn sync_update_checker(&mut self) {
+        match (self.config.update_check, self.update_checker.is_some()) {
+            (true, false) => {
+                tracing::debug!("starting update check");
+                self.update_checker = Some(Checker::start(self.proxy.clone()));
+            }
+            (false, true) => {
+                // Dropping it stops the thread; forget what it found.
+                self.update_checker = None;
+                self.set_update(None);
+                self.dismiss_banner(update::BANNER);
+            }
+            _ => {}
+        }
+    }
+
+    /// Show what an update check found.
+    fn update_checked(&mut self, checked: update::Checked) {
+        // Late answers of a check that was just turned off.
+        if !checked.manual && self.update_checker.is_none() {
+            return;
+        }
+        let release = match checked.result {
+            Ok(release) => release,
+            Err(err) => {
+                self.notify(Banner::new(Severity::Warning, "Update check", vec![err]));
+                return;
+            }
+        };
+        let update = Update::new(&release, Build::current());
+        // A repeated answer replaces the banner instead of adding to it.
+        self.dismiss_banner(update::BANNER);
+        match &update {
+            Some(update) if checked.manual || !checked.dismissed => {
+                let banner = Banner::new(Severity::Info, update::BANNER, vec![update.message()]);
+                self.notify(banner.map(|b| b.with_url(update.url.clone())));
+            }
+            Some(_) => {}
+            None if checked.manual => self.notify(Banner::new(
+                Severity::Info,
+                update::BANNER,
+                vec![update::up_to_date()],
+            )),
+            None => {}
+        }
+        self.set_update(update);
+    }
+
+    fn set_update(&mut self, update: Option<Update>) {
+        self.stats
+            .set_update(update.as_ref().map(|u| u.version.clone()));
+        self.update = update;
+        if let Some(state) = self.state.as_mut() {
+            state.update_badge = self.update.is_some();
+            state.status_bar_changed(&self.config, &self.stats);
+            state.window.request_redraw();
+        }
+    }
+
+    /// Open `url` in the browser, or say why not.
+    fn open_url(&mut self, url: &str) {
+        if let Err(reason) = crate::link::check(url) {
+            self.notify(Banner::new(
+                Severity::Warning,
+                "Link",
+                vec![format!("not opening {url}: {reason}")],
+            ));
+        } else if let Err(err) = open::that_detached(url) {
+            self.notify(Banner::new(
+                Severity::Warning,
+                "Link",
+                vec![format!("failed to open {url}: {err}")],
+            ));
+        }
+    }
+
+    /// Open the page of the newer release.
+    fn open_update(&mut self) {
+        if let Some(url) = self.update.as_ref().map(|u| u.url.clone()) {
+            self.open_url(&url);
+        }
+    }
+
     /// Re-read the config file and apply what changed. An invalid file
     /// leaves the current settings untouched.
     fn reload_config(&mut self) {
@@ -696,6 +789,7 @@ impl App {
         self.bindings = bindings;
         warnings.extend(self.update_palette());
         self.sync_system_monitor();
+        self.sync_update_checker();
 
         let chrome_changed = if cfg!(target_os = "macos") {
             old.window.effective_macos_titlebar() != self.config.window.effective_macos_titlebar()
@@ -908,6 +1002,7 @@ impl App {
         });
         let pane = self.spawn_pane(cwd, command)?;
         let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
+        state.update_badge = self.update.is_some();
         // The cell size is only known now that the renderer has the font.
         // Where the size applies at once, there may be no `Resized` event.
         let size = state.size_for_grid(&self.config);
@@ -1288,6 +1383,7 @@ impl App {
                     vec!["nuntio-config is not installed next to nuntio".into()],
                 )),
             },
+            Action::CheckForUpdates => update::check_now(self.proxy.clone()),
             Action::CloseTab => {
                 let id = state.content().focused;
                 self.request_close(CloseTarget::Tab(id));
@@ -1571,14 +1667,28 @@ impl App {
         {
             let width = state.window.inner_size().width as f32;
             let (cell, scale) = (state.renderer.cell_metrics(), state.window.scale_factor());
-            let stays = self
-                .banner
-                .as_mut()
-                .is_some_and(|banner| banner.click(pos.x as f32, width, cell, scale));
-            if !stays {
-                self.banner = None;
-            }
+            let x = pos.x as f32;
+            let url = banner
+                .url
+                .clone()
+                .filter(|_| !banner.on_close(x, width, cell, scale));
+            let stays = url.is_none()
+                && self
+                    .banner
+                    .as_mut()
+                    .is_some_and(|banner| banner.click(x, width, cell, scale));
             state.window.request_redraw();
+            if !stays && let Some(closed) = self.banner.take() {
+                // Closing the update banner means: not for this release.
+                if closed.title == update::BANNER
+                    && let Some(update) = &self.update
+                {
+                    update::dismiss(&update.version);
+                }
+            }
+            if let Some(url) = url {
+                self.open_url(&url);
+            }
             return;
         }
 
@@ -1628,6 +1738,7 @@ impl App {
                         state.window.set_maximized(!maximized);
                     }
                     BarHit::CloseWindow => self.request_close(CloseTarget::Window),
+                    BarHit::Update => self.open_update(),
                 }
                 return;
             }
@@ -1644,6 +1755,13 @@ impl App {
         }
 
         if pressed
+            && button == Button::Left
+            && state.status_item_at(&self.config, &self.stats, pos) == Some(StatusItem::Update)
+        {
+            self.open_update();
+            return;
+        }
+        if pressed
             && (state.search_bar_contains(&self.config, pos)
                 || state.status_bar_contains(&self.config, pos))
         {
@@ -1654,19 +1772,7 @@ impl App {
             && let Some((_, link)) = &state.mouse.hover_link
         {
             let url = link.url.clone();
-            if let Err(reason) = crate::link::check(&url) {
-                self.notify(Banner::new(
-                    Severity::Warning,
-                    "Link",
-                    vec![format!("not opening {url}: {reason}")],
-                ));
-            } else if let Err(err) = open::that_detached(&url) {
-                self.notify(Banner::new(
-                    Severity::Warning,
-                    "Link",
-                    vec![format!("failed to open {url}: {err}")],
-                ));
-            }
+            self.open_url(&url);
             return;
         }
         if pressed {
@@ -1772,7 +1878,9 @@ impl App {
         let bar = state.tab_bar(&self.config);
         let bar_hit = bar.as_ref().and_then(|b| b.hit(pos.x as f32, pos.y as f32));
         let in_terminal = bar_hit.is_none() && icon == CursorIcon::Default;
-        state.window.set_cursor(if over_link {
+        let over_update = bar_hit == Some(BarHit::Update)
+            || state.status_item_at(&self.config, &self.stats, pos) == Some(StatusItem::Update);
+        state.window.set_cursor(if over_link || over_update {
             CursorIcon::Pointer
         } else if in_terminal {
             CursorIcon::Text
@@ -2058,6 +2166,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Menu(MenuCommand::Quit) => self.request_close(CloseTarget::Window),
             #[cfg(feature = "debug-server")]
             UserEvent::Debug(call) => self.debug_call(call),
+            UserEvent::Update(checked) => self.update_checked(checked),
             UserEvent::SystemStats(sample) => {
                 // Late samples from a monitor that was just stopped.
                 if self.system_monitor.is_none() {

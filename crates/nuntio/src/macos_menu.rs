@@ -132,6 +132,7 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
         sel!(orderFrontStandardAboutPanel:),
         "",
     );
+    b.action(&app_menu, "Check for Updates…", Action::CheckForUpdates);
     b.separator(&app_menu);
     b.action(&app_menu, "Settings…", Action::OpenSettings);
     b.action(&app_menu, "Reload Config", Action::ReloadConfig);

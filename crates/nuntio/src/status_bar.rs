@@ -1,4 +1,5 @@
-//! Status bar layout and drawing: system graphs, date and time. It is
+//! Status bar layout and drawing: system graphs, date and time, a newer
+//! release. It is
 //! laid out in the cells of the small UI font (`small_cell_metrics`).
 
 use std::collections::VecDeque;
@@ -51,7 +52,8 @@ impl History {
     }
 }
 
-/// Collected samples: graph histories and the latest reading.
+/// Collected samples: graph histories and the latest reading, and the
+/// version of a newer release.
 #[derive(Debug, Clone, Default)]
 pub struct Stats {
     cpu: History,
@@ -62,6 +64,7 @@ pub struct Stats {
     /// Samples with a battery level so far, to thin out its history.
     battery_samples: usize,
     latest: Sample,
+    update: Option<String>,
 }
 
 impl Stats {
@@ -86,9 +89,17 @@ impl Stats {
         self.latest = sample;
     }
 
-    /// Forget everything, e.g. when the bar is turned off.
+    /// Forget the samples, e.g. when the bar is turned off.
     pub fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            update: self.update.take(),
+            ..Self::default()
+        };
+    }
+
+    /// The version of a newer release, for the `update` item.
+    pub fn set_update(&mut self, version: Option<String>) {
+        self.update = version;
     }
 }
 
@@ -111,6 +122,7 @@ struct Slot {
     item: StatusItem,
     /// Left edge.
     x: f32,
+    width: f32,
     /// A spring separates it from the previous item.
     spring_before: bool,
 }
@@ -131,7 +143,7 @@ impl StatusBar {
 
     /// Lay out `items` in a bar of `width` pixels whose top edge is at
     /// `top`. Springs share the free space. Items without data to show
-    /// (no battery) are left out. `cell` is the small UI font the bar is
+    /// (no battery, no update) are left out. `cell` is the small UI font the bar is
     /// laid out in, `font_cell` the terminal font.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -149,14 +161,18 @@ impl StatusBar {
         let shown: Vec<StatusItem> = items
             .iter()
             .copied()
-            .filter(|&item| item != StatusItem::Battery || stats.latest.battery.is_some())
+            .filter(|&item| match item {
+                StatusItem::Battery => stats.latest.battery.is_some(),
+                StatusItem::Update => stats.update.is_some(),
+                _ => true,
+            })
             .collect();
         let cw = cell.width as f32;
         let pieces: Vec<Piece> = shown
             .iter()
             .map(|&item| match item {
                 StatusItem::Spring => Piece::Spring,
-                item => Piece::Item(item_cells(item, datetime) as f32 * cw),
+                item => Piece::Item(item_cells(item, datetime, stats) as f32 * cw),
             })
             .collect();
         let mut positions = layout(width, cw, GAP_CELLS as f32 * cw, &pieces).into_iter();
@@ -169,6 +185,7 @@ impl StatusBar {
                 slots.push(Slot {
                     item,
                     x,
+                    width: item_cells(item, datetime, stats) as f32 * cw,
                     spring_before,
                 });
                 spring_before = false;
@@ -184,6 +201,14 @@ impl StatusBar {
             font_cell,
             slots,
         }
+    }
+
+    /// The item at `x`, for clicks.
+    pub fn item_at(&self, x: f32) -> Option<StatusItem> {
+        self.slots
+            .iter()
+            .find(|s| x >= s.x && x < s.x + s.width)
+            .map(|s| s.item)
     }
 
     /// With `rainbow`, each item gets its own hue; separators and graph
@@ -316,6 +341,23 @@ impl StatusBar {
             StatusItem::Datetime => {
                 self.clock_icon(out, x, colors);
                 text(CONTENT, datetime.to_owned(), colors.value, out);
+            }
+            StatusItem::Update => {
+                let Some(version) = &stats.update else {
+                    return;
+                };
+                // In the terminal font, which draws the arrow larger,
+                // centered in the icon's cells and on the text's baseline.
+                let overhang = (self.font_cell.width as f32 - ICON_CELLS as f32 * cw) / 2.0;
+                out.texts.push(UiText {
+                    x: (x - overhang).floor(),
+                    y: text_y + self.cell.baseline as f32 - self.font_cell.baseline as f32,
+                    text: "↑".into(),
+                    color: colors.label,
+                    bold: false,
+                    small: false,
+                });
+                text(CONTENT, version.clone(), colors.value, out);
             }
             StatusItem::Spring => {}
         }
@@ -638,7 +680,7 @@ fn outline(out: &mut Output, x: f32, y: f32, width: f32, height: f32, stroke: f3
 
 /// Width of an item in cells. Values have a fixed width so items don't
 /// shift as the numbers change.
-fn item_cells(item: StatusItem, datetime: &str) -> usize {
+fn item_cells(item: StatusItem, datetime: &str, stats: &Stats) -> usize {
     match item {
         // icon graph " 100%"
         StatusItem::Cpu => CONTENT + GRAPH_CELLS + 1 + 4,
@@ -650,6 +692,8 @@ fn item_cells(item: StatusItem, datetime: &str) -> usize {
         StatusItem::Battery => CONTENT + GRAPH_CELLS + 1 + 4 + 1 + 2,
         // icon "Fri 25 Sep 10:50"
         StatusItem::Datetime => CONTENT + datetime.width(),
+        // icon "0.1.6"
+        StatusItem::Update => CONTENT + stats.update.as_deref().map_or(0, str::width),
         StatusItem::Spring => 0,
     }
 }
@@ -916,6 +960,25 @@ mod tests {
 
         let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", CELL, CELL, 1.0);
         assert_eq!(bar.slots.len(), 3);
+    }
+
+    #[test]
+    fn update_shows_only_when_there_is_one_and_is_clickable() {
+        let items = arranged(&[StatusItem::Update, StatusItem::Datetime]);
+        let mut stats = stats(false);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", CELL, CELL, 1.0);
+        assert_eq!(bar.item_at(20.0), None);
+
+        stats.set_update(Some("0.1.6".into()));
+        stats.clear();
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", CELL, CELL, 1.0);
+        // Icon, space and "0.1.6" (8 cells) after the one-cell margin.
+        assert_eq!(bar.item_at(10.0), Some(StatusItem::Update));
+        assert_eq!(bar.item_at(89.0), Some(StatusItem::Update));
+        assert_eq!(bar.item_at(90.0), None);
+        assert_eq!(bar.item_at(995.0 - 40.0), Some(StatusItem::Datetime));
+        let (_, texts) = bar.draw(&stats, "12:34", Rgb::default(), Rgb::default(), false);
+        assert!(texts.iter().any(|t| t.text == "0.1.6"));
     }
 
     #[test]

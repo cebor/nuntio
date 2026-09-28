@@ -33,6 +33,8 @@ pub struct Config {
     pub confirm_paste: bool,
     /// Programs may turn on the kitty keyboard protocol.
     pub kitty_keyboard: bool,
+    /// Look for a newer release on GitHub once a day.
+    pub update_check: bool,
     pub font: Font,
     pub window: Window,
     pub tabs: Tabs,
@@ -52,6 +54,7 @@ impl Default for Config {
             clipboard_write: true,
             confirm_paste: true,
             kitty_keyboard: true,
+            update_check: false,
             font: Font::default(),
             window: Window::default(),
             tabs: Tabs::default(),
@@ -259,6 +262,8 @@ pub enum StatusItem {
     Network,
     Battery,
     Datetime,
+    /// A newer nuntio release; hidden while there is none.
+    Update,
     /// A flexible gap; springs share the free space evenly.
     #[serde(rename = "<->")]
     Spring,
@@ -273,6 +278,7 @@ impl StatusItem {
             Self::Network => "network",
             Self::Battery => "battery",
             Self::Datetime => "datetime",
+            Self::Update => "update",
             Self::Spring => schema::SPRING,
         }
     }

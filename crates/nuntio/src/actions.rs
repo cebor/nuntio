@@ -37,6 +37,8 @@ pub enum Action {
     ToggleFullscreen,
     /// Open `nuntio-config` in a new tab.
     OpenSettings,
+    /// Look for a newer release now.
+    CheckForUpdates,
 }
 
 impl Action {
@@ -61,6 +63,7 @@ impl Action {
             "previous_tab" => PreviousTab,
             "reload_config" => ReloadConfig,
             "open_settings" => OpenSettings,
+            "check_for_updates" => CheckForUpdates,
             "close_pane" => ClosePane,
             "split_vertical" => SplitVertical,
             "split_horizontal" => SplitHorizontal,

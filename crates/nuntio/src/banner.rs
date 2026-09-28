@@ -1,5 +1,6 @@
 //! A one-line notification at the bottom of the window, e.g. for config
-//! errors. Clicking it shows the next message, the × dismisses it.
+//! errors. Clicking it shows the next message (or opens its link), the ×
+//! dismisses it.
 
 use nuntio_render::{CellMetrics, UiRect, UiText};
 use nuntio_term::Rgb;
@@ -10,6 +11,7 @@ const CONFIG_WARNING: &str = "Config warning";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
+    Info,
     Warning,
     Error,
 }
@@ -20,6 +22,8 @@ pub struct Banner {
     /// What the messages are about, shown before the first one.
     pub title: &'static str,
     pub messages: Vec<String>,
+    /// Opened by a click outside the ×.
+    pub url: Option<String>,
     /// Index of the message shown.
     shown: usize,
 }
@@ -30,15 +34,23 @@ impl Banner {
             severity,
             title,
             messages,
+            url: None,
             shown: 0,
         })
+    }
+
+    pub fn with_url(self, url: String) -> Self {
+        Self {
+            url: Some(url),
+            ..self
+        }
     }
 
     /// Problems with the config; an error means it was not applied.
     pub fn config(severity: Severity, messages: Vec<String>) -> Option<Self> {
         let title = match severity {
             Severity::Error => CONFIG_ERROR,
-            Severity::Warning => CONFIG_WARNING,
+            Severity::Warning | Severity::Info => CONFIG_WARNING,
         };
         Self::new(severity, title, messages)
     }
@@ -60,14 +72,18 @@ impl Banner {
     /// closes it, anywhere else shows the next message. Returns whether the
     /// banner stays open.
     pub fn click(&mut self, x: f32, window_width: f32, cell: CellMetrics, scale: f64) -> bool {
-        let (_, height) = self.bounds(0.0, cell, scale);
-        let padding = (height - cell.height as f32) / 2.0;
-        let on_close = x >= window_width - padding - 3.0 * cell.width as f32;
-        if on_close || self.messages.len() == 1 {
+        if self.on_close(x, window_width, cell, scale) || self.messages.len() == 1 {
             return false;
         }
         self.shown = (self.shown + 1) % self.messages.len();
         true
+    }
+
+    /// `x` is on the ×.
+    pub fn on_close(&self, x: f32, window_width: f32, cell: CellMetrics, scale: f64) -> bool {
+        let (_, height) = self.bounds(0.0, cell, scale);
+        let padding = (height - cell.height as f32) / 2.0;
+        x >= window_width - padding - 3.0 * cell.width as f32
     }
 
     /// Top edge and height of the banner, which ends at `bottom`.
@@ -93,6 +109,7 @@ impl Banner {
         let (background, foreground) = match self.severity {
             Severity::Error => (rgb(0xb3261e), rgb(0xffffff)),
             Severity::Warning => (rgb(0x7a5c00), rgb(0xffffff)),
+            Severity::Info => (rgb(0x1f5fa8), rgb(0xffffff)),
         };
         let padding = (height - cell.height as f32) / 2.0;
         // Leave room for the closing "×" at the right.
@@ -181,6 +198,16 @@ mod tests {
 
         let mut single = Banner::new(Severity::Warning, "Link", vec!["x".into()]).unwrap();
         assert!(!single.click(10.0, 400.0, CELL, 1.0));
+    }
+
+    #[test]
+    fn links_open_outside_the_cross() {
+        let banner = Banner::new(Severity::Info, "Update", vec!["x".into()])
+            .unwrap()
+            .with_url("https://example.com".into());
+        assert_eq!(banner.url.as_deref(), Some("https://example.com"));
+        assert!(!banner.on_close(10.0, 400.0, CELL, 1.0));
+        assert!(banner.on_close(395.0, 400.0, CELL, 1.0));
     }
 
     #[test]

@@ -38,6 +38,8 @@ pollster = "0.4"
 lexopt = "0.3"
 unicode-width = "0.2"
 open = "5"
+# The update check: GitHub's API over HTTPS.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 # File links: the local host name and %-escapes in paths.
 gethostname = "1"
 percent-encoding = "2"

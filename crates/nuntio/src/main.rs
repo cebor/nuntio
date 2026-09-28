@@ -20,6 +20,7 @@ mod sysmon;
 mod tab_bar;
 mod tab_title;
 mod tabs;
+mod update;
 mod window;
 
 use std::io::IsTerminal;

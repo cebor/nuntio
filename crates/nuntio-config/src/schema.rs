@@ -190,6 +190,10 @@ pub static STATUS_ITEMS: &[Variant] = &[
     variant("battery", "Charge level; hidden without a battery."),
     variant("datetime", "The local date and time."),
     variant(
+        "update",
+        "A newer nuntio release, once update_check found one; click it for the release page.",
+    ),
+    variant(
         SPRING,
         "A flexible gap: springs share the free space, pushing the items apart.",
     ),
@@ -269,6 +273,13 @@ pub static SETTINGS: &[Setting] = &[
         "Kitty keyboard protocol",
         Kind::Bool,
         "Let programs like neovim, helix or fish turn on the kitty keyboard protocol, which tells keys like Ctrl+I and Tab apart.",
+    ),
+    setting(
+        "update_check",
+        Section::General,
+        "Check for updates",
+        Kind::Bool,
+        "Ask GitHub once a day whether a newer nuntio release exists, and show a notice if so. Nothing is downloaded or installed.",
     ),
     setting(
         "theme",
@@ -698,6 +709,7 @@ mod tests {
             | StatusItem::Network
             | StatusItem::Battery
             | StatusItem::Datetime
+            | StatusItem::Update
             | StatusItem::Spring => (),
         };
         check(
@@ -708,6 +720,7 @@ mod tests {
                 StatusItem::Network,
                 StatusItem::Battery,
                 StatusItem::Datetime,
+                StatusItem::Update,
                 StatusItem::Spring,
             ],
         );

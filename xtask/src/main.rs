@@ -306,7 +306,9 @@ fn cargo_build(target: Option<&str>) -> Result<PathBuf> {
     let mut command = Command::new(env!("CARGO"));
     command
         .current_dir(root())
-        .args(["build", "--release", "--locked", "-p", NAME]);
+        .args(["build", "--release", "--locked", "-p", NAME])
+        // Tells the update check that this is a release, not a checkout.
+        .env("NUNTIO_BUILD", "release");
     if let Some(target) = target {
         command.args(["--target", target]);
     }

@@ -24,10 +24,9 @@ doc = false
 [features]
 # Remote control for debugging (`--debug-server`, driven by `cargo xtask
 # drive`). Not in release packages.
-debug-server = ["dep:serde", "dep:serde_json", "nuntio-render/capture"]
+debug-server = ["dep:serde_json", "nuntio-render/capture"]
 
 [dependencies]
-serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 nuntio-config.workspace = true
 nuntio-render.workspace = true
@@ -47,6 +46,10 @@ dirs.workspace = true
 chrono.workspace = true
 sysinfo.workspace = true
 starship-battery.workspace = true
+# The update check, and the debug server.
+serde.workspace = true
+toml.workspace = true
+ureq.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 sys-locale.workspace = true
@@ -56,6 +59,9 @@ objc2-app-kit.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [build-dependencies]
 winresource = "0.1"

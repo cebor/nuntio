@@ -2,6 +2,7 @@ use nuntio_term::TermEvent;
 
 use crate::actions::Action;
 use crate::sysmon::Sample;
+use crate::update::Checked;
 
 /// Identifies a pane across tabs and splits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,6 +16,8 @@ pub enum UserEvent {
     ConfigChanged,
     /// A new reading for the status bar.
     SystemStats(Sample),
+    /// The answer of an update check.
+    Update(Checked),
     /// A command from the macOS menu bar.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Menu(MenuCommand),
