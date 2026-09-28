@@ -56,7 +56,7 @@ Download the package for your platform from the [latest release](https://github.
 
 | Platform | Package | Install |
 |---|---|---|
-| macOS (Intel and Apple Silicon) | `nuntio-<version>-macos-universal.dmg` | Open the image and drag nuntio to Applications |
+| macOS 11 (Big Sur) or later, Intel and Apple Silicon | `nuntio-<version>-macos-universal.dmg` | Open the image and drag nuntio to Applications |
 | Linux (Debian / Ubuntu) | `nuntio_<version>-1_amd64.deb` | `sudo apt install ./nuntio_<version>-1_amd64.deb` |
 | Linux (any distribution) | `nuntio-<version>-x86_64-linux.AppImage` | `chmod +x` it and run it |
 | Linux (any distribution) | `nuntio-<version>-x86_64-linux.tar.gz` | Unpack it; it contains `bin/`, a desktop file and icons |
