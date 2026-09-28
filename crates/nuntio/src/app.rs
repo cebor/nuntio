@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use nuntio_config::{
     Color, Config, ConfigWatcher, DEFAULT_THEME, StatusItem, Theme, ThemeSelection, ThemeSet,
 };
-use nuntio_render::{FrameStatus, Renderer};
+use nuntio_render::{FrameStatus, GpuOptions, Renderer};
 use nuntio_term::{Palette, Rgb, TermEvent, TermOptions, TermSize};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -41,6 +41,10 @@ use app_panes::{CloseTarget, PendingClose};
 
 const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
+
+/// Shown when `window.gpu_acceleration` is off but the system has no software renderer.
+const NO_SOFTWARE_RENDERER: &str = "no software renderer available, nuntio keeps using the GPU";
+
 /// Room for macOS's traffic-light buttons, in logical pixels.
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
@@ -134,6 +138,11 @@ fn chrome(
 /// compositing performance, so only then.
 fn wants_transparency(chrome: Chrome, config: &Config) -> bool {
     chrome.draws_corners() || config.window.opacity < 1.0
+}
+
+/// A warning if `software` was wanted but the renderer runs on the GPU.
+fn software_warning(software: bool, renderer: &Renderer) -> Option<String> {
+    (software && !renderer.software()).then(|| NO_SOFTWARE_RENDERER.into())
 }
 
 /// Ask Windows 11 to round the corners of our undecorated window, as it
@@ -709,7 +718,16 @@ impl Core {
             let option = option_as_alt(self.config.macos.option_as_meta);
             state.window.set_option_as_alt(option);
         }
-        if old.font.family != self.config.font.family {
+        let rebuilt = old.window.gpu_acceleration != self.config.window.gpu_acceleration;
+        if rebuilt {
+            let software = !self.config.window.gpu_acceleration;
+            match self.rebuild_renderer(state, software, false) {
+                Ok(renderer_warnings) => warnings.extend(renderer_warnings),
+                Err(err) => warnings.push(format!("failed to switch the renderer: {err:#}")),
+            }
+        }
+        // A rebuilt renderer has the new family already.
+        if !rebuilt && old.font.family != self.config.font.family {
             warnings.extend(
                 state
                     .renderer
@@ -812,7 +830,13 @@ impl Core {
 
     /// `transparent`: the window was created transparent (see
     /// `wants_transparency`).
-    fn create_renderer(&self, window: &Arc<Window>, transparent: bool) -> Result<Renderer> {
+    /// `software`: prefer a software renderer over the GPU.
+    fn create_renderer(
+        &self,
+        window: &Arc<Window>,
+        transparent: bool,
+        software: bool,
+    ) -> Result<Renderer> {
         let size = window.inner_size();
         Ok(Renderer::new(
             window.clone(),
@@ -821,8 +845,51 @@ impl Core {
             window.scale_factor(),
             self.config.font.family.clone(),
             self.font_size,
-            transparent,
+            GpuOptions {
+                transparent,
+                software,
+            },
         )?)
+    }
+
+    /// Swap the window's renderer for a new one. The old one gives up the
+    /// window's surface first, as a window takes only one swapchain. If the
+    /// renderer for `software` can't be created, the other kind is tried, so
+    /// the window doesn't end up without one. Returns the warnings about the
+    /// new renderer, and an error only if neither could be created. `quiet`:
+    /// leave out those that only repeat the setup (the font, no software
+    /// renderer), for a renderer that replaces a lost one.
+    fn rebuild_renderer(
+        &self,
+        state: &mut WindowState,
+        software: bool,
+        quiet: bool,
+    ) -> Result<Vec<String>> {
+        let kind = |software| if software { "software" } else { "GPU" };
+        state.renderer.release_surface();
+        let mut warnings = Vec::new();
+        let mut renderer = match self.create_renderer(&state.window, state.transparent, software) {
+            Ok(renderer) => {
+                if !quiet {
+                    warnings.extend(software_warning(software, &renderer));
+                }
+                renderer
+            }
+            Err(err) => {
+                warnings.push(format!(
+                    "failed to create the {} renderer, using the {} one instead: {err:#}",
+                    kind(software),
+                    kind(!software),
+                ));
+                self.create_renderer(&state.window, state.transparent, !software)?
+            }
+        };
+        if !quiet {
+            warnings.extend(renderer.take_font_warning());
+        }
+        state.renderer = renderer;
+        state.window.request_redraw();
+        Ok(warnings)
     }
 
     fn window_attributes(&self) -> WindowAttributes {
@@ -873,10 +940,14 @@ impl Core {
         if chrome == Chrome::Undecorated {
             round_corners(&window);
         }
-        let mut renderer = self.create_renderer(&window, transparent)?;
-        if let Some(warning) = renderer.take_font_warning() {
-            self.notify(Banner::config(Severity::Warning, vec![warning]));
-        }
+        let software = !self.config.window.gpu_acceleration;
+        let mut renderer = self.create_renderer(&window, transparent, software)?;
+        let warnings: Vec<_> = renderer
+            .take_font_warning()
+            .into_iter()
+            .chain(software_warning(software, &renderer))
+            .collect();
+        self.notify(Banner::config(Severity::Warning, warnings));
         self.set_os_dark(None, window.theme() != Some(WindowTheme::Light));
         let pane = self.spawn_first_pane()?;
         self.window = Some(window.clone());
@@ -937,11 +1008,9 @@ impl Core {
             }
             FrameStatus::Lost => {
                 tracing::warn!("surface lost, recreating renderer");
-                match self.create_renderer(&state.window, state.transparent) {
-                    Ok(renderer) => {
-                        state.renderer = renderer;
-                        state.window.request_redraw();
-                    }
+                let software = !self.config.window.gpu_acceleration;
+                match self.rebuild_renderer(state, software, true) {
+                    Ok(warnings) => self.notify(Banner::config(Severity::Warning, warnings)),
                     Err(err) => self.fail(event_loop, err),
                 }
             }

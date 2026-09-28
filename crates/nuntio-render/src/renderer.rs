@@ -11,7 +11,7 @@ use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::font::{CellMetrics, FaceStyle, Fonts};
 use crate::frame::{Frame, Rect, UiText};
-use crate::gpu::{FrameStatus, GpuContext, GpuError};
+use crate::gpu::{FrameStatus, GpuContext, GpuError, GpuOptions};
 use crate::{box_drawing, decoration};
 
 const KIND_SOLID: u32 = 0;
@@ -135,12 +135,12 @@ impl Renderer {
         scale_factor: f64,
         font_family: Option<String>,
         font_size: f32,
-        transparent: bool,
+        options: GpuOptions,
     ) -> Result<Self, GpuError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
-        let gpu = GpuContext::new(window, width, height, transparent)?;
+        let gpu = GpuContext::new(window, width, height, options)?;
         let (fonts, font_warning) = Fonts::new(font_family, font_size, scale_factor);
         let device = &gpu.device;
 
@@ -209,6 +209,17 @@ impl Renderer {
             font_warning,
             atlas_overflow: false,
         })
+    }
+
+    /// Give up the window's surface, so that a new renderer can be created
+    /// for the same window. Frames report `Lost` until then.
+    pub fn release_surface(&mut self) {
+        self.gpu.release_surface();
+    }
+
+    /// Drawing happens on the CPU (a software adapter).
+    pub fn software(&self) -> bool {
+        self.gpu.software()
     }
 
     /// Warning about the font given to `new`, if any.

@@ -113,6 +113,7 @@ decorations = "custom"
 # macos_titlebar = "transparent"
 opacity = 1.0
 confirm_close = true
+gpu_acceleration = true
 
 [tabs]
 hide_when_single = true
@@ -184,6 +185,7 @@ option_as_meta = "none"
 | `macos_titlebar` | string | from `decorations` | macOS only, overrides `decorations`. `"native"`: normal title bar. `"transparent"`: the tab bar moves into the title bar, next to the traffic-light buttons (what `"custom"` uses). `"none"`: no title bar and no buttons. |
 | `opacity` | float | `1.0` | Opacity of the terminal background, `0.0` (clear) to `1.0` (opaque). Text, cells with their own background color, the tab bar and the status bar stay opaque. Changing it applies right away, except that going below `1.0` from an opaque start needs a restart (on Linux with `decorations = "custom"` the window is always transparent, so it applies at once). Needs a compositor that supports transparent windows. |
 | `confirm_close` | bool | `true` | Ask before closing a window, tab or pane in which a program still runs (not just the shell at its prompt): a banner names the programs, and closing again within 5 seconds confirms. Where nuntio can't see the running process (currently Windows and WSL shells), it closes without asking. |
+| `gpu_acceleration` | bool | `true` | Render on the GPU. Off, nuntio uses a software renderer (llvmpipe on Linux, WARP on Windows): slower, but it avoids problems with a GPU driver. macOS has no software renderer, so nuntio warns and keeps using the GPU. On Windows the software renderer has no transparency, so `opacity` below `1.0` has no effect while this is off. Applies right away. |
 
 ### `[tabs]`
 

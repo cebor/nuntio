@@ -33,8 +33,19 @@ pub enum FrameStatus {
     Lost,
 }
 
+/// How the GPU context is set up.
+#[derive(Debug, Clone, Copy)]
+pub struct GpuOptions {
+    /// Keep the alpha channel if the platform supports it (the window must
+    /// be created transparent too).
+    pub transparent: bool,
+    /// Prefer a CPU adapter; without one the GPU is used anyway.
+    pub software: bool,
+}
+
 pub struct GpuContext {
-    surface: wgpu::Surface<'static>,
+    /// `None` once released for a successor on the same window.
+    surface: Option<wgpu::Surface<'static>>,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -42,16 +53,24 @@ pub struct GpuContext {
     transparent: bool,
     /// The last frame was suboptimal; reconfigure once it has been presented.
     reconfigure: bool,
+    /// The adapter renders on the CPU.
+    software: bool,
 }
 
 impl GpuContext {
     /// Create a context for `window`. `width`/`height` are in physical pixels.
     /// With `transparent`, the surface keeps the alpha channel if the
     /// platform supports it (the window must be created transparent too).
-    pub fn new<W>(window: W, width: u32, height: u32, transparent: bool) -> Result<Self, GpuError>
+    /// With `software`, a CPU adapter is preferred; without one, the GPU is
+    /// used anyway (see `software()`).
+    pub fn new<W>(window: W, width: u32, height: u32, options: GpuOptions) -> Result<Self, GpuError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
+        let GpuOptions {
+            transparent,
+            software,
+        } = options;
         let instance = wgpu::Instance::new(
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
         );
@@ -59,18 +78,19 @@ impl GpuContext {
         let mut failure = None;
         // A system with several GPUs may offer an adapter that can't present
         // to the window after all; fall back to the next one.
-        for adapter in adapters(&instance, &surface, transparent)? {
+        for adapter in adapters(&instance, &surface, transparent, software)? {
             let info = adapter.get_info();
             match setup(&adapter, &surface, width, height, transparent) {
                 Ok((device, queue, config, transparent)) => {
                     tracing::info!(adapter = ?info, "selected GPU adapter");
                     let context = Self {
-                        surface,
+                        surface: Some(surface),
                         device,
                         queue,
                         config,
                         transparent,
                         reconfigure: false,
+                        software: info.device_type == wgpu::DeviceType::Cpu,
                     };
                     #[cfg(target_os = "macos")]
                     context.match_srgb();
@@ -86,9 +106,19 @@ impl GpuContext {
     }
 
     fn configure(&self) {
-        self.surface.configure(&self.device, &self.config);
+        let Some(surface) = &self.surface else {
+            return;
+        };
+        surface.configure(&self.device, &self.config);
         #[cfg(target_os = "macos")]
         self.match_srgb();
+    }
+
+    /// Give up the window's surface. A window takes only one swapchain at a
+    /// time (DX12, Vulkan), so a successor can only be created after this.
+    /// Frames report `Lost` from now on.
+    pub fn release_surface(&mut self) {
+        self.surface = None;
     }
 
     /// Have macOS convert the frames from sRGB, which the theme colors are,
@@ -101,7 +131,10 @@ impl GpuContext {
 
         // SAFETY: the layer is only read and given a color space; the
         // surface stays owned by wgpu.
-        let Some(surface) = (unsafe { self.surface.as_hal::<wgpu::hal::api::Metal>() }) else {
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        let Some(surface) = (unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }) else {
             return;
         };
         // SAFETY: a constant CoreGraphics provides.
@@ -122,6 +155,11 @@ impl GpuContext {
         (self.config.width, self.config.height)
     }
 
+    /// The adapter in use renders on the CPU.
+    pub fn software(&self) -> bool {
+        self.software
+    }
+
     pub fn transparent(&self) -> bool {
         self.transparent
     }
@@ -140,7 +178,10 @@ impl GpuContext {
         if std::mem::take(&mut self.reconfigure) {
             self.configure();
         }
-        match self.surface.get_current_texture() {
+        let Some(surface) = &self.surface else {
+            return Err(FrameStatus::Lost);
+        };
+        match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => Ok(frame),
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 // Configuring while the frame is alive panics; do it next time.
@@ -163,18 +204,21 @@ impl GpuContext {
 }
 
 /// The adapters that claim to support `surface`, best first: those named by
-/// `WGPU_ADAPTER_NAME`, then on Windows DX12 ones (see below), then the GPU
-/// wgpu picks for the power preference (`WGPU_POWER_PREF`, low power by
-/// default), then the rest.
+/// `WGPU_ADAPTER_NAME`, then on Windows DX12 ones (see below), then with
+/// `software` the CPU ones (without it they come last), then the GPU wgpu
+/// picks for the power preference (`WGPU_POWER_PREF`, low power by default),
+/// then the rest.
 fn adapters(
     instance: &wgpu::Instance,
     surface: &wgpu::Surface<'_>,
     transparent: bool,
+    software: bool,
 ) -> Result<Vec<wgpu::Adapter>, GpuError> {
     let preferred = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference:
             wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::LowPower),
         compatible_surface: Some(surface),
+        force_fallback_adapter: software,
         ..Default::default()
     }));
     let mut adapters: Vec<_> =
@@ -210,7 +254,8 @@ fn adapters(
         let preferred = preferred.as_ref().is_some_and(|p| {
             (p.vendor, p.device, &p.name) == (info.vendor, info.device, &info.name)
         });
-        (!named, other_backend, !preferred)
+        let wrong_kind = (info.device_type == wgpu::DeviceType::Cpu) != software;
+        (!named, other_backend, wrong_kind, !preferred)
     };
     adapters.sort_by_key(rank);
     if let Some(name) = &wanted

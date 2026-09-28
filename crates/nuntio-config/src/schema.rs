@@ -411,6 +411,13 @@ pub static SETTINGS: &[Setting] = &[
         "Ask before closing a window, tab or pane in which a program still runs: close it again within a few seconds to confirm.",
     ),
     setting(
+        "window.gpu_acceleration",
+        Section::Window,
+        "GPU acceleration",
+        Kind::Bool,
+        "Render on the GPU. Off, nuntio uses a software renderer (llvmpipe on Linux, WARP on Windows), which is slower but avoids GPU driver problems. macOS has no software renderer and keeps using the GPU. On Windows it also disables window transparency.",
+    ),
+    setting(
         "tabs.hide_when_single",
         Section::Tabs,
         "Hide when single",

@@ -196,6 +196,8 @@ pub struct Window {
     pub macos_titlebar: Option<MacosTitlebar>,
     /// Ask before closing a window, tab or pane in which a program runs.
     pub confirm_close: bool,
+    /// Render on the GPU; off, on a software adapter (where there is one).
+    pub gpu_acceleration: bool,
 }
 
 impl Window {
@@ -219,6 +221,7 @@ impl Default for Window {
             decorations: Decorations::default(),
             macos_titlebar: None,
             confirm_close: true,
+            gpu_acceleration: true,
         }
     }
 }
