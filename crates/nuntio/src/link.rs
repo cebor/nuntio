@@ -21,30 +21,41 @@ const PADDING: f64 = 3.0;
 /// opened, on any platform: a link could come from a remote machine.
 const PROGRAM_EXTENSIONS: &[&str] = &[
     // Windows
-    "appref-ms",
+    "appinstaller",
     "application",
+    "appref-ms",
+    "appx",
     "bat",
+    "chm",
     "cmd",
     "com",
     "cpl",
+    "diagcab",
     "exe",
     "hta",
     "inf",
     "jse",
+    "library-ms",
     "lnk",
     "msc",
     "msi",
+    "msix",
     "msp",
     "pif",
     "ps1",
+    "psm1",
     "reg",
     "scf",
     "scr",
+    "searchconnector-ms",
+    "settingcontent-ms",
     "url",
     "vbe",
     "vbs",
+    "website",
     "wsf",
     "wsh",
+    "xll",
     // macOS
     "app",
     "applescript",
@@ -59,6 +70,11 @@ const PROGRAM_EXTENSIONS: &[&str] = &[
     // Linux
     "appimage",
     "desktop",
+    // Disk images, which the OS mounts
+    "img",
+    "iso",
+    "vhd",
+    "vhdx",
     // Anywhere
     "jar",
     "js",
@@ -113,13 +129,19 @@ fn file_path(url: &str, local_host: &str) -> Result<Option<PathBuf>, String> {
         Some(rest) if cfg!(windows) && rest.get(1..2) == Some(":") => rest,
         _ => &path,
     };
+    // `file:////evil/share` names no host, yet Windows reads `//evil/share`
+    // as a network share (and `\\?\…` as a device path).
+    if path.starts_with(['/', '\\']) && path[1..].starts_with(['/', '\\']) {
+        return Err("it points to another computer".into());
+    }
     Ok(Some(PathBuf::from(path)))
 }
 
 /// Opening it would start something: a known program type (including
 /// macOS app bundles, which are directories) or an executable file.
 fn is_program(path: &Path, metadata: &std::fs::Metadata) -> bool {
-    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let name = path.file_name().map(|n| n.to_string_lossy());
+    let extension = name.as_deref().and_then(program_extension).unwrap_or("");
     if PROGRAM_EXTENSIONS
         .iter()
         .any(|p| p.eq_ignore_ascii_case(extension))
@@ -136,6 +158,15 @@ fn is_program(path: &Path, metadata: &std::fs::Metadata) -> bool {
     #[cfg(not(unix))]
     let _ = metadata;
     false
+}
+
+/// The extension of the file Windows opens for `name`: it drops trailing
+/// dots and spaces (`setup.exe.` is `setup.exe`), and `:` starts an
+/// alternate data stream (`setup.exe::$DATA`).
+fn program_extension(name: &str) -> Option<&str> {
+    let name = name.split(':').next().unwrap_or(name);
+    let name = name.trim_end_matches(['.', ' ']);
+    Path::new(name).extension()?.to_str()
 }
 
 /// Area of the hint for `columns` cells of text: the bottom-left corner of
@@ -258,6 +289,19 @@ mod tests {
         let err = file_path("file://evil.example/share/x.exe", "box").unwrap_err();
         assert!(err.contains("evil.example"), "{err}");
         assert!(file_path("file:///%FF", "box").is_err());
+        // No host, but a network share on Windows.
+        assert!(file_path("file:////evil/share/x.txt", "box").is_err());
+        assert!(file_path("file:///%5C%5Cevil%5Cshare%5Cx", "box").is_err());
+        assert!(file_path("file:///%5C%5C?%5CUNC%5Cevil%5Cx", "box").is_err());
+    }
+
+    #[test]
+    fn extensions_are_read_as_windows_does() {
+        assert_eq!(program_extension("setup.exe"), Some("exe"));
+        assert_eq!(program_extension("setup.exe."), Some("exe"));
+        assert_eq!(program_extension("setup.exe . ."), Some("exe"));
+        assert_eq!(program_extension("setup.exe::$DATA"), Some("exe"));
+        assert_eq!(program_extension("notes"), None);
     }
 
     #[test]
