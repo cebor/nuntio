@@ -25,4 +25,4 @@ The website and the downloads are hosted by GitHub (GitHub Pages and GitHub Rele
 
 ## Contact
 
-Felix Itzenplitz, felix+nuntio@stkn.org
+Felix Itzenplitz. Questions about this policy go to the [issue tracker](https://github.com/cebor/nuntio/issues) on GitHub.

@@ -6,10 +6,7 @@ Only the [latest release](https://github.com/cebor/nuntio/releases/latest) gets 
 
 ## Reporting a vulnerability
 
-Please don't open a public issue for security problems. Instead:
-
-- use [private vulnerability reporting](https://github.com/cebor/nuntio/security/advisories/new) on GitHub ("Report a vulnerability" in the Security tab), or
-- email felix+nuntio@stkn.org.
+Please don't open a public issue for security problems. Instead, use [private vulnerability reporting](https://github.com/cebor/nuntio/security/advisories/new) on GitHub ("Report a vulnerability" in the Security tab).
 
 Include the nuntio version, your OS, and the steps or a file that reproduces the problem (for example the bytes a program prints to trigger it).
 
