@@ -78,6 +78,9 @@ This file lists every option with its default value:
 # On Windows, start in a WSL distribution instead, optionally as another user:
 # shell = { wsl = "Ubuntu", wsl_user = "root" }
 
+# Where the first pane and new tabs start. Default: your home directory.
+# working_directory = "~/code"
+
 # Lines of history per pane.
 scrollback = 10000
 
@@ -156,6 +159,7 @@ option_as_meta = "none"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `shell` | table | platform shell | `program` (string) and `args` (list of strings), or `wsl` to start in a WSL distribution. See [Shell](#shell). |
+| `working_directory` | string | home directory | Where the first pane and new tabs start: an absolute path, `~` or `~/…`. For a WSL shell, a Linux path (`/srv` or `~/code`). `--working-directory` on the command line takes precedence; if the directory doesn't exist, nuntio warns and starts at home. Splits, and new tabs with `tabs.inherit_directory`, start in the focused pane's directory instead. Unset, the first pane starts in the directory nuntio was started in (at home when started from the Finder or Dock on macOS). |
 | `scrollback` | integer | `10000` | Lines of history per pane, at most `1000000`. |
 | `clipboard_write` | bool | `true` | Let programs copy to the clipboard with OSC 52, e.g. vim or tmux over ssh. Programs can never read the clipboard, so a program can't see what you copied, but one could replace it before you paste. |
 | `confirm_paste` | bool | `true` | Ask before pasting text with line breaks where the program doesn't use bracketed paste, so the shell would run each line at once. A banner says how many lines would run; pasting again within 5 seconds confirms. Shells that use bracketed paste (bash 5.1 and later, zsh and fish do) show pasted lines without running them, so nuntio doesn't ask there. |
@@ -187,7 +191,7 @@ option_as_meta = "none"
 |---|---|---|---|
 | `hide_when_single` | bool | `true` | Hide the tab bar while only one tab is open. It is always shown when nuntio draws its own header (`decorations = "custom"`, macOS `transparent`/`none` title bar, WSLg). |
 | `title` | string | `"auto"` | What a tab shows. `"auto"`: the directory while the shell waits at its prompt (`~/code`), otherwise the running program (`htop`). `"path"`: always the directory. `"process"`: always the program. `"application"`: the title the shell or program sets, unchanged. Where nuntio can't see the running process (currently Windows and WSL shells), `"auto"` uses the application's title without a leading `user@host:`. |
-| `inherit_directory` | bool | `false` | Open a new tab in the working directory of the focused pane. Off, new tabs start in your home directory. Splits always start in the focused pane's directory. For WSL shells, see [Working directory in WSL](#working-directory-in-wsl). |
+| `inherit_directory` | bool | `false` | Open a new tab in the working directory of the focused pane. Off, new tabs start in `working_directory` (your home directory by default). Splits always start in the focused pane's directory. For WSL shells, see [Working directory in WSL](#working-directory-in-wsl). |
 
 ### `[panes]`
 
@@ -286,7 +290,7 @@ shell = { wsl = "Ubuntu", wsl_user = "root" }
 shell = { wsl = "Ubuntu", program = "fish", args = ["-l"] }
 ```
 
-New tabs start in your Linux home directory (`~`), splits (and new tabs with `tabs.inherit_directory`) in the directory of the focused pane. nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM` and `TERM_PROGRAM_VERSION` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept.
+New tabs start in your Linux home directory (`~`) or in `working_directory`, splits (and new tabs with `tabs.inherit_directory`) in the directory of the focused pane. nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM` and `TERM_PROGRAM_VERSION` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept.
 
 #### Working directory in WSL
 

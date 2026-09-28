@@ -447,6 +447,13 @@ fn close_message(running: &[String], target: CloseTarget) -> String {
     )
 }
 
+/// Where a new pane starts.
+enum StartDir {
+    Local(PathBuf),
+    /// For a shell in WSL: `~` or an absolute Linux path.
+    Wsl(String),
+}
+
 /// How the first pane starts, from the command line.
 #[derive(Debug, Default)]
 pub struct Startup {
@@ -878,15 +885,9 @@ impl App {
         )?)
     }
 
-    /// Start a shell, or `command` instead, in a new pane: in `cwd`, or in
-    /// `wsl_dir` (absolute or `~`) for a shell in WSL. The size is
-    /// corrected by the next `resize_terms`.
-    fn spawn_pane(
-        &mut self,
-        cwd: Option<PathBuf>,
-        wsl_dir: Option<String>,
-        command: Option<Vec<String>>,
-    ) -> Result<Pane> {
+    /// Start a shell, or `command` instead, in a new pane, in `dir` if it
+    /// suits the shell. The size is corrected by the next `resize_terms`.
+    fn spawn_pane(&mut self, dir: Option<StartDir>, command: Option<Vec<String>>) -> Result<Pane> {
         let id = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
         let proxy = self.proxy.clone();
@@ -899,7 +900,11 @@ impl App {
                 args: argv,
             }),
             None => config_shell.map(|s| {
-                let (program, args) = s.command(wsl_dir.as_deref());
+                let wsl_dir = match &dir {
+                    Some(StartDir::Wsl(dir)) => Some(dir.as_str()),
+                    _ => None,
+                };
+                let (program, args) = s.command(wsl_dir);
                 Shell { program, args }
             }),
         };
@@ -907,7 +912,10 @@ impl App {
             shell,
             login_shell,
             // `wsl.exe --cd` picks the directory; a Windows one would be ignored.
-            working_directory: cwd.filter(|_| !wsl),
+            working_directory: match dir {
+                Some(StartDir::Local(dir)) if !wsl => Some(dir),
+                _ => None,
+            },
             term: term_options(&self.config),
             palette: self.palette.clone(),
             env: crate::pane_env::pane_env(self.config_path.as_deref(), wsl),
@@ -992,18 +1000,11 @@ impl App {
             command,
             working_directory,
         } = std::mem::take(&mut self.startup);
-        let cwd = working_directory.filter(|dir| {
-            let exists = dir.is_dir();
-            if !exists {
-                self.notify(Banner::new(
-                    Severity::Warning,
-                    "Working directory",
-                    vec![format!("{} is not a directory", dir.display())],
-                ));
-            }
-            exists
-        });
-        let pane = self.spawn_pane(cwd, None, command)?;
+        let dir = match working_directory {
+            Some(dir) => self.existing_dir(dir).map(StartDir::Local),
+            None => self.configured_dir(command.is_none()),
+        };
+        let pane = self.spawn_pane(dir, command)?;
         let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
         state.update_badge = self.update.is_some() && self.config.updates.tab_bar;
         // The cell size is only known now that the renderer has the font.
@@ -1100,32 +1101,65 @@ impl App {
         }
     }
 
-    /// Start a shell, or `command`, for a new tab or split: in the focused
-    /// pane's directory with `inherit`, otherwise at home. Failures are
-    /// shown in a banner.
-    fn spawn_for_focused(&mut self, command: Option<Vec<String>>, inherit: bool) -> Option<Pane> {
-        let (cwd, wsl_dir) = match self.state.as_ref().filter(|_| inherit) {
-            Some(state) => {
-                let pane = state.content().focused_pane();
-                let wsl_dir = pane
-                    .wsl
-                    .then(|| {
-                        crate::wsl::linux_dir(pane.term.reported_directory(), pane.title.as_deref())
-                    })
-                    .flatten();
-                (pane.term.working_directory(), wsl_dir)
+    /// `dir` if it is a directory; otherwise a warning.
+    fn existing_dir(&mut self, dir: PathBuf) -> Option<PathBuf> {
+        if dir.is_dir() {
+            return Some(dir);
+        }
+        self.notify(Banner::new(
+            Severity::Warning,
+            "Working directory",
+            vec![format!("{} is not a directory", dir.display())],
+        ));
+        None
+    }
+
+    /// The configured `working_directory` for a new pane, which runs the
+    /// shell (or a command).
+    fn configured_dir(&mut self, shell: bool) -> Option<StartDir> {
+        let dir = self.config.working_directory.clone()?;
+        if shell && self.config.shell.as_ref().is_some_and(|s| s.is_wsl()) {
+            return self.wsl_cd(&dir).map(StartDir::Wsl);
+        }
+        let path = match dir.strip_prefix('~') {
+            Some(rest) => {
+                let rest = rest.trim_start_matches(['/', '\\']);
+                dirs::home_dir()?.join(rest)
             }
-            None => (dirs::home_dir(), None),
+            None => PathBuf::from(dir),
         };
-        // `wsl.exe --cd` takes no `~/…`.
-        let wsl_dir = wsl_dir.and_then(|dir| {
-            let shell = self.config.shell.as_ref()?;
-            let distro = shell.wsl.as_deref()?;
-            crate::wsl::cd_arg(&dir, || {
-                self.wsl_homes.get(distro, shell.wsl_user.as_deref())
-            })
-        });
-        self.spawn_pane(cwd, wsl_dir, command)
+        self.existing_dir(path).map(StartDir::Local)
+    }
+
+    /// `dir` as `wsl.exe --cd` takes it: `~/…` becomes absolute.
+    fn wsl_cd(&mut self, dir: &str) -> Option<String> {
+        let shell = self.config.shell.as_ref()?;
+        let distro = shell.wsl.as_deref()?;
+        crate::wsl::cd_arg(dir, || {
+            self.wsl_homes.get(distro, shell.wsl_user.as_deref())
+        })
+    }
+
+    /// The directory of the focused pane, for a new pane to start in.
+    fn focused_dir(&mut self) -> Option<StartDir> {
+        let pane = self.state.as_ref()?.content().focused_pane();
+        if !pane.wsl {
+            return pane.term.working_directory().map(StartDir::Local);
+        }
+        let dir = crate::wsl::linux_dir(pane.term.reported_directory(), pane.title.as_deref())?;
+        self.wsl_cd(&dir).map(StartDir::Wsl)
+    }
+
+    /// Start a shell, or `command`, for a new tab or split: in the focused
+    /// pane's directory with `inherit`, otherwise (or if it's unknown) in
+    /// `working_directory` or at home. Failures are shown in a banner.
+    fn spawn_for_focused(&mut self, command: Option<Vec<String>>, inherit: bool) -> Option<Pane> {
+        let dir = inherit
+            .then(|| self.focused_dir())
+            .flatten()
+            .or_else(|| self.configured_dir(command.is_none()))
+            .or_else(|| dirs::home_dir().map(StartDir::Local));
+        self.spawn_pane(dir, command)
             .inspect_err(|err| {
                 self.notify(Banner::new(
                     Severity::Error,

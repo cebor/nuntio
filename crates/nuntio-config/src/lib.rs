@@ -26,6 +26,9 @@ pub use watch::ConfigWatcher;
 #[serde(default)]
 pub struct Config {
     pub shell: Option<Shell>,
+    /// Where the first pane and new tabs start: an absolute path, `~` or
+    /// `~/…`; a Linux path for a shell in WSL. Home if unset.
+    pub working_directory: Option<String>,
     pub scrollback: usize,
     /// Programs may copy to the clipboard (OSC 52).
     pub clipboard_write: bool,
@@ -49,6 +52,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             shell: None,
+            working_directory: None,
             scrollback: 10_000,
             clipboard_write: true,
             confirm_paste: true,

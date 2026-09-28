@@ -216,16 +216,6 @@ fn main() -> Result<()> {
     nuntio_render::preload_fonts();
     #[cfg(windows)]
     restrict_dll_search();
-    // Started from the Finder or Dock, nuntio runs in `/`. Start the first
-    // shell at home instead, like Terminal.app (`login`, which runs the
-    // shell, stays in the current directory).
-    if cfg!(target_os = "macos")
-        && args.startup.working_directory.is_none()
-        && std::env::current_dir().is_ok_and(|dir| dir == Path::new("/"))
-    {
-        args.startup.working_directory = dirs::home_dir();
-    }
-
     let mut warnings = Vec::new();
     let config_path = args.config.or_else(|| {
         let location = nuntio_config::locate_config()?;
@@ -239,6 +229,16 @@ fn main() -> Result<()> {
         Some(location.path)
     });
     let (config, banner) = load_config(config_path.as_deref(), warnings);
+    // Started from the Finder or Dock, nuntio runs in `/`. Start the first
+    // shell at home instead, like Terminal.app (`login`, which runs the
+    // shell, stays in the current directory).
+    if cfg!(target_os = "macos")
+        && args.startup.working_directory.is_none()
+        && config.working_directory.is_none()
+        && std::env::current_dir().is_ok_and(|dir| dir == Path::new("/"))
+    {
+        args.startup.working_directory = dirs::home_dir();
+    }
 
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = EventLoop::<UserEvent>::with_user_event();

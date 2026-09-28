@@ -498,6 +498,17 @@ pub static SETTINGS: &[Setting] = &[
     ),
     optional(
         setting(
+            "working_directory",
+            Section::Shell,
+            "Working directory",
+            Kind::Text,
+            "Where the first pane and new tabs start: an absolute path, `~` or `~/…`. \
+             For a WSL distribution, a Linux path.",
+        ),
+        "your home directory",
+    ),
+    optional(
+        setting(
             "shell.program",
             Section::Shell,
             "Program",
@@ -602,7 +613,7 @@ mod tests {
     fn optional_settings_are_accepted() {
         let shell = r#"shell = { program = "fish", args = ["-l"] }"#;
         let loaded = crate::parse(&format!(
-            "{shell}\n[font]\nfamily = \"Hack\"\n[window]\nmacos_titlebar = \"none\""
+            "{shell}\nworking_directory = \"~/code\"\n[font]\nfamily = \"Hack\"\n[window]\nmacos_titlebar = \"none\""
         ))
         .unwrap();
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
@@ -610,7 +621,7 @@ mod tests {
         assert!(wsl.warnings.is_empty());
         for s in SETTINGS.iter().filter(|s| s.unset.is_some()) {
             assert!(
-                ["font.family", "window.macos_titlebar"].contains(&s.path)
+                ["working_directory", "font.family", "window.macos_titlebar"].contains(&s.path)
                     || s.path.starts_with("shell."),
                 "untested optional setting {}",
                 s.path

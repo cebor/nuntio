@@ -184,8 +184,27 @@ impl Config {
         if let Some(shell) = &self.shell {
             shell.validate()?;
         }
+        if let Some(dir) = &self.working_directory {
+            validate_working_directory(dir)?;
+        }
         self.status_bar.validate()?;
         Ok(())
+    }
+}
+
+/// Absolute (a Linux path for WSL counts, also on Windows) or at home.
+fn validate_working_directory(dir: &str) -> Result<(), String> {
+    let valid = dir == "~"
+        || dir.starts_with("~/")
+        || dir.starts_with("~\\")
+        || dir.starts_with('/')
+        || std::path::Path::new(dir).is_absolute();
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "`working_directory` must be an absolute path or start with `~`, not `{dir}`"
+        ))
     }
 }
 
@@ -285,6 +304,19 @@ mod tests {
         assert!(err.contains("window.padding.y"), "{err}");
         let err = parse("[font]\nfamily = \" \"").unwrap_err();
         assert!(err.contains("font.family"), "{err}");
+    }
+
+    #[test]
+    fn working_directories_are_absolute_or_at_home() {
+        for dir in ["~", "~/code", "/home/me"] {
+            let toml = format!("working_directory = \"{dir}\"");
+            assert!(parse(&toml).is_ok(), "{dir}");
+        }
+        for dir in ["", "code", "./x", "~me"] {
+            let toml = format!("working_directory = \"{dir}\"");
+            let err = parse(&toml).unwrap_err();
+            assert!(err.contains("working_directory"), "{dir}: {err}");
+        }
     }
 
     #[test]
