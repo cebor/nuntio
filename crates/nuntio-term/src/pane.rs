@@ -422,7 +422,7 @@ impl TermHandle {
             .or_else(|| {
                 let path = match self.reported_directory()? {
                     ReportedDir::Posix(path) if cfg!(unix) => path,
-                    ReportedDir::Windows(path) if cfg!(windows) => path,
+                    ReportedDir::Windows(path) if cfg!(windows) && is_local(&path) => path,
                     _ => return None,
                 };
                 Some(PathBuf::from(path)).filter(|path| path.is_dir())
@@ -742,6 +742,20 @@ fn is_console_default_title(title: &str, program: &str) -> bool {
     absolute && !program.is_empty() && stem.eq_ignore_ascii_case(program)
 }
 
+/// Whether a Windows path the shell reported is on this machine. Any
+/// program's output can report one, and merely looking at a network share
+/// (`\\host\share`) sends the user's credentials to that host; shares of
+/// WSL distributions are local.
+fn is_local(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let separator = |i: usize| matches!(bytes.get(i), Some(b'\\' | b'/'));
+    if !(separator(0) && separator(1)) {
+        return true;
+    }
+    let host = path[2..].split(['\\', '/']).next().unwrap_or_default();
+    host.eq_ignore_ascii_case("wsl.localhost") || host.eq_ignore_ascii_case("wsl$")
+}
+
 /// Paste payload: with bracketed paste the text is wrapped in markers, with
 /// every ESC removed so no end marker can be smuggled in (removing only
 /// `ESC [201~` once would turn `ESC [20ESC [201~1~` into a new one); without
@@ -804,6 +818,17 @@ mod tests {
             exec_as_login(&shell),
             r#"exec -a '-fish' '/opt/homebrew/bin/fish' '--init-command' 'echo '\''hi'\'' $HOME'"#
         );
+    }
+
+    #[test]
+    fn only_local_windows_directories_are_used() {
+        assert!(is_local(r"C:\Users\me"));
+        assert!(is_local(r"\\wsl.localhost\Ubuntu\home\me"));
+        assert!(is_local(r"\\WSL$\Debian"));
+        assert!(!is_local(r"\\evil\share"));
+        assert!(!is_local("//evil/share"));
+        assert!(!is_local(r"\\?\UNC\evil\share"));
+        assert!(!is_local(r"\\wsl.localhost.evil.com\x"));
     }
 
     #[test]
