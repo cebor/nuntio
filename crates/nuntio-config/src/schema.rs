@@ -278,12 +278,19 @@ pub static SETTINGS: &[Setting] = &[
         "Let programs like neovim, helix or fish turn on the kitty keyboard protocol, which tells keys like Ctrl+I and Tab apart.",
     ),
     setting(
+        "updates.check",
+        Section::Updates,
+        "Check for updates",
+        Kind::Bool,
+        "Ask GitHub once a day whether a newer nuntio release exists. Nothing is downloaded or installed. \
+         Needs at least one indicator below; turning off the last one turns this off too.",
+    ),
+    setting(
         "updates.banner",
         Section::Updates,
         "Banner",
         Kind::Bool,
-        "Announce a newer nuntio release with a banner at the bottom of the window. \
-         nuntio asks GitHub once a day while any update indicator is on; nothing is downloaded or installed.",
+        "Announce a newer nuntio release with a banner at the bottom of the window.",
     ),
     setting(
         "updates.tab_bar",

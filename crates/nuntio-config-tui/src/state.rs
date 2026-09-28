@@ -454,6 +454,25 @@ impl App {
         }
         let mut doc = self.doc.clone();
         edit(&mut doc);
+        let mut note = None;
+        // An update check without an indicator must not exist: turning off
+        // the last indicator turns the check off too, and the check can't
+        // be turned on without one.
+        if let Ok(loaded) = nuntio_config::parse(&doc.to_string())
+            && loaded.config.updates.check
+            && !loaded.config.update_indicators()
+        {
+            if !self.config.updates.check {
+                self.message = Some((
+                    Tone::Warn,
+                    "Turn on an update indicator first: banner, tab bar badge or status bar item."
+                        .into(),
+                ));
+                return false;
+            }
+            doc.set("updates.check", false);
+            note = Some("No update indicator is left, so the update check is off too.");
+        }
         let text = doc.to_string();
         if text == self.source {
             return true;
@@ -475,7 +494,7 @@ impl App {
         }
         self.doc = doc;
         self.revalidate();
-        self.message = None;
+        self.message = note.map(|note| (Tone::Normal, note.into()));
         true
     }
 
@@ -835,10 +854,6 @@ impl App {
                     Tone::Dim,
                     "It is the `update` item under Status bar → Items, where it can be moved."
                         .into(),
-                ));
-                lines.push((
-                    Tone::Dim,
-                    "nuntio asks GitHub once a day while any of these indicators is on.".into(),
                 ));
             }
         }
@@ -1790,20 +1805,19 @@ mod tests {
     }
 
     #[test]
-    fn update_indicators_turn_the_check_on_and_off() {
+    fn update_check_needs_an_indicator() {
         let (mut app, memory) = app(Some(
-            "[status_bar]\nenabled = true\nitems = [\"cpu\", \"datetime\"]\n",
+            "[updates]\nbanner = false\n\n[status_bar]\nenabled = true\nitems = [\"cpu\", \"datetime\"]\n",
         ));
-        app.section = Section::ALL
-            .iter()
-            .position(|s| *s == Section::Updates)
-            .unwrap();
-        app.focus = Focus::Rows;
         let rows = app.rows(Section::Updates);
         assert_eq!(rows.last(), Some(&Row::UpdateStatusItem));
-        assert!(!app.config.update_check());
 
-        // The item goes before the last one, which stays at the right edge.
+        go_to(&mut app, "updates.check");
+        app.key(Key::Char(' '));
+        assert!(app.config.update_check());
+
+        // The status bar item goes before the last item, which stays at
+        // the right edge.
         app.row = rows.len() - 1;
         app.key(Key::Char(' '));
         assert!(
@@ -1812,23 +1826,37 @@ mod tests {
                 .contains("items = [\"cpu\", \"update\", \"datetime\"]")
         );
         assert_eq!(app.row_value(Row::UpdateStatusItem).1, "on");
-        assert!(app.config.update_check());
-        app.key(Key::Char('d'));
-        assert!(memory.text().contains("items = [\"cpu\", \"datetime\"]"));
-        assert!(!app.config.update_check());
-        app.key(Key::Char('u'));
-        assert!(app.config.update_check());
-        app.key(Key::Enter);
-        assert_eq!(app.row_value(Row::UpdateStatusItem).1, "off");
 
-        // Each setting alone keeps the check on; all off turn it off.
-        for path in ["updates.banner", "updates.tab_bar"] {
-            go_to(&mut app, path);
-            app.key(Key::Char(' '));
-            assert!(app.config.update_check(), "{path}");
-            app.key(Key::Char(' '));
-            assert!(!app.config.update_check(), "{path}");
-        }
+        // Indicators can be on while the check is off.
+        go_to(&mut app, "updates.check");
+        app.key(Key::Char(' '));
+        assert!(!app.config.updates.check);
+        assert!(app.config.update_indicators());
+        app.key(Key::Char(' '));
+        assert!(app.config.updates.check);
+
+        // Turning off the last indicator turns the check off in one step.
+        go_to(&mut app, "updates.tab_bar");
+        app.key(Key::Char(' '));
+        assert!(app.config.updates.check, "the status bar item is left");
+        app.row = rows.len() - 1;
+        app.key(Key::Char('d'));
+        assert!(!app.config.update_indicators());
+        assert!(!app.config.updates.check);
+        assert!(app.message.is_some());
+        app.key(Key::Char('u'));
+        assert!(app.config.updates.check);
+        assert_eq!(app.row_value(Row::UpdateStatusItem).1, "on");
+        app.key(Key::Enter);
+        assert!(!app.config.updates.check);
+
+        // Without an indicator, the check can't be turned on.
+        go_to(&mut app, "updates.check");
+        let before = memory.text();
+        app.key(Key::Char(' '));
+        assert!(!app.config.updates.check);
+        assert_eq!(memory.text(), before);
+        assert_eq!(app.message.as_ref().map(|m| m.0), Some(Tone::Warn));
     }
 
     #[test]

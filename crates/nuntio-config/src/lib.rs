@@ -72,12 +72,20 @@ impl Config {
         toml::from_str(s)
     }
 
-    /// Look for a newer release on GitHub once a day: while at least one
-    /// indicator could show it.
-    pub fn update_check(&self) -> bool {
+    /// At least one of the three update indicators is switched on.
+    pub fn update_indicators(&self) -> bool {
         self.updates.banner
             || self.updates.tab_bar
-            || (self.status_bar.enabled && self.status_bar.items.contains(&StatusItem::Update))
+            || self.status_bar.items.contains(&StatusItem::Update)
+    }
+
+    /// Look for a newer release on GitHub once a day: while the check is
+    /// on and at least one indicator could show what it finds.
+    pub fn update_check(&self) -> bool {
+        self.updates.check
+            && (self.updates.banner
+                || self.updates.tab_bar
+                || (self.status_bar.enabled && self.status_bar.items.contains(&StatusItem::Update)))
     }
 }
 
@@ -405,15 +413,27 @@ impl Default for ThemeSelection {
     }
 }
 
-/// Where a newer release is announced. The `update` status bar item is the
-/// third indicator.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+/// The update check and where a newer release is announced. The `update`
+/// status bar item is the third indicator.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Updates {
+    /// Look for a newer release on GitHub once a day.
+    pub check: bool,
     /// An info banner at the bottom of the window.
     pub banner: bool,
     /// An arrow in the tab bar.
     pub tab_bar: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self {
+            check: false,
+            banner: true,
+            tab_bar: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
@@ -604,19 +624,20 @@ action = "split_horizontal"
     }
 
     #[test]
-    fn update_check_runs_while_an_indicator_is_on() {
+    fn update_check_needs_an_indicator() {
         let check = |toml: &str| Config::from_toml(toml).unwrap().update_check();
         assert!(!check(""), "off by default");
-        assert!(check("[updates]\nbanner = true"));
-        assert!(check("[updates]\ntab_bar = true"));
-        assert!(check(
-            "[status_bar]\nenabled = true\nitems = [\"update\", \"datetime\"]"
-        ));
+        assert!(check("[updates]\ncheck = true"));
+        assert!(!check("[updates]\nbanner = true\ntab_bar = true"));
+        let none = "[updates]\ncheck = true\nbanner = false\ntab_bar = false";
+        assert!(!check(none));
+        assert!(check(&format!(
+            "{none}\n[status_bar]\nenabled = true\nitems = [\"update\"]"
+        )));
         assert!(
-            !check("[status_bar]\nitems = [\"update\"]"),
+            !check(&format!("{none}\n[status_bar]\nitems = [\"update\"]")),
             "the status bar is off"
         );
-        assert!(!check("[updates]\nbanner = false\ntab_bar = false"));
     }
 
     #[test]
