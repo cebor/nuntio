@@ -419,6 +419,8 @@ impl TermHandle {
     pub fn working_directory(&self) -> Option<PathBuf> {
         self.shell_pid()
             .and_then(process::working_directory)
+            // A deleted directory; `chdir` into it would fail silently.
+            .filter(|path| path.is_dir())
             .or_else(|| {
                 let path = match self.reported_directory()? {
                     ReportedDir::Posix(path) if cfg!(unix) => path,
