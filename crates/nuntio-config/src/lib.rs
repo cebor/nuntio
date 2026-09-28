@@ -33,13 +33,12 @@ pub struct Config {
     pub confirm_paste: bool,
     /// Programs may turn on the kitty keyboard protocol.
     pub kitty_keyboard: bool,
-    /// Look for a newer release on GitHub once a day.
-    pub update_check: bool,
     pub font: Font,
     pub window: Window,
     pub tabs: Tabs,
     pub panes: Panes,
     pub status_bar: StatusBar,
+    pub updates: Updates,
     pub theme: ThemeSelection,
     pub mouse: Mouse,
     pub macos: MacOs,
@@ -54,12 +53,12 @@ impl Default for Config {
             clipboard_write: true,
             confirm_paste: true,
             kitty_keyboard: true,
-            update_check: false,
             font: Font::default(),
             window: Window::default(),
             tabs: Tabs::default(),
             panes: Panes::default(),
             status_bar: StatusBar::default(),
+            updates: Updates::default(),
             theme: ThemeSelection::default(),
             mouse: Mouse::default(),
             macos: MacOs::default(),
@@ -71,6 +70,14 @@ impl Default for Config {
 impl Config {
     pub fn from_toml(s: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(s)
+    }
+
+    /// Look for a newer release on GitHub once a day: while at least one
+    /// indicator could show it.
+    pub fn update_check(&self) -> bool {
+        self.updates.banner
+            || self.updates.tab_bar
+            || (self.status_bar.enabled && self.status_bar.items.contains(&StatusItem::Update))
     }
 }
 
@@ -398,6 +405,17 @@ impl Default for ThemeSelection {
     }
 }
 
+/// Where a newer release is announced. The `update` status bar item is the
+/// third indicator.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Updates {
+    /// An info banner at the bottom of the window.
+    pub banner: bool,
+    /// An arrow in the tab bar.
+    pub tab_bar: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Mouse {
@@ -583,6 +601,22 @@ action = "split_horizontal"
             .unwrap()
             .status_bar;
         assert!(!bar.visible(), "nothing to show");
+    }
+
+    #[test]
+    fn update_check_runs_while_an_indicator_is_on() {
+        let check = |toml: &str| Config::from_toml(toml).unwrap().update_check();
+        assert!(!check(""), "off by default");
+        assert!(check("[updates]\nbanner = true"));
+        assert!(check("[updates]\ntab_bar = true"));
+        assert!(check(
+            "[status_bar]\nenabled = true\nitems = [\"update\", \"datetime\"]"
+        ));
+        assert!(
+            !check("[status_bar]\nitems = [\"update\"]"),
+            "the status bar is off"
+        );
+        assert!(!check("[updates]\nbanner = false\ntab_bar = false"));
     }
 
     #[test]

@@ -503,7 +503,7 @@ pub struct App {
     /// The window is hidden (minimized or covered); sampling pauses.
     occluded: bool,
     stats: Stats,
-    /// The daily update check, while `update_check` is on.
+    /// The daily update check, while an update indicator is on.
     update_checker: Option<Checker>,
     /// A newer release, once a check found one.
     update: Option<Update>,
@@ -679,9 +679,10 @@ impl App {
         }
     }
 
-    /// Start or stop the daily update check to match `update_check`.
+    /// Start or stop the daily update check to match the update
+    /// indicators, and show or hide the tab bar badge.
     fn sync_update_checker(&mut self) {
-        match (self.config.update_check, self.update_checker.is_some()) {
+        match (self.config.update_check(), self.update_checker.is_some()) {
             (true, false) => {
                 tracing::debug!("starting update check");
                 self.update_checker = Some(Checker::start(self.proxy.clone()));
@@ -694,6 +695,13 @@ impl App {
             }
             _ => {}
         }
+        if let Some(state) = self.state.as_mut() {
+            let badge = self.update.is_some() && self.config.updates.tab_bar;
+            if state.update_badge != badge {
+                state.update_badge = badge;
+                state.window.request_redraw();
+            }
+        }
     }
 
     /// Show what an update check found.
@@ -702,10 +710,16 @@ impl App {
         if !checked.manual && self.update_checker.is_none() {
             return;
         }
+        // Without the banner indicator, only a manual check speaks up.
+        let show_banner = checked.manual || self.config.updates.banner;
         let release = match checked.result {
             Ok(release) => release,
-            Err(err) => {
+            Err(err) if show_banner => {
                 self.notify(Banner::new(Severity::Warning, "Update check", vec![err]));
+                return;
+            }
+            Err(err) => {
+                tracing::warn!("update check: {err}");
                 return;
             }
         };
@@ -713,7 +727,7 @@ impl App {
         // A repeated answer replaces the banner instead of adding to it.
         self.dismiss_banner(update::BANNER);
         match &update {
-            Some(update) if checked.manual || !checked.dismissed => {
+            Some(update) if checked.manual || (show_banner && !checked.dismissed) => {
                 let banner = Banner::new(Severity::Info, update::BANNER, vec![update.message()]);
                 self.notify(banner.map(|b| b.with_url(update.url.clone())));
             }
@@ -733,7 +747,7 @@ impl App {
             .set_update(update.as_ref().map(|u| u.version.clone()));
         self.update = update;
         if let Some(state) = self.state.as_mut() {
-            state.update_badge = self.update.is_some();
+            state.update_badge = self.update.is_some() && self.config.updates.tab_bar;
             state.status_bar_changed(&self.config, &self.stats);
             state.window.request_redraw();
         }
@@ -790,6 +804,9 @@ impl App {
         warnings.extend(self.update_palette());
         self.sync_system_monitor();
         self.sync_update_checker();
+        if old.updates.banner && !self.config.updates.banner {
+            self.dismiss_banner(update::BANNER);
+        }
 
         let chrome_changed = if cfg!(target_os = "macos") {
             old.window.effective_macos_titlebar() != self.config.window.effective_macos_titlebar()
@@ -1002,7 +1019,7 @@ impl App {
         });
         let pane = self.spawn_pane(cwd, command)?;
         let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
-        state.update_badge = self.update.is_some();
+        state.update_badge = self.update.is_some() && self.config.updates.tab_bar;
         // The cell size is only known now that the renderer has the font.
         // Where the size applies at once, there may be no `Resized` event.
         let size = state.size_for_grid(&self.config);

@@ -21,6 +21,7 @@ pub enum Section {
     Tabs,
     Panes,
     StatusBar,
+    Updates,
     Theme,
     Mouse,
     MacOs,
@@ -29,7 +30,7 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 11] = [
+    pub const ALL: [Section; 12] = [
         Section::General,
         Section::Theme,
         Section::Font,
@@ -39,6 +40,7 @@ impl Section {
         Section::StatusBar,
         Section::Mouse,
         Section::Shell,
+        Section::Updates,
         Section::Keybindings,
         Section::MacOs,
     ];
@@ -51,6 +53,7 @@ impl Section {
             Section::Tabs => "Tabs",
             Section::Panes => "Panes",
             Section::StatusBar => "Status bar",
+            Section::Updates => "Updates",
             Section::Theme => "Theme",
             Section::Mouse => "Mouse",
             Section::MacOs => "macOS",
@@ -191,7 +194,7 @@ pub static STATUS_ITEMS: &[Variant] = &[
     variant("datetime", "The local date and time."),
     variant(
         "update",
-        "A newer nuntio release, once update_check found one; click it for the release page.",
+        "A newer nuntio release, once the update check found one; click it for the release page.",
     ),
     variant(
         SPRING,
@@ -275,11 +278,19 @@ pub static SETTINGS: &[Setting] = &[
         "Let programs like neovim, helix or fish turn on the kitty keyboard protocol, which tells keys like Ctrl+I and Tab apart.",
     ),
     setting(
-        "update_check",
-        Section::General,
-        "Check for updates",
+        "updates.banner",
+        Section::Updates,
+        "Banner",
         Kind::Bool,
-        "Ask GitHub once a day whether a newer nuntio release exists, and show a notice if so. Nothing is downloaded or installed.",
+        "Announce a newer nuntio release with a banner at the bottom of the window. \
+         nuntio asks GitHub once a day while any update indicator is on; nothing is downloaded or installed.",
+    ),
+    setting(
+        "updates.tab_bar",
+        Section::Updates,
+        "Tab bar badge",
+        Kind::Bool,
+        "Show an arrow in the tab bar while a newer nuntio release exists; click it for the release page.",
     ),
     setting(
         "theme",

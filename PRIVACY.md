@@ -11,7 +11,7 @@ This program will not transfer any information to other networked systems unless
 nuntio only goes online when you ask it to:
 
 - When you click a link, it hands the address to your browser.
-- When you turn on the `update_check` setting (it is off by default) or run the `check_for_updates` action, nuntio asks GitHub's API (`api.github.com`) for the latest nuntio release, at most once a day for the setting. The request carries nuntio's version in its `User-Agent` header and nothing else about you; GitHub sees your IP address, as with any download from GitHub (see below). Nothing is downloaded or installed.
+- When you turn on one of the update indicators (the `[updates]` settings or the `update` status bar item; all are off by default) or run the `check_for_updates` action, nuntio asks GitHub's API (`api.github.com`) for the latest nuntio release, at most once a day for the indicators. The request carries nuntio's version in its `User-Agent` header and nothing else about you; GitHub sees your IP address, as with any download from GitHub (see below). Nothing is downloaded or installed.
 
 The programs you run inside nuntio, such as `ssh` or `curl`, do their own networking.
 
