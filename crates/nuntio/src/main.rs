@@ -22,6 +22,7 @@ mod tab_title;
 mod tabs;
 mod update;
 mod window;
+mod wsl;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};

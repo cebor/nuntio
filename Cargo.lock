@@ -2189,6 +2189,8 @@ version = "0.1.7"
 dependencies = [
  "alacritty_terminal",
  "libc",
+ "percent-encoding",
+ "polling",
  "thiserror 2.0.21",
  "tracing",
 ]

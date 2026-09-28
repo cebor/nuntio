@@ -106,8 +106,9 @@ pub struct Shell {
 }
 
 impl Shell {
-    /// Program and arguments to spawn.
-    pub fn command(&self) -> (String, Vec<String>) {
+    /// Program and arguments to spawn. With `wsl`, the shell starts in
+    /// `wsl_dir` (`~` or an absolute Linux path), at home without it.
+    pub fn command(&self, wsl_dir: Option<&str>) -> (String, Vec<String>) {
         let Some(distro) = &self.wsl else {
             let program = self.program.clone().unwrap_or_default();
             return (program, self.args.clone());
@@ -116,7 +117,7 @@ impl Shell {
         if let Some(user) = &self.wsl_user {
             args.extend(["-u".to_owned(), user.clone()]);
         }
-        args.extend(["--cd".to_owned(), "~".to_owned()]);
+        args.extend(["--cd".to_owned(), wsl_dir.unwrap_or("~").to_owned()]);
         if let Some(program) = &self.program {
             args.extend(["--exec".to_owned(), program.clone()]);
             args.extend(self.args.iter().cloned());
@@ -678,11 +679,11 @@ action = "split_horizontal"
     #[test]
     fn shell_command() {
         assert_eq!(
-            shell(r#"shell = { program = "fish", args = ["-l"] }"#).command(),
+            shell(r#"shell = { program = "fish", args = ["-l"] }"#).command(None),
             ("fish".to_owned(), vec!["-l".to_owned()])
         );
         assert_eq!(
-            shell(r#"shell = { wsl = "Ubuntu" }"#).command(),
+            shell(r#"shell = { wsl = "Ubuntu" }"#).command(None),
             (
                 "wsl.exe".to_owned(),
                 ["-d", "Ubuntu", "--cd", "~"].map(String::from).to_vec()
@@ -690,15 +691,21 @@ action = "split_horizontal"
         );
         assert_eq!(
             shell(r#"shell = { wsl = "Ubuntu", wsl_user = "root" }"#)
-                .command()
+                .command(None)
                 .1,
             ["-d", "Ubuntu", "-u", "root", "--cd", "~"]
         );
         assert_eq!(
             shell(r#"shell = { wsl = "Debian", program = "fish", args = ["-l"] }"#)
-                .command()
+                .command(None)
                 .1,
             ["-d", "Debian", "--cd", "~", "--exec", "fish", "-l"]
+        );
+        assert_eq!(
+            shell(r#"shell = { wsl = "Ubuntu" }"#)
+                .command(Some("/home/me/My Files"))
+                .1,
+            ["-d", "Ubuntu", "--cd", "/home/me/My Files"]
         );
     }
 

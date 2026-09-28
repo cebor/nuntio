@@ -4,8 +4,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use nuntio_term::{
-    GridPoint, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode, TermOptions,
-    TermSize,
+    GridPoint, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
+    TermOptions, TermSize,
 };
 
 const SIZE: TermSize = TermSize {
@@ -192,6 +192,16 @@ fn foreground_process_and_directory() {
     assert_eq!(
         handle.working_directory().as_deref(),
         Some(std::path::Path::new("/tmp"))
+    );
+}
+
+#[test]
+fn reported_directory() {
+    let (handle, rx) = spawn(r"printf '\033]7;file://box/home/me/My%%20Files\033\\'");
+    wait_for_exit(&rx);
+    assert_eq!(
+        handle.reported_directory(),
+        Some(ReportedDir::Posix("/home/me/My Files".into()))
     );
 }
 

@@ -1,19 +1,22 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
-use alacritty_terminal::event::{Event, EventListener, WindowSize};
+use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term, viewport_to_point};
-use alacritty_terminal::tty;
+use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
+use polling::{PollMode, Poller};
 use thiserror::Error;
 
+use crate::osc_cwd::{CwdScanner, ReportedDir};
 use crate::palette::Palette;
 use crate::process;
 use crate::search::{self, Search};
@@ -206,6 +209,8 @@ pub struct TermHandle {
     /// The shell's pid, once known.
     shell_pid: OnceLock<u32>,
     shell_name: String,
+    /// The directory the shell last reported (OSC 7, OSC 9;9).
+    reported_dir: Arc<Mutex<Option<ReportedDir>>>,
 }
 
 impl TermHandle {
@@ -276,6 +281,12 @@ impl TermHandle {
         #[cfg(windows)]
         let child_pid = pty.child_watcher().pid().map(|pid| pid.get());
 
+        let reported_dir = Arc::new(Mutex::new(None));
+        let pty = TeePty {
+            pty,
+            scanner: CwdScanner::default(),
+            reported: reported_dir.clone(),
+        };
         let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)
             .map_err(SpawnError::EventLoop)?;
         let sender = event_loop.channel();
@@ -290,6 +301,7 @@ impl TermHandle {
             via_login,
             shell_pid: OnceLock::new(),
             shell_name,
+            reported_dir,
         })
     }
 
@@ -402,9 +414,27 @@ impl TermHandle {
         self.shell_pid().and_then(process::foreground_is_shell)
     }
 
-    /// Working directory of the foreground process, if it can be determined.
+    /// Working directory of the foreground process, if it can be
+    /// determined. Otherwise the one the shell reported, if it exists here.
     pub fn working_directory(&self) -> Option<PathBuf> {
-        self.shell_pid().and_then(process::working_directory)
+        self.shell_pid()
+            .and_then(process::working_directory)
+            .or_else(|| {
+                let path = match self.reported_directory()? {
+                    ReportedDir::Posix(path) if cfg!(unix) => path,
+                    ReportedDir::Windows(path) if cfg!(windows) => path,
+                    _ => return None,
+                };
+                Some(PathBuf::from(path)).filter(|path| path.is_dir())
+            })
+    }
+
+    /// The directory the shell last reported with OSC 7 or OSC 9;9.
+    pub fn reported_directory(&self) -> Option<ReportedDir> {
+        self.reported_dir
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Change the terminal options. Less scrollback drops the oldest
@@ -482,6 +512,71 @@ impl TermHandle {
         let term = self.term.lock();
         let (point, _) = point.to_grid(term.grid().display_offset());
         url::link_at(&term, point)
+    }
+}
+
+/// The PTY, with its output scanned for the directory the shell reports.
+struct TeePty {
+    pty: tty::Pty,
+    scanner: CwdScanner,
+    reported: Arc<Mutex<Option<ReportedDir>>>,
+}
+
+impl io::Read for TeePty {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.pty.reader().read(buf)?;
+        if let Some(dir) = self.scanner.feed(&buf[..n]) {
+            *self.reported.lock().unwrap_or_else(PoisonError::into_inner) = Some(dir);
+        }
+        Ok(n)
+    }
+}
+
+impl EventedReadWrite for TeePty {
+    type Reader = Self;
+    type Writer = <tty::Pty as EventedReadWrite>::Writer;
+
+    unsafe fn register(
+        &mut self,
+        poll: &Arc<Poller>,
+        interest: polling::Event,
+        mode: PollMode,
+    ) -> io::Result<()> {
+        // SAFETY: the PTY lives in `self`, as long as its registration.
+        unsafe { self.pty.register(poll, interest, mode) }
+    }
+
+    fn reregister(
+        &mut self,
+        poll: &Arc<Poller>,
+        interest: polling::Event,
+        mode: PollMode,
+    ) -> io::Result<()> {
+        self.pty.reregister(poll, interest, mode)
+    }
+
+    fn deregister(&mut self, poll: &Arc<Poller>) -> io::Result<()> {
+        self.pty.deregister(poll)
+    }
+
+    fn reader(&mut self) -> &mut Self {
+        self
+    }
+
+    fn writer(&mut self) -> &mut Self::Writer {
+        self.pty.writer()
+    }
+}
+
+impl EventedPty for TeePty {
+    fn next_child_event(&mut self) -> Option<ChildEvent> {
+        self.pty.next_child_event()
+    }
+}
+
+impl OnResize for TeePty {
+    fn on_resize(&mut self, window_size: WindowSize) {
+        self.pty.on_resize(window_size);
     }
 }
 

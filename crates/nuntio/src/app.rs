@@ -392,7 +392,7 @@ fn dropped_path(path: &str, syntax: PathSyntax) -> String {
         PathSyntax::Cmd if plain() => path.to_owned(),
         // cmd expands `%VAR%` even in quotes, where `^` is no escape.
         PathSyntax::Cmd => format!("\"{}\"", path.replace('%', "\"^%\"")),
-        PathSyntax::Wsl => posix_word(&wsl_path(path)),
+        PathSyntax::Wsl => posix_word(&crate::wsl::wsl_path(path)),
     };
     word.push(' ');
     word
@@ -414,36 +414,6 @@ fn posix_word(s: &str) -> String {
         word.push(c);
     }
     word
-}
-
-/// Where WSL sees a Windows path: `C:\x` is `/mnt/c/x`, and a file in a
-/// distribution (`\\wsl.localhost\Ubuntu\home\x`) is `/home/x`.
-fn wsl_path(path: &str) -> String {
-    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
-    let slashed = |rest: &str| rest.replace('\\', "/");
-    let mut chars = path.chars();
-    if let (Some(drive), Some(':')) = (chars.next(), chars.next())
-        && drive.is_ascii_alphabetic()
-    {
-        let rest = slashed(chars.as_str());
-        return format!("/mnt/{}{rest}", drive.to_ascii_lowercase());
-    }
-    for host in [r"\\wsl.localhost\", r"\\wsl$\"] {
-        if let Some(rest) = path
-            .get(..host.len())
-            .filter(|prefix| prefix.eq_ignore_ascii_case(host))
-            .map(|_| &path[host.len()..])
-        {
-            // Skip the distribution's name.
-            let inside = rest.find('\\').map_or("", |i| &rest[i..]);
-            return if inside.is_empty() {
-                "/".into()
-            } else {
-                slashed(inside)
-            };
-        }
-    }
-    slashed(path)
 }
 
 /// Asks to confirm closing `target`, in which the programs `running` run
@@ -512,6 +482,8 @@ pub struct App {
     font_size: f32,
     next_pane_id: u64,
     state: Option<WindowState>,
+    /// Home directories in WSL, to start new panes in `~/…`.
+    wsl_homes: crate::wsl::Homes,
     /// Used up by the first pane.
     startup: Startup,
     /// The last tab was closed; quit at the next opportunity.
@@ -573,6 +545,7 @@ impl App {
             clipboard,
             next_pane_id: 0,
             state: None,
+            wsl_homes: Default::default(),
             startup,
             exit_requested: false,
             pending_close: None,
@@ -905,9 +878,15 @@ impl App {
         )?)
     }
 
-    /// Start a shell, or `command` instead, in a new pane. The size is
+    /// Start a shell, or `command` instead, in a new pane: in `cwd`, or in
+    /// `wsl_dir` (absolute or `~`) for a shell in WSL. The size is
     /// corrected by the next `resize_terms`.
-    fn spawn_pane(&mut self, cwd: Option<PathBuf>, command: Option<Vec<String>>) -> Result<Pane> {
+    fn spawn_pane(
+        &mut self,
+        cwd: Option<PathBuf>,
+        wsl_dir: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Result<Pane> {
         let id = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
         let proxy = self.proxy.clone();
@@ -920,14 +899,14 @@ impl App {
                 args: argv,
             }),
             None => config_shell.map(|s| {
-                let (program, args) = s.command();
+                let (program, args) = s.command(wsl_dir.as_deref());
                 Shell { program, args }
             }),
         };
         let options = SpawnOptions {
             shell,
             login_shell,
-            // `wsl.exe --cd ~` picks the directory; a Windows one would be ignored.
+            // `wsl.exe --cd` picks the directory; a Windows one would be ignored.
             working_directory: cwd.filter(|_| !wsl),
             term: term_options(&self.config),
             palette: self.palette.clone(),
@@ -1024,7 +1003,7 @@ impl App {
             }
             exists
         });
-        let pane = self.spawn_pane(cwd, command)?;
+        let pane = self.spawn_pane(cwd, None, command)?;
         let mut state = WindowState::new(window, renderer, pane, chrome, transparent);
         state.update_badge = self.update.is_some() && self.config.updates.tab_bar;
         // The cell size is only known now that the renderer has the font.
@@ -1125,11 +1104,28 @@ impl App {
     /// pane's directory with `inherit`, otherwise at home. Failures are
     /// shown in a banner.
     fn spawn_for_focused(&mut self, command: Option<Vec<String>>, inherit: bool) -> Option<Pane> {
-        let cwd = match self.state.as_ref().filter(|_| inherit) {
-            Some(state) => state.term().working_directory(),
-            None => dirs::home_dir(),
+        let (cwd, wsl_dir) = match self.state.as_ref().filter(|_| inherit) {
+            Some(state) => {
+                let pane = state.content().focused_pane();
+                let wsl_dir = pane
+                    .wsl
+                    .then(|| {
+                        crate::wsl::linux_dir(pane.term.reported_directory(), pane.title.as_deref())
+                    })
+                    .flatten();
+                (pane.term.working_directory(), wsl_dir)
+            }
+            None => (dirs::home_dir(), None),
         };
-        self.spawn_pane(cwd, command)
+        // `wsl.exe --cd` takes no `~/…`.
+        let wsl_dir = wsl_dir.and_then(|dir| {
+            let shell = self.config.shell.as_ref()?;
+            let distro = shell.wsl.as_deref()?;
+            crate::wsl::cd_arg(&dir, || {
+                self.wsl_homes.get(distro, shell.wsl_user.as_deref())
+            })
+        });
+        self.spawn_pane(cwd, wsl_dir, command)
             .inspect_err(|err| {
                 self.notify(Banner::new(
                     Severity::Error,

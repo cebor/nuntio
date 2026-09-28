@@ -44,6 +44,8 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json"] 
 gethostname = "1"
 percent-encoding = "2"
 alacritty_terminal = "0.26"
+# Wrapping alacritty_terminal's PTY; the version it uses.
+polling = "3"
 cosmic-text = "0.19"
 fontdb = "0.23"
 ratatui = "0.30"

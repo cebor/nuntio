@@ -187,7 +187,7 @@ option_as_meta = "none"
 |---|---|---|---|
 | `hide_when_single` | bool | `true` | Hide the tab bar while only one tab is open. It is always shown when nuntio draws its own header (`decorations = "custom"`, macOS `transparent`/`none` title bar, WSLg). |
 | `title` | string | `"auto"` | What a tab shows. `"auto"`: the directory while the shell waits at its prompt (`~/code`), otherwise the running program (`htop`). `"path"`: always the directory. `"process"`: always the program. `"application"`: the title the shell or program sets, unchanged. Where nuntio can't see the running process (currently Windows and WSL shells), `"auto"` uses the application's title without a leading `user@host:`. |
-| `inherit_directory` | bool | `false` | Open a new tab in the working directory of the focused pane. Off, new tabs start in your home directory. Splits always start in the focused pane's directory. |
+| `inherit_directory` | bool | `false` | Open a new tab in the working directory of the focused pane. Off, new tabs start in your home directory. Splits always start in the focused pane's directory. For WSL shells, see [Working directory in WSL](#working-directory-in-wsl). |
 
 ### `[panes]`
 
@@ -286,7 +286,29 @@ shell = { wsl = "Ubuntu", wsl_user = "root" }
 shell = { wsl = "Ubuntu", program = "fish", args = ["-l"] }
 ```
 
-New tabs and panes start in your Linux home directory (`~`). nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM` and `TERM_PROGRAM_VERSION` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept.
+New tabs start in your Linux home directory (`~`), splits (and new tabs with `tabs.inherit_directory`) in the directory of the focused pane. nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM` and `TERM_PROGRAM_VERSION` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept.
+
+#### Working directory in WSL
+
+nuntio on Windows can't see the processes inside WSL, so the shell has to tell it its directory. nuntio reads it from:
+
+- OSC 7 (`file://host/path`), which fish sends on its own,
+- OSC 9;9, the Windows Terminal convention (`wslpath -w "$PWD"`),
+- otherwise the window title, if it shows the directory like the default prompt of Ubuntu and Debian does (`user@host: ~/code`).
+
+With another prompt, send OSC 7 yourself. For bash, in `~/.bashrc`:
+
+```sh
+PROMPT_COMMAND='printf "\e]7;file://%s%s\e\\" "$HOSTNAME" "$PWD"'${PROMPT_COMMAND:+";$PROMPT_COMMAND"}
+```
+
+For zsh, in `~/.zshrc`:
+
+```sh
+precmd() { printf '\e]7;file://%s%s\e\\' "$HOST" "$PWD" }
+```
+
+The same works for PowerShell and cmd on Windows: a directory reported by OSC 7 or OSC 9;9 is used where nuntio can't read the shell's directory itself.
 
 ## Themes
 
