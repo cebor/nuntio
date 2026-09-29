@@ -338,6 +338,7 @@ fn search_survives_a_cleared_scrollback() {
     // The match was in the scrollback, which is gone now (`clear`, CSI 3 J).
     handle.clear_history();
     handle.search_snapshot(&mut search);
+    assert!(!search.has_match(), "stale match moved onto the screen");
     assert!(!handle.search(&mut search, true));
     assert!(!handle.search(&mut search, false));
 

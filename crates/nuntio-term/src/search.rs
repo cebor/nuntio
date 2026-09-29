@@ -85,7 +85,11 @@ impl Search {
             return;
         }
         let top = term.topmost_line();
-        let shift = |p: Point| Some(Point::new(p.line - delta, p.column)).filter(|p| p.line >= top);
+        // Removed history (cleared or trimmed from the top) leaves
+        // screen-relative lines in place.
+        let shift_by = delta.max(0);
+        let shift =
+            |p: Point| Some(Point::new(p.line - shift_by, p.column)).filter(|p| p.line >= top);
         self.current = self.current.take().and_then(|m| {
             let (start, end) = (shift(*m.start())?, shift(*m.end())?);
             Some(start..=end)
