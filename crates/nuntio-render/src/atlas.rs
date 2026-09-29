@@ -15,34 +15,30 @@ pub struct AtlasRegion {
     pub height: u32,
 }
 
-/// One texture plus a rectangle packer. Full atlases are cleared as a whole;
-/// the glyph cache re-rasterizes on demand.
+/// One texture plus a rectangle packer. Starts small and doubles up to
+/// `max_size` when full; growing or clearing drops all glyphs, and the glyph
+/// cache re-rasterizes on demand.
 pub struct Atlas {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     allocator: AtlasAllocator,
+    format: wgpu::TextureFormat,
+    label: &'static str,
     bytes_per_pixel: u32,
     size: u32,
+    max_size: u32,
 }
 
 impl Atlas {
-    /// A square atlas `size` texels wide.
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, label: &str, size: u32) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: size,
-                height: size,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    /// A square atlas `size` texels wide that can grow to `max_size`.
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        label: &'static str,
+        size: u32,
+        max_size: u32,
+    ) -> Self {
+        let (texture, view) = create_texture(device, format, label, size);
         let bytes_per_pixel = format
             .block_copy_size(None)
             .expect("uncompressed atlas format");
@@ -50,9 +46,27 @@ impl Atlas {
             texture,
             view,
             allocator: AtlasAllocator::new(size2(size as i32, size as i32)),
+            format,
+            label,
             bytes_per_pixel,
             size,
+            max_size: max_size.max(size),
         }
+    }
+
+    /// Double the side length, up to the maximum. The new texture is empty,
+    /// so the caller has to drop its cached glyphs. `false` if already at
+    /// the maximum.
+    pub fn grow(&mut self, device: &wgpu::Device) -> bool {
+        if self.size >= self.max_size {
+            return false;
+        }
+        let size = (self.size * 2).min(self.max_size);
+        (self.texture, self.view) = create_texture(device, self.format, self.label, size);
+        self.allocator = AtlasAllocator::new(size2(size as i32, size as i32));
+        self.size = size;
+        tracing::debug!(atlas = self.label, size, "glyph atlas grown");
+        true
     }
 
     /// Side length in texels, to normalize texture coordinates.
@@ -111,4 +125,28 @@ impl Atlas {
     pub fn clear(&mut self) {
         self.allocator.clear();
     }
+}
+
+fn create_texture(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    label: &str,
+    size: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }

@@ -441,6 +441,9 @@ fn setup(
         label: Some("nuntio"),
         required_limits:
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+        // A terminal allocates few, small resources; `Performance` reserves
+        // memory blocks of 128 MiB and more.
+        memory_hints: wgpu::MemoryHints::MemoryUsage,
         ..Default::default()
     }))?;
 

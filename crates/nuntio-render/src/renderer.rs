@@ -20,6 +20,12 @@ const KIND_COLOR: u32 = 2;
 const KIND_ROUNDED: u32 = 3;
 /// Upper bound for the mask atlas: 16 MiB at one byte per texel.
 const MAX_MASK_ATLAS_SIZE: u32 = 4096;
+/// Starting size of the mask atlas (1 MiB); enough for ASCII plus some
+/// symbols at common font sizes, doubles when full.
+const INITIAL_MASK_ATLAS_SIZE: u32 = 1024;
+/// Starting size of the color atlas (1 MiB at four bytes per texel); stays
+/// that small unless emoji show up.
+const INITIAL_COLOR_ATLAS_SIZE: u32 = 512;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -86,7 +92,12 @@ struct Sprite {
     color: bool,
 }
 
-struct AtlasFull;
+/// The atlas that ran out of room.
+#[derive(Debug, Clone, Copy)]
+enum AtlasFull {
+    Mask,
+    Color,
+}
 
 /// A frame read back by [`Renderer::capture`].
 #[cfg(feature = "capture")]
@@ -109,6 +120,9 @@ pub struct Renderer {
     /// Cuts the window's rounded corners out of the finished frame.
     cutout_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
+    /// Kept to rebuild `bind_group` when an atlas texture grows.
+    bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
@@ -146,7 +160,8 @@ impl Renderer {
 
         // Large fonts on HiDPI screens need room for many glyph masks (one
         // byte per texel). Color glyphs (emoji) are rarer and cost four.
-        let mask_size = device
+        // Both start small and double when full, up to these maximums.
+        let mask_max = device
             .limits()
             .max_texture_dimension_2d
             .clamp(MIN_ATLAS_SIZE, MAX_MASK_ATLAS_SIZE);
@@ -154,12 +169,14 @@ impl Renderer {
             device,
             wgpu::TextureFormat::R8Unorm,
             "mask atlas",
-            mask_size,
+            INITIAL_MASK_ATLAS_SIZE.min(mask_max),
+            mask_max,
         );
         let color_atlas = Atlas::new(
             device,
             wgpu::TextureFormat::Rgba8Unorm,
             "color atlas",
+            INITIAL_COLOR_ATLAS_SIZE,
             MIN_ATLAS_SIZE,
         );
         // Glyphs are drawn 1:1; nearest sampling keeps them sharp even when
@@ -199,6 +216,8 @@ impl Renderer {
             pipeline,
             cutout_pipeline,
             bind_group,
+            bind_group_layout,
+            sampler,
             uniforms,
             instance_buffer,
             instance_capacity,
@@ -276,6 +295,28 @@ impl Renderer {
         self.glyphs.clear();
         self.mask_atlas.clear();
         self.color_atlas.clear();
+    }
+
+    /// Grow the atlas that ran full and drop all glyphs, which pointed into
+    /// the old texture. `false` if it is already at its maximum size.
+    fn grow_atlas(&mut self, full: AtlasFull) -> bool {
+        let atlas = match full {
+            AtlasFull::Mask => &mut self.mask_atlas,
+            AtlasFull::Color => &mut self.color_atlas,
+        };
+        if !atlas.grow(&self.gpu.device) {
+            return false;
+        }
+        self.clear_glyphs();
+        self.bind_group = create_bind_group(
+            &self.gpu.device,
+            &self.bind_group_layout,
+            &self.uniforms,
+            &self.mask_atlas,
+            &self.color_atlas,
+            &self.sampler,
+        );
+        true
     }
 
     /// Draw a frame and present it.
@@ -382,24 +423,35 @@ impl Renderer {
 
     /// Lay out the frame's instances and upload them with the uniforms.
     fn prepare(&mut self, frame: &Frame) {
-        if self.build_instances(frame).is_ok() {
-            self.atlas_overflow = false;
-        } else {
-            // The atlas filled up mid-frame: start over with an empty one.
-            tracing::debug!("glyph atlas full, clearing");
-            self.clear_glyphs();
-            let fits = self.build_instances(frame).is_ok();
+        let mut cleared = false;
+        loop {
+            let Err(full) = self.build_instances(frame) else {
+                self.atlas_overflow = false;
+                break;
+            };
+            // Grow before clearing, so the atlas settles at the size the
+            // session's glyphs need instead of re-rasterizing every frame.
+            if self.grow_atlas(full) {
+                cleared = true;
+                continue;
+            }
+            if !cleared {
+                // The atlas filled up mid-frame: start over with an empty one.
+                tracing::debug!("glyph atlas full, clearing");
+                self.clear_glyphs();
+                cleared = true;
+                continue;
+            }
             // Warn once, not on every frame while it stays too full.
-            if !fits && !self.atlas_overflow {
+            if !self.atlas_overflow {
                 tracing::warn!("screen content does not fit into the glyph atlas");
             }
-            self.atlas_overflow = !fits;
-            if !fits {
-                // Draw what was laid out; the UI part ends where it stopped.
-                let len = self.instances.len();
-                self.ui_start = self.ui_start.min(len);
-                self.cutout_start = len;
-            }
+            self.atlas_overflow = true;
+            // Draw what was laid out; the UI part ends where it stopped.
+            let len = self.instances.len();
+            self.ui_start = self.ui_start.min(len);
+            self.cutout_start = len;
+            break;
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
@@ -762,7 +814,7 @@ impl Renderer {
         let region = self
             .mask_atlas
             .insert(&self.gpu.queue, metrics.width, metrics.height, &mask)
-            .ok_or(AtlasFull)?;
+            .ok_or(AtlasFull::Mask)?;
         Ok(vec![Sprite {
             x: 0,
             y: 0,
@@ -792,7 +844,11 @@ impl Renderer {
             };
             let region = atlas
                 .insert(&self.gpu.queue, glyph.width, glyph.height, &glyph.data)
-                .ok_or(AtlasFull)?;
+                .ok_or(if glyph.color {
+                    AtlasFull::Color
+                } else {
+                    AtlasFull::Mask
+                })?;
             sprites.push(Sprite {
                 x: glyph.left,
                 y: baseline - glyph.top,
@@ -813,7 +869,7 @@ impl Renderer {
         let region = self
             .mask_atlas
             .insert(&self.gpu.queue, mask.width, mask.height, &mask.data)
-            .ok_or(AtlasFull)?;
+            .ok_or(AtlasFull::Mask)?;
         let y = m.underline_y.min(m.height.saturating_sub(mask.height));
         Ok(vec![Sprite {
             x: 0,
