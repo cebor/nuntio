@@ -23,8 +23,9 @@ usage: cargo xtask drive <command>
   start [--visible] [--release] [--size WxH] [--config <file>] [-- <command>...]
                           build nuntio with the debug server and start it in
                           the background (with an empty config by default);
-                          headless unless --visible: off-screen on Windows and
-                          macOS, under Xvfb on Linux (needs xvfb-run)
+                          headless unless --visible: off-screen on Windows,
+                          transparent on macOS, under Xvfb on Linux (needs
+                          xvfb-run)
   stop                    quit it
   state                   window, tabs, panes, banner, idle time as JSON
   text [--pane N]         the visible lines of a pane

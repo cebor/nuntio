@@ -198,6 +198,23 @@ fn center(window: &Window) {
     }
 }
 
+/// Show the window for the debug server without making it the key window
+/// (`set_visible` always does). `invisible` makes it fully transparent and
+/// transparent to the mouse: AppKit pulls a window that is moved off-screen
+/// back onto the screen, and a window that is ordered out or occluded gets
+/// no redraws.
+#[cfg(all(target_os = "macos", feature = "debug-server"))]
+fn show_inactive(window: &Window, invisible: bool) {
+    if let Some(ns_window) = ns_view(window).and_then(|view| view.window()) {
+        if invisible {
+            // SAFETY: `setAlphaValue:` takes a CGFloat (f64 on 64-bit).
+            let () = unsafe { objc2::msg_send![&*ns_window, setAlphaValue: 0.0_f64] };
+            ns_window.setIgnoresMouseEvents(true);
+        }
+        ns_window.orderFront(None);
+    }
+}
+
 /// Tells macOS which Option keys act as Alt, so they don't start
 /// composing dead keys like Option+U (¨) while nuntio sends Meta.
 #[cfg(target_os = "macos")]
@@ -936,7 +953,8 @@ impl Core {
         #[cfg(feature = "debug-server")]
         let attrs = attrs.with_active(!self.debug.enabled);
         // Headless: shown, since hidden windows get no redraws on Windows,
-        // but where nobody sees it.
+        // but where nobody sees it (macOS makes it transparent instead, see
+        // `show_inactive`).
         let attrs = if self.headless() {
             let attrs = attrs.with_position(PhysicalPosition::new(-32000, -32000));
             #[cfg(windows)]
@@ -997,6 +1015,13 @@ impl Core {
         if !self.headless() {
             center(&state.window);
         }
+        #[cfg(all(target_os = "macos", feature = "debug-server"))]
+        if self.debug.enabled {
+            show_inactive(&state.window, self.headless());
+        } else {
+            state.window.set_visible(true);
+        }
+        #[cfg(not(all(target_os = "macos", feature = "debug-server")))]
         state.window.set_visible(true);
         state.resize_terms(&self.config);
         #[cfg(feature = "debug-server")]

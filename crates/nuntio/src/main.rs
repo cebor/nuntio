@@ -248,6 +248,17 @@ fn main() -> Result<()> {
     // nuntio sets up its own menu bar (`macos_menu`).
     #[cfg(target_os = "macos")]
     winit::platform::macos::EventLoopBuilderExtMacOS::with_default_menu(&mut builder, false);
+    // Driven remotely: don't take the focus from the user's window, and
+    // headless: no Dock icon either.
+    #[cfg(all(target_os = "macos", feature = "debug-server"))]
+    if args.debug_server.is_some() {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+
+        builder.with_activate_ignoring_other_apps(false);
+        if args.headless {
+            builder.with_activation_policy(ActivationPolicy::Accessory);
+        }
+    }
     let event_loop = builder.build().context("failed to create event loop")?;
     #[cfg_attr(not(feature = "debug-server"), allow(unused_mut))]
     let mut app = App::new(
