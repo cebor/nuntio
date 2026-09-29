@@ -361,6 +361,26 @@ fn wide_characters_in_a_one_column_pane() {
 }
 
 #[test]
+fn color_queries_see_runtime_overrides() {
+    let (handle, rx) = spawn(
+        "stty raw -echo; printf '\\033]11;#102030\\007\\033]11;?\\007'; \
+         r=$(dd bs=1 count=24 2>/dev/null); stty sane; \
+         case \"$r\" in *1010/2020/3030*) printf OK;; *) printf NO;; esac",
+    );
+    loop {
+        match rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("shell did not exit")
+        {
+            TermEvent::ColorQuery => handle.answer_color_queries(),
+            TermEvent::Exit => break,
+            _ => {}
+        }
+    }
+    assert!(screen_contains(&handle, "OK"));
+}
+
+#[test]
 fn osc8_links_with_unknown_schemes_are_ignored() {
     let (handle, rx) = spawn("printf '\\033]8;;ms-msdt:/id x\\033\\\\click\\033]8;;\\033\\\\'");
     wait_for_exit(&rx);

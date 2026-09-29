@@ -1112,6 +1112,11 @@ impl Core {
             }
             TermEvent::Exit => self.close_pane(state, pane),
             TermEvent::ClipboardStore(text) => self.set_clipboard(text),
+            TermEvent::ColorQuery => {
+                if let Some(p) = state.panes().find(|p| p.id == pane) {
+                    p.term.answer_color_queries();
+                }
+            }
         }
     }
 

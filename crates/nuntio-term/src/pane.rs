@@ -13,6 +13,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term, viewport_to_point};
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
+use alacritty_terminal::vte::ansi::Rgb;
 use polling::{PollMode, Poller};
 use thiserror::Error;
 
@@ -43,6 +44,9 @@ pub enum TermEvent {
     Exit,
     /// OSC 52 clipboard write.
     ClipboardStore(String),
+    /// A program asked for a color (OSC 4/10/11/12); answer with
+    /// [`TermHandle::answer_color_queries`].
+    ColorQuery,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -123,9 +127,12 @@ impl Dimensions for TermSize {
 }
 
 type Callback = dyn Fn(TermEvent) + Send + Sync;
+type ColorFormat = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
 
 /// Bridges alacritty's events to the application and answers terminal
-/// queries (DA, color/size reports) directly on the PTY thread.
+/// queries (DA, size reports) directly on the PTY thread. Color queries go
+/// through the main thread, which can read the runtime overrides (OSC
+/// 4/10/11/12): alacritty asks while the PTY thread holds the term lock.
 #[derive(Clone)]
 struct Listener {
     inner: Arc<ListenerInner>,
@@ -142,6 +149,8 @@ struct ListenerInner {
     /// File stem of the program nuntio started, to recognize conhost's
     /// default title.
     shell_name: String,
+    /// Color queries waiting for [`TermHandle::answer_color_queries`].
+    color_queries: Mutex<Vec<(usize, ColorFormat)>>,
 }
 
 impl ListenerInner {
@@ -180,12 +189,12 @@ impl EventListener for Listener {
             Event::ClipboardStore(_, text) => TermEvent::ClipboardStore(text),
             Event::PtyWrite(text) => return inner.write(text),
             Event::ColorRequest(index, format) => {
-                let color = inner
-                    .palette
-                    .read()
+                inner
+                    .color_queries
+                    .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .get(index);
-                return inner.write(format(color));
+                    .push((index, format));
+                TermEvent::ColorQuery
             }
             Event::TextAreaSizeRequest(format) => {
                 let size = *inner.size.lock().unwrap_or_else(PoisonError::into_inner);
@@ -249,6 +258,7 @@ impl TermHandle {
                 size: Mutex::new(size.window_size()),
                 wakeup_pending: AtomicBool::new(false),
                 shell_name: shell_name.clone(),
+                color_queries: Mutex::new(Vec::new()),
             }),
         };
 
@@ -494,6 +504,40 @@ impl TermHandle {
             .read()
             .unwrap_or_else(PoisonError::into_inner);
         Snapshot::capture(&term, &palette, &[], None)
+    }
+
+    /// Answer the color queries programs sent (see
+    /// [`TermEvent::ColorQuery`]), with runtime overrides taking precedence
+    /// over the palette.
+    pub fn answer_color_queries(&self) {
+        // Same lock order as the PTY thread: term, then the queue.
+        let replies: Vec<String> = {
+            let term = self.term.lock();
+            let queries = std::mem::take(
+                &mut *self
+                    .listener
+                    .inner
+                    .color_queries
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+            );
+            if queries.is_empty() {
+                return;
+            }
+            let palette = self
+                .listener
+                .inner
+                .palette
+                .read()
+                .unwrap_or_else(PoisonError::into_inner);
+            queries
+                .into_iter()
+                .map(|(index, format)| format(term.colors()[index].unwrap_or(palette.get(index))))
+                .collect()
+        };
+        for reply in replies {
+            self.listener.inner.write(reply);
+        }
     }
 
     /// Let the next output send a wakeup without taking a snapshot, for a
