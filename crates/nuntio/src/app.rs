@@ -546,6 +546,7 @@ impl Core {
         self.os_dark = dark;
         if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
             let warning = self.update_palette(state);
+            self.clear_config_banner();
             self.notify(Banner::config(
                 Severity::Warning,
                 warning.into_iter().collect(),
