@@ -226,17 +226,23 @@ fn main() -> Result<()> {
     #[cfg(windows)]
     restrict_dll_search();
     let mut warnings = Vec::new();
-    let config_path = args.config.or_else(|| {
-        let location = nuntio_config::locate_config()?;
-        if let Some(shadowed) = location.shadowed {
-            warnings.push(format!(
-                "{} is ignored because {} exists",
-                shadowed.display(),
-                location.path.display()
-            ));
-        }
-        Some(location.path)
-    });
+    // Absolute, so panes started in another directory find it too.
+    let config_path = args
+        .config
+        .map(std::path::absolute)
+        .transpose()
+        .context("can't resolve --config")?
+        .or_else(|| {
+            let location = nuntio_config::locate_config()?;
+            if let Some(shadowed) = location.shadowed {
+                warnings.push(format!(
+                    "{} is ignored because {} exists",
+                    shadowed.display(),
+                    location.path.display()
+                ));
+            }
+            Some(location.path)
+        });
     let (config, banner) = load_config(config_path.as_deref(), warnings);
     // Started from the Finder or Dock, nuntio runs in `/`. Start the first
     // shell at home instead, like Terminal.app (`login`, which runs the
