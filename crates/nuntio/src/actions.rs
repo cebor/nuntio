@@ -158,7 +158,7 @@ impl Bindings {
             char('k', cmd_shift, ClearScrollback),
             char('=', cmd, FontIncrease),
             char('+', cmd, FontIncrease),
-            char('+', cmd | shift, FontIncrease),
+            char('=', cmd | shift, FontIncrease),
             char('-', cmd, FontDecrease),
             char('0', cmd, FontReset),
             named(NamedKey::PageUp, shift, ScrollPageUp),
@@ -539,6 +539,8 @@ mod tests {
         // Plain Ctrl+C must reach the shell.
         assert_eq!(b.lookup(&ch("c"), ctrl), None);
         assert_eq!(b.lookup(&ch("="), ctrl), Some(Action::FontIncrease));
+        // Ctrl++ on a US layout: `=` with Shift.
+        assert_eq!(b.lookup(&ch("="), ctrl_shift), Some(Action::FontIncrease));
         assert_eq!(
             b.lookup(&Key::Named(NamedKey::Insert), ModifiersState::SHIFT),
             Some(Action::Paste)
