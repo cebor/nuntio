@@ -413,7 +413,7 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 |---|---|
 | `copy` | Copy the selection |
 | `paste` | Paste from the clipboard |
-| `new_tab` | Open a new tab in the focused pane's directory |
+| `new_tab` | Open a new tab (in the focused pane's directory with `tabs.inherit_directory`) |
 | `close_tab` | Close the current tab with all its panes |
 | `close_pane` | Close the focused pane (and the tab, if it was the last pane) |
 | `next_tab`, `previous_tab` | Switch tabs |

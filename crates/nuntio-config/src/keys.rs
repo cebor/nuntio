@@ -186,7 +186,10 @@ const fn action(value: &'static str, help: &'static str) -> Variant {
 pub static ACTIONS: &[Variant] = &[
     action("copy", "Copy the selection"),
     action("paste", "Paste from the clipboard"),
-    action("new_tab", "Open a new tab in the focused pane's directory"),
+    action(
+        "new_tab",
+        "Open a new tab (in the focused pane's directory with `tabs.inherit_directory`)",
+    ),
     action("close_tab", "Close the current tab with all its panes"),
     action(
         "close_pane",
