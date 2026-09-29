@@ -38,8 +38,11 @@ impl Canvas {
 
     /// Fill a rectangle given in pixels, clipped to the cell.
     fn rect(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, alpha: u8) {
-        let (x0, x1) = (x0.max(0) as u32, (x1.max(0) as u32).min(self.width));
-        let (y0, y1) = (y0.max(0) as u32, (y1.max(0) as u32).min(self.height));
+        // Reversed ranges (tiny cells) are empty.
+        let x1 = (x1.max(0) as u32).min(self.width);
+        let x0 = (x0.max(0) as u32).min(x1);
+        let y1 = (y1.max(0) as u32).min(self.height);
+        let y0 = (y0.max(0) as u32).min(y1);
         for y in y0..y1 {
             let row = (y * self.width) as usize;
             self.data[row + x0 as usize..row + x1 as usize].fill(alpha);
@@ -542,6 +545,17 @@ mod tests {
         let v = render('│');
         assert_eq!(at(&v, W / 2, 0), 255);
         assert_eq!(at(&v, W / 2, H - 1), 255);
+    }
+
+    #[test]
+    fn tiny_cells_do_not_panic() {
+        for w in 1..=4 {
+            for h in 1..=4 {
+                for c in (0x2500..=0x257F).filter_map(char::from_u32) {
+                    rasterize(c, w, h, 1);
+                }
+            }
+        }
     }
 
     #[test]
