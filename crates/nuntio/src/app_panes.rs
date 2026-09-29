@@ -288,6 +288,7 @@ impl Core {
         }
         state.mouse.hovered_bar = None;
         state.mouse.tab_drag = None;
+        state.mouse.divider_drag = None;
         state.resize_terms(&self.config);
         state.window.request_redraw();
     }

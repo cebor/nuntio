@@ -829,6 +829,8 @@ impl WindowState {
         }
         self.send_focus(false);
         self.tabs.select(index);
+        // A divider of the old tab can't be dragged on in the new one.
+        self.mouse.divider_drag = None;
         self.send_focus(true);
         self.reset_focus_state();
     }
