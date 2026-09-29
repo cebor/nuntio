@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::Result;
 use nuntio_term::{Shell, SpawnOptions, TermHandle, TermSize};
 
-use super::{CONFIRM_REPEAT, Core, INITIAL_GRID, Startup, term_options};
+use super::{CONFIRM_REPEAT, Core, INITIAL_GRID, Startup, term_engine, term_options};
 use crate::banner::{Banner, Severity};
 use crate::event::{PaneId, UserEvent};
 use crate::pane_tree::Axis;
@@ -112,6 +112,7 @@ impl Core {
             term: term_options(&self.config),
             palette: self.palette.clone(),
             env: crate::pane_env::pane_env(self.config_path.as_deref(), wsl),
+            engine: term_engine(&self.config),
         };
         let term = TermHandle::spawn(options, size, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));

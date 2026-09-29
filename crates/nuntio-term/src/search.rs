@@ -7,14 +7,15 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 
 /// Matches counted at most; beyond that the count shows as "999+".
-const MAX_COUNTED: usize = 999;
+pub(crate) const MAX_COUNTED: usize = 999;
 
 /// The query is not a valid regular expression.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct SearchError(pub String);
 
-/// A compiled search and the currently selected match.
+/// A compiled search and the currently selected match. A search runs
+/// against one pane, so only its engine's fields are in use.
 pub struct Search {
     regex: RegexSearch,
     current: Option<Match>,
@@ -25,7 +26,12 @@ pub struct Search {
     /// scrollback moves the text they point at upwards.
     history: usize,
     /// Where the current match is among all matches, as of the last `find`.
-    position: Option<MatchPosition>,
+    pub(crate) position: Option<MatchPosition>,
+    /// The same pattern, for the wezterm engine.
+    #[cfg(feature = "wezterm")]
+    pub(crate) wez_regex: regex::Regex,
+    #[cfg(feature = "wezterm")]
+    pub(crate) wez: crate::wezterm::search::State,
 }
 
 /// The current match's place among all matches in the scrollback.
@@ -53,12 +59,22 @@ impl Search {
             let message = err.to_string();
             SearchError(message.lines().last().unwrap_or(&message).trim().to_owned())
         })?;
+        // The same smart case rule as `RegexSearch::new`.
+        #[cfg(feature = "wezterm")]
+        let wez_regex = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!pattern.chars().any(char::is_uppercase))
+            .build()
+            .map_err(|err| SearchError(err.to_string()))?;
         Ok(Self {
             regex,
             current: None,
             anchor: None,
             history: 0,
             position: None,
+            #[cfg(feature = "wezterm")]
+            wez_regex,
+            #[cfg(feature = "wezterm")]
+            wez: Default::default(),
         })
     }
 
@@ -71,6 +87,10 @@ impl Search {
             .map(|m| *m.end())
             .or(previous.anchor);
         self.history = previous.history;
+        #[cfg(feature = "wezterm")]
+        {
+            self.wez.anchor = previous.wez.current.map(|m| m.end).or(previous.wez.anchor);
+        }
         self
     }
 
@@ -104,12 +124,16 @@ impl Search {
     }
 
     pub fn has_match(&self) -> bool {
+        #[cfg(feature = "wezterm")]
+        if self.wez.current.is_some() {
+            return true;
+        }
         self.current.is_some()
     }
 
     /// Where the current match is among all matches, if there is one.
     pub fn position(&self) -> Option<MatchPosition> {
-        self.position.filter(|_| self.current.is_some())
+        self.position.filter(|_| self.has_match())
     }
 }
 

@@ -46,6 +46,12 @@ percent-encoding = "2"
 alacritty_terminal = "0.26"
 # Wrapping alacritty_terminal's PTY; the version it uses.
 polling = "3"
+# WezTerm's emulator core, the `wezterm` engine. Not on crates.io; termwiz
+# (same rev) names types wezterm-term doesn't re-export.
+wezterm-term = { git = "https://github.com/wezterm/wezterm", rev = "cab25161054c50fd6c705db4ceefef0f1e5a9575" }
+termwiz = { git = "https://github.com/wezterm/wezterm", rev = "cab25161054c50fd6c705db4ceefef0f1e5a9575", default-features = false }
+# Search in the `wezterm` engine.
+regex = "1"
 cosmic-text = "0.19"
 fontdb = "0.23"
 ratatui = "0.30"

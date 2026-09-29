@@ -51,6 +51,9 @@ jobs:
       # The debug server behind `cargo xtask drive`.
       - run: cargo clippy --workspace --all-targets --features nuntio/debug-server
       - run: cargo test --workspace --features nuntio/debug-server
+      # The wezterm engine.
+      - run: cargo clippy --workspace --all-targets --features nuntio/wezterm
+      - run: cargo test --workspace --features nuntio/wezterm
 
   # The `rust-version` in Cargo.toml still builds.
   msrv:

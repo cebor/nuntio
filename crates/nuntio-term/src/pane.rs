@@ -1,28 +1,22 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
-use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{self, Term, viewport_to_point};
-use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
-use alacritty_terminal::vte::ansi::Rgb;
-use polling::{PollMode, Poller};
+use alacritty_terminal::event::WindowSize;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::term::{self, TermMode};
+use alacritty_terminal::tty;
 use thiserror::Error;
 
-use crate::osc_cwd::{CwdScanner, ReportedDir};
+use crate::alacritty::AlacrittyPane;
+use crate::osc_cwd::ReportedDir;
 use crate::palette::Palette;
 use crate::process;
-use crate::search::{self, Search};
+use crate::search::Search;
 use crate::snapshot::Snapshot;
-use crate::url::{self, Link};
+use crate::url::Link;
 
 #[derive(Debug, Error)]
 pub enum SpawnError {
@@ -47,6 +41,15 @@ pub enum TermEvent {
     /// A program asked for a color (OSC 4/10/11/12); answer with
     /// [`TermHandle::answer_color_queries`].
     ColorQuery,
+}
+
+/// The emulator core that parses a pane's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Engine {
+    #[default]
+    Alacritty,
+    #[cfg(feature = "wezterm")]
+    Wezterm,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -81,6 +84,8 @@ pub struct SpawnOptions {
     pub palette: Palette,
     /// More environment variables for the shell; they replace inherited ones.
     pub env: Vec<(String, String)>,
+    /// The emulator core; it stays with the pane.
+    pub engine: Engine,
 }
 
 /// Terminal grid size plus the cell size in physical pixels.
@@ -93,7 +98,7 @@ pub struct TermSize {
 }
 
 impl TermSize {
-    fn window_size(self) -> WindowSize {
+    pub(crate) fn window_size(self) -> WindowSize {
         WindowSize {
             num_lines: self.lines,
             num_cols: self.columns,
@@ -104,7 +109,7 @@ impl TermSize {
 
     /// alacritty panics on wide characters in grids narrower than
     /// `MIN_COLUMNS`.
-    fn clamped(self) -> Self {
+    pub(crate) fn clamped(self) -> Self {
         Self {
             columns: self.columns.max(term::MIN_COLUMNS as u16),
             ..self
@@ -127,98 +132,137 @@ impl Dimensions for TermSize {
 }
 
 type Callback = dyn Fn(TermEvent) + Send + Sync;
-type ColorFormat = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
 
-/// Bridges alacritty's events to the application and answers terminal
-/// queries (DA, size reports) directly on the PTY thread. Color queries go
-/// through the main thread, which can read the runtime overrides (OSC
-/// 4/10/11/12): alacritty asks while the PTY thread holds the term lock.
-#[derive(Clone)]
-struct Listener {
-    inner: Arc<ListenerInner>,
-}
-
-struct ListenerInner {
+/// Where both engines report to the application.
+pub(crate) struct EventSink {
     callback: Box<Callback>,
-    /// Set once the event loop exists; replies are written back through it.
-    sender: OnceLock<EventLoopSender>,
-    palette: RwLock<Palette>,
-    size: Mutex<WindowSize>,
     /// Coalesces wakeups: only one is in flight until the next snapshot.
     wakeup_pending: AtomicBool,
     /// File stem of the program nuntio started, to recognize conhost's
     /// default title.
     shell_name: String,
-    /// Color queries waiting for [`TermHandle::answer_color_queries`].
-    color_queries: Mutex<Vec<(usize, ColorFormat)>>,
 }
 
-impl ListenerInner {
-    fn write(&self, text: String) {
-        if let Some(sender) = self.sender.get() {
-            let _ = sender.send(Msg::Input(Cow::Owned(text.into_bytes())));
+impl EventSink {
+    /// New content; sent only if the last wakeup was taken.
+    pub(crate) fn wakeup(&self) {
+        if !self.wakeup_pending.swap(true, Ordering::AcqRel) {
+            (self.callback)(TermEvent::Wakeup);
         }
     }
+
+    pub(crate) fn title(&self, title: String) {
+        // ConPTY announces the program's path as the title at startup;
+        // that's no title of its own, so the tab keeps its fallback.
+        if is_console_default_title(&title, &self.shell_name) {
+            (self.callback)(TermEvent::ResetTitle);
+        } else {
+            (self.callback)(TermEvent::Title(title));
+        }
+    }
+
+    pub(crate) fn send(&self, event: TermEvent) {
+        (self.callback)(event);
+    }
+
+    /// The pending wakeup was taken; the next output sends another.
+    pub(crate) fn ack(&self) {
+        self.wakeup_pending.store(false, Ordering::Release);
+    }
 }
 
-impl EventListener for Listener {
-    fn send_event(&self, event: Event) {
-        let inner = &self.inner;
-        let forward = match event {
-            Event::Wakeup => {
-                if inner.wakeup_pending.swap(true, Ordering::AcqRel) {
-                    return;
-                }
-                TermEvent::Wakeup
-            }
-            // ConPTY announces the program's path as the title at startup;
-            // that's no title of its own, so the tab keeps its fallback.
-            Event::Title(title) if is_console_default_title(&title, &inner.shell_name) => {
-                TermEvent::ResetTitle
-            }
-            Event::Title(title) => TermEvent::Title(title),
-            Event::ResetTitle => TermEvent::ResetTitle,
-            Event::Bell => TermEvent::Bell,
-            // `ChildExit` comes before the remaining output is drained;
-            // `Exit` follows once the terminal is done.
-            Event::Exit => TermEvent::Exit,
-            Event::ChildExit(status) => {
-                tracing::debug!(%status, "shell exited");
-                return;
-            }
-            Event::ClipboardStore(_, text) => TermEvent::ClipboardStore(text),
-            Event::PtyWrite(text) => return inner.write(text),
-            Event::ColorRequest(index, format) => {
-                inner
-                    .color_queries
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push((index, format));
-                TermEvent::ColorQuery
-            }
-            Event::TextAreaSizeRequest(format) => {
-                let size = *inner.size.lock().unwrap_or_else(PoisonError::into_inner);
-                return inner.write(format(size));
-            }
-            // Programs may not read the clipboard (OSC 52 queries), as in
-            // xterm and iTerm2 by default: it could leak passwords. There is
-            // no reply, so the program sees no answer at all.
-            Event::ClipboardLoad(..) => {
-                tracing::debug!("denied a clipboard read (OSC 52)");
-                return;
-            }
-            // The cursor is re-read with every snapshot.
-            Event::MouseCursorDirty | Event::CursorBlinkingChange => return,
-        };
-        (inner.callback)(forward);
-    }
+/// A started shell, before an engine is attached to its PTY.
+struct OpenedPty {
+    pty: tty::Pty,
+    child_pid: Option<u32>,
+    via_login: bool,
+    runs_command: bool,
+    shell_name: String,
+    reported_dir: Arc<Mutex<Option<ReportedDir>>>,
+}
+
+/// Start the shell in a new PTY. `options.shell` and `options.env` are
+/// taken.
+fn open_pty(options: &mut SpawnOptions, size: TermSize) -> Result<OpenedPty, SpawnError> {
+    let shell_program = options
+        .shell
+        .as_ref()
+        .map(|s| s.program.clone())
+        .unwrap_or_else(default_shell_name);
+    let shell_name = Path::new(&shell_program)
+        .file_stem()
+        .map_or(shell_program.clone(), |s| s.to_string_lossy().into_owned());
+
+    let mut env = HashMap::from([
+        ("TERM".into(), "xterm-256color".into()),
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM_PROGRAM".into(), "nuntio".into()),
+        (
+            "TERM_PROGRAM_VERSION".into(),
+            env!("CARGO_PKG_VERSION").into(),
+        ),
+    ]);
+    env.extend(std::mem::take(&mut options.env));
+    #[cfg(windows)]
+    env.insert(
+        "WSLENV".into(),
+        wslenv(std::env::var("WSLENV").ok().as_deref()),
+    );
+    // Without a shell, alacritty runs the default one through `login`
+    // on macOS as well.
+    let via_login = cfg!(target_os = "macos") && (options.shell.is_none() || options.login_shell);
+    let runs_command = options.shell.is_some() && !options.login_shell;
+    let shell = match options.shell.take() {
+        #[cfg(target_os = "macos")]
+        Some(shell) if options.login_shell => Some(login_command(&shell)),
+        shell => shell,
+    };
+    let pty_options = tty::Options {
+        shell: shell.map(|s| tty::Shell::new(s.program, s.args)),
+        working_directory: options.working_directory.clone(),
+        drain_on_exit: true,
+        env,
+        #[cfg(target_os = "windows")]
+        escape_args: true,
+    };
+    let pty = tty::new(&pty_options, size.window_size(), 0).map_err(SpawnError::Pty)?;
+    #[cfg(unix)]
+    let child_pid = Some(pty.child().id());
+    #[cfg(windows)]
+    let child_pid = pty.child_watcher().pid().map(|pid| pid.get());
+
+    Ok(OpenedPty {
+        pty,
+        child_pid,
+        via_login,
+        runs_command,
+        shell_name,
+        reported_dir: Arc::new(Mutex::new(None)),
+    })
+}
+
+/// The engine-specific part of a pane.
+enum EnginePane {
+    Alacritty(AlacrittyPane),
+    #[cfg(feature = "wezterm")]
+    Wezterm(crate::wezterm::WeztermPane),
+}
+
+/// Forward a call to the pane's engine.
+macro_rules! dispatch {
+    ($self:ident, $pane:ident => $call:expr) => {
+        match &$self.engine {
+            EnginePane::Alacritty($pane) => $call,
+            #[cfg(feature = "wezterm")]
+            EnginePane::Wezterm($pane) => $call,
+        }
+    };
 }
 
 /// One terminal: grid state, the shell's PTY and its IO thread.
 pub struct TermHandle {
-    term: Arc<FairMutex<Term<Listener>>>,
-    listener: Listener,
-    sender: EventLoopSender,
+    engine: EnginePane,
+    sink: Arc<EventSink>,
     /// The process nuntio started: the shell, or `login` running it.
     child_pid: Option<u32>,
     /// `child_pid` is `login`; the shell is its child.
@@ -236,97 +280,55 @@ pub struct TermHandle {
 impl TermHandle {
     /// Spawn a shell. `callback` is invoked from the PTY thread.
     pub fn spawn(
-        options: SpawnOptions,
+        mut options: SpawnOptions,
         size: TermSize,
         callback: impl Fn(TermEvent) + Send + Sync + 'static,
     ) -> Result<Self, SpawnError> {
         let size = size.clamped();
-        let shell_program = options
-            .shell
-            .as_ref()
-            .map(|s| s.program.clone())
-            .unwrap_or_else(default_shell_name);
-        let shell_name = Path::new(&shell_program)
-            .file_stem()
-            .map_or(shell_program.clone(), |s| s.to_string_lossy().into_owned());
-
-        let listener = Listener {
-            inner: Arc::new(ListenerInner {
-                callback: Box::new(callback),
-                sender: OnceLock::new(),
-                palette: RwLock::new(options.palette),
-                size: Mutex::new(size.window_size()),
-                wakeup_pending: AtomicBool::new(false),
-                shell_name: shell_name.clone(),
-                color_queries: Mutex::new(Vec::new()),
-            }),
+        let opened = open_pty(&mut options, size)?;
+        let sink = Arc::new(EventSink {
+            callback: Box::new(callback),
+            wakeup_pending: AtomicBool::new(false),
+            shell_name: opened.shell_name.clone(),
+        });
+        let reported_dir = opened.reported_dir.clone();
+        let engine = match options.engine {
+            Engine::Alacritty => EnginePane::Alacritty(AlacrittyPane::spawn(
+                opened.pty,
+                reported_dir,
+                &options,
+                size,
+                sink.clone(),
+            )?),
+            #[cfg(feature = "wezterm")]
+            Engine::Wezterm => EnginePane::Wezterm(crate::wezterm::WeztermPane::spawn(
+                opened.pty,
+                reported_dir,
+                &options,
+                size,
+                sink.clone(),
+            )?),
         };
-
-        let config = term_config(options.term);
-        let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
-
-        let mut env = HashMap::from([
-            ("TERM".into(), "xterm-256color".into()),
-            ("COLORTERM".into(), "truecolor".into()),
-            ("TERM_PROGRAM".into(), "nuntio".into()),
-            (
-                "TERM_PROGRAM_VERSION".into(),
-                env!("CARGO_PKG_VERSION").into(),
-            ),
-        ]);
-        env.extend(options.env);
-        #[cfg(windows)]
-        env.insert(
-            "WSLENV".into(),
-            wslenv(std::env::var("WSLENV").ok().as_deref()),
-        );
-        // Without a shell, alacritty runs the default one through `login`
-        // on macOS as well.
-        let via_login =
-            cfg!(target_os = "macos") && (options.shell.is_none() || options.login_shell);
-        let runs_command = options.shell.is_some() && !options.login_shell;
-        let shell = match options.shell {
-            #[cfg(target_os = "macos")]
-            Some(shell) if options.login_shell => Some(login_command(&shell)),
-            shell => shell,
-        };
-        let pty_options = tty::Options {
-            shell: shell.map(|s| tty::Shell::new(s.program, s.args)),
-            working_directory: options.working_directory,
-            drain_on_exit: true,
-            env,
-            #[cfg(target_os = "windows")]
-            escape_args: true,
-        };
-        let pty = tty::new(&pty_options, size.window_size(), 0).map_err(SpawnError::Pty)?;
-        #[cfg(unix)]
-        let child_pid = Some(pty.child().id());
-        #[cfg(windows)]
-        let child_pid = pty.child_watcher().pid().map(|pid| pid.get());
-
-        let reported_dir = Arc::new(Mutex::new(None));
-        let pty = TeePty {
-            pty,
-            scanner: CwdScanner::default(),
-            reported: reported_dir.clone(),
-        };
-        let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)
-            .map_err(SpawnError::EventLoop)?;
-        let sender = event_loop.channel();
-        let _ = listener.inner.sender.set(sender.clone());
-        event_loop.spawn();
 
         Ok(Self {
-            term,
-            listener,
-            sender,
-            child_pid,
-            via_login,
+            engine,
+            sink,
+            child_pid: opened.child_pid,
+            via_login: opened.via_login,
             shell_pid: OnceLock::new(),
-            shell_name,
-            runs_command,
-            reported_dir,
+            shell_name: opened.shell_name,
+            runs_command: opened.runs_command,
+            reported_dir: opened.reported_dir,
         })
+    }
+
+    /// The emulator core of this pane.
+    pub fn engine(&self) -> Engine {
+        match self.engine {
+            EnginePane::Alacritty(_) => Engine::Alacritty,
+            #[cfg(feature = "wezterm")]
+            EnginePane::Wezterm(_) => Engine::Wezterm,
+        }
     }
 
     /// The shell's pid. Behind `login`, that's `login` itself until it
@@ -350,81 +352,59 @@ impl TermHandle {
         }
     }
 
-    /// Send user input to the shell.
+    /// Send user input to the shell. Scrolls back to the bottom, like
+    /// every terminal does.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let bytes = bytes.into();
         if bytes.is_empty() {
             return;
         }
-        // Typing jumps back to the bottom, like every terminal does.
-        self.term.lock().scroll_display(Scroll::Bottom);
-        let _ = self.sender.send(Msg::Input(bytes));
+        dispatch!(self, pane => pane.write(bytes))
     }
 
     /// Paste text, wrapped in bracketed-paste markers if the app asked for them.
     pub fn paste(&self, text: &str) {
-        let bracketed = self.mode().contains(term::TermMode::BRACKETED_PASTE);
+        let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
         self.write(encode_paste(text, bracketed));
     }
 
     /// Scroll the viewport; positive values move up into the scrollback.
     pub fn scroll(&self, lines: i32) {
-        self.term.lock().scroll_display(Scroll::Delta(lines));
+        dispatch!(self, pane => pane.scroll(lines))
     }
 
     pub fn scroll_page(&self, up: bool) {
-        self.term
-            .lock()
-            .scroll_display(if up { Scroll::PageUp } else { Scroll::PageDown });
+        dispatch!(self, pane => pane.scroll_page(up))
     }
 
     /// Drop the scrollback, keeping the visible screen.
     pub fn clear_history(&self) {
-        use alacritty_terminal::vte::ansi::{ClearMode, Handler};
-        let mut term = self.term.lock();
-        term.scroll_display(Scroll::Bottom);
-        term.clear_screen(ClearMode::Saved);
+        dispatch!(self, pane => pane.clear_history())
     }
 
     pub fn start_selection(&self, kind: SelectionKind, point: GridPoint) {
-        let mut term = self.term.lock();
-        let (point, side) = point.to_grid(term.grid().display_offset());
-        term.selection = Some(Selection::new(kind.into(), point, side));
+        dispatch!(self, pane => pane.start_selection(kind, point))
     }
 
     pub fn update_selection(&self, point: GridPoint) {
-        let mut term = self.term.lock();
-        let (point, side) = point.to_grid(term.grid().display_offset());
-        if let Some(selection) = term.selection.as_mut() {
-            selection.update(point, side);
-        }
+        dispatch!(self, pane => pane.update_selection(point))
     }
 
     pub fn has_selection(&self) -> bool {
-        self.term.lock().selection.is_some()
+        dispatch!(self, pane => pane.has_selection())
     }
 
     pub fn clear_selection(&self) {
-        self.term.lock().selection = None;
+        dispatch!(self, pane => pane.clear_selection())
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        self.term
-            .lock()
-            .selection_to_string()
-            .filter(|s| !s.is_empty())
+        dispatch!(self, pane => pane.selection_text())
     }
 
     pub fn resize(&self, size: TermSize) {
         let size = size.clamped();
-        *self
-            .listener
-            .inner
-            .size
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = size.window_size();
-        self.term.lock().resize(size);
-        let _ = self.sender.send(Msg::Resize(size.window_size()));
+        dispatch!(self, pane => pane.resize(size))
     }
 
     /// Name of the foreground process, or the shell's name if unknown.
@@ -472,183 +452,52 @@ impl TermHandle {
     /// Change the terminal options. Less scrollback drops the oldest
     /// lines.
     pub fn set_options(&self, options: TermOptions) {
-        self.term.lock().set_options(term_config(options));
+        dispatch!(self, pane => pane.set_options(options))
     }
 
     /// Change the colors, e.g. after a theme switch.
     pub fn set_palette(&self, palette: Palette) {
-        *self
-            .listener
-            .inner
-            .palette
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = palette;
+        dispatch!(self, pane => pane.set_palette(palette))
     }
 
     /// Terminal modes, e.g. for application cursor keys.
-    pub fn mode(&self) -> term::TermMode {
-        *self.term.lock().mode()
+    pub fn mode(&self) -> TermMode {
+        dispatch!(self, pane => pane.mode())
     }
 
     /// Copy the visible screen for rendering.
     pub fn snapshot(&self) -> Snapshot {
-        self.listener
-            .inner
-            .wakeup_pending
-            .store(false, Ordering::Release);
-        let term = self.term.lock();
-        let palette = self
-            .listener
-            .inner
-            .palette
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        Snapshot::capture(&term, &palette, &[], None)
+        dispatch!(self, pane => pane.snapshot())
     }
 
     /// Answer the color queries programs sent (see
     /// [`TermEvent::ColorQuery`]), with runtime overrides taking precedence
     /// over the palette.
     pub fn answer_color_queries(&self) {
-        // Same lock order as the PTY thread: term, then the queue.
-        let replies: Vec<String> = {
-            let term = self.term.lock();
-            let queries = std::mem::take(
-                &mut *self
-                    .listener
-                    .inner
-                    .color_queries
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner),
-            );
-            if queries.is_empty() {
-                return;
-            }
-            let palette = self
-                .listener
-                .inner
-                .palette
-                .read()
-                .unwrap_or_else(PoisonError::into_inner);
-            queries
-                .into_iter()
-                .map(|(index, format)| format(term.colors()[index].unwrap_or(palette.get(index))))
-                .collect()
-        };
-        for reply in replies {
-            self.listener.inner.write(reply);
-        }
+        dispatch!(self, pane => pane.answer_color_queries())
     }
 
     /// Let the next output send a wakeup without taking a snapshot, for a
     /// pane whose output is awaited rather than drawn.
     pub fn ack_wakeup(&self) {
-        self.listener
-            .inner
-            .wakeup_pending
-            .store(false, Ordering::Release);
+        self.sink.ack();
     }
 
     /// Like [`snapshot`](Self::snapshot), with the matches of `search`
     /// highlighted.
     pub fn search_snapshot(&self, search: &mut Search) -> Snapshot {
-        self.listener
-            .inner
-            .wakeup_pending
-            .store(false, Ordering::Release);
-        let term = self.term.lock();
-        let matches = search::visible_matches(&term, search);
-        let palette = self
-            .listener
-            .inner
-            .palette
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        Snapshot::capture(&term, &palette, &matches, search.current_in(&term))
+        dispatch!(self, pane => pane.search_snapshot(search))
     }
 
     /// Select the next match upwards (older output) or downwards and scroll
     /// to it. Returns whether there is a match.
     pub fn search(&self, search: &mut Search, up: bool) -> bool {
-        search::find(&mut self.term.lock(), search, up)
+        dispatch!(self, pane => pane.search(search, up))
     }
 
     /// The link (OSC 8 hyperlink or URL) at a viewport position.
     pub fn link_at(&self, point: GridPoint) -> Option<Link> {
-        let term = self.term.lock();
-        let (point, _) = point.to_grid(term.grid().display_offset());
-        url::link_at(&term, point)
-    }
-}
-
-/// The PTY, with its output scanned for the directory the shell reports.
-struct TeePty {
-    pty: tty::Pty,
-    scanner: CwdScanner,
-    reported: Arc<Mutex<Option<ReportedDir>>>,
-}
-
-impl io::Read for TeePty {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.pty.reader().read(buf)?;
-        if let Some(dir) = self.scanner.feed(&buf[..n]) {
-            *self.reported.lock().unwrap_or_else(PoisonError::into_inner) = Some(dir);
-        }
-        Ok(n)
-    }
-}
-
-impl EventedReadWrite for TeePty {
-    type Reader = Self;
-    type Writer = <tty::Pty as EventedReadWrite>::Writer;
-
-    unsafe fn register(
-        &mut self,
-        poll: &Arc<Poller>,
-        interest: polling::Event,
-        mode: PollMode,
-    ) -> io::Result<()> {
-        // SAFETY: the PTY lives in `self`, as long as its registration.
-        unsafe { self.pty.register(poll, interest, mode) }
-    }
-
-    fn reregister(
-        &mut self,
-        poll: &Arc<Poller>,
-        interest: polling::Event,
-        mode: PollMode,
-    ) -> io::Result<()> {
-        self.pty.reregister(poll, interest, mode)
-    }
-
-    fn deregister(&mut self, poll: &Arc<Poller>) -> io::Result<()> {
-        self.pty.deregister(poll)
-    }
-
-    fn reader(&mut self) -> &mut Self {
-        self
-    }
-
-    fn writer(&mut self) -> &mut Self::Writer {
-        self.pty.writer()
-    }
-}
-
-impl EventedPty for TeePty {
-    fn next_child_event(&mut self) -> Option<ChildEvent> {
-        self.pty.next_child_event()
-    }
-}
-
-impl OnResize for TeePty {
-    fn on_resize(&mut self, window_size: WindowSize) {
-        self.pty.on_resize(window_size);
-    }
-}
-
-impl Drop for TermHandle {
-    fn drop(&mut self) {
-        let _ = self.sender.send(Msg::Shutdown);
+        dispatch!(self, pane => pane.link_at(point))
     }
 }
 
@@ -664,17 +513,6 @@ pub enum SelectionKind {
     Lines,
 }
 
-impl From<SelectionKind> for SelectionType {
-    fn from(kind: SelectionKind) -> Self {
-        match kind {
-            SelectionKind::Simple => SelectionType::Simple,
-            SelectionKind::Block => SelectionType::Block,
-            SelectionKind::Semantic => SelectionType::Semantic,
-            SelectionKind::Lines => SelectionType::Lines,
-        }
-    }
-}
-
 /// A position in the visible grid, as seen by the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridPoint {
@@ -683,32 +521,6 @@ pub struct GridPoint {
     pub line: usize,
     /// The pointer is on the right half of the cell.
     pub right_half: bool,
-}
-
-impl GridPoint {
-    fn to_grid(self, display_offset: usize) -> (Point, Side) {
-        let point = viewport_to_point(display_offset, Point::new(self.line, Column(self.column)));
-        let side = if self.right_half {
-            Side::Right
-        } else {
-            Side::Left
-        };
-        (point, side)
-    }
-}
-
-/// alacritty's terminal options.
-fn term_config(options: TermOptions) -> term::Config {
-    term::Config {
-        scrolling_history: options.scrollback,
-        osc52: if options.clipboard_write {
-            term::Osc52::OnlyCopy
-        } else {
-            term::Osc52::Disabled
-        },
-        kitty_keyboard: options.kitty_keyboard,
-        ..Default::default()
-    }
 }
 
 /// The shell alacritty starts when none is configured.
@@ -840,8 +652,6 @@ fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::index::Line;
-
     use super::*;
 
     #[test]
@@ -921,17 +731,5 @@ mod tests {
             encode_paste("\x1b[20\x1b[201~1~echo pwned\n", true),
             b"\x1b[200~[20[201~1~echo pwned\n\x1b[201~"
         );
-    }
-
-    #[test]
-    fn grid_point_respects_scrollback() {
-        let p = GridPoint {
-            column: 3,
-            line: 0,
-            right_half: true,
-        };
-        let (point, side) = p.to_grid(5);
-        assert_eq!(point, Point::new(Line(-5), Column(3)));
-        assert_eq!(side, Side::Right);
     }
 }

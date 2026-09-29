@@ -65,7 +65,7 @@ nuntio watches the config file and the `themes/` directory and applies changes a
 - If the config is invalid at **startup**, nuntio starts with the defaults and shows the error.
 - With several problems, the banner shows how many (`(1/3)`). Click it for the next one, or click the × to close it.
 
-Most settings apply to open panes right away; `scrollback` too, and a smaller value drops the oldest lines. `shell` applies to panes opened after the change.
+Most settings apply to open panes right away; `scrollback` too, and a smaller value drops the oldest lines. `shell` and `engine` apply to panes opened after the change.
 
 ## Full example
 
@@ -92,6 +92,9 @@ confirm_paste = true
 
 # Programs may turn on the kitty keyboard protocol.
 kitty_keyboard = true
+
+# The emulator core for new panes: "alacritty" or "wezterm".
+engine = "alacritty"
 
 # One theme name…
 theme = "iTerm2 Default"
@@ -165,6 +168,7 @@ option_as_meta = "none"
 | `clipboard_write` | bool | `true` | Let programs copy to the clipboard with OSC 52, e.g. vim or tmux over ssh. Programs can never read the clipboard, so a program can't see what you copied, but one could replace it before you paste. |
 | `confirm_paste` | bool | `true` | Ask before pasting text with line breaks where the program doesn't use bracketed paste, so the shell would run each line at once. A banner says how many lines would run; pasting again within 5 seconds confirms. Shells that use bracketed paste (bash 5.1 and later, zsh and fish do) show pasted lines without running them, so nuntio doesn't ask there. |
 | `kitty_keyboard` | bool | `true` | Let programs turn on the [kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/). Programs that use it (neovim, helix, fish 4 and others) can then tell keys like Ctrl+I and Tab or Esc and Alt apart and see key releases. It only applies while a program asks for it; turn it off if one misbehaves. |
+| `engine` | string | `"alacritty"` | The emulator core that parses the output of new panes. `"alacritty"`: Alacritty's. `"wezterm"`: WezTerm's; only in builds with the `wezterm` cargo feature, otherwise nuntio warns and uses Alacritty's. Open panes keep their engine. |
 | `theme` | string or table | `"iTerm2 Default"` | A theme name, or `{ light = "…", dark = "…" }` to follow the OS appearance. See [Themes](#themes). |
 
 ### `[font]`

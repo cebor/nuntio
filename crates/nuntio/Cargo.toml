@@ -25,6 +25,8 @@ doc = false
 # Remote control for debugging (`--debug-server`, driven by `cargo xtask
 # drive`). Not in release packages.
 debug-server = ["dep:serde_json", "nuntio-render/capture"]
+# WezTerm's emulator core as a second engine (`engine = "wezterm"`).
+wezterm = ["nuntio-term/wezterm"]
 
 [dependencies]
 serde_json = { workspace = true, optional = true }

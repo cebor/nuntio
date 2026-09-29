@@ -41,7 +41,7 @@ For changes to rendering or terminal emulation, please also check the affected c
 | `crates/nuntio-config` | Config schema, loading, themes |
 | `crates/nuntio-config-tui` | The `nuntio-config` terminal UI |
 | `crates/nuntio-render` | wgpu renderer |
-| `crates/nuntio-term` | Wrapper around `alacritty_terminal` and the PTY |
+| `crates/nuntio-term` | Terminal emulation (`alacritty_terminal`; `wezterm-term` with the `wezterm` feature) and the PTY |
 | `xtask` | Icons, packaging, changelog, website |
 
 Conventions:

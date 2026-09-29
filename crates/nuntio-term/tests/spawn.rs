@@ -4,8 +4,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use nuntio_term::{
-    GridPoint, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
-    TermOptions, TermSize,
+    Engine, GridPoint, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle,
+    TermMode, TermOptions, TermSize,
 };
 
 const SIZE: TermSize = TermSize {
@@ -15,8 +15,8 @@ const SIZE: TermSize = TermSize {
     cell_height: 16,
 };
 
-fn spawn(script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
-    spawn_with_env(script, Vec::new())
+fn spawn(engine: Engine, script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
+    spawn_with_env(engine, script, Vec::new())
 }
 
 const OPTIONS: TermOptions = TermOptions {
@@ -26,13 +26,15 @@ const OPTIONS: TermOptions = TermOptions {
 };
 
 fn spawn_with_env(
+    engine: Engine,
     script: &str,
     env: Vec<(String, String)>,
 ) -> (TermHandle, mpsc::Receiver<TermEvent>) {
-    spawn_with(script, env, OPTIONS)
+    spawn_with(engine, script, env, OPTIONS)
 }
 
 fn spawn_with(
+    engine: Engine,
     script: &str,
     env: Vec<(String, String)>,
     term: TermOptions,
@@ -48,6 +50,7 @@ fn spawn_with(
         term,
         palette: Default::default(),
         env,
+        engine,
     };
     let handle = TermHandle::spawn(options, SIZE, move |event| {
         let _ = tx.send(event);
@@ -79,9 +82,8 @@ fn line_text(handle: &TermHandle, line: usize) -> String {
         .into()
 }
 
-#[test]
-fn output_reaches_the_grid() {
-    let (handle, rx) = spawn("printf 'hello\\r\\n\\033[1;31mred\\033[0m'");
+fn output_reaches_the_grid(engine: Engine) {
+    let (handle, rx) = spawn(engine, "printf 'hello\\r\\n\\033[1;31mred\\033[0m'");
     wait_for_exit(&rx);
 
     assert_eq!(line_text(&handle, 0), "hello");
@@ -92,29 +94,26 @@ fn output_reaches_the_grid() {
     assert_eq!((red.fg.r, red.fg.g, red.fg.b), (0xc9, 0x1b, 0x00));
 }
 
-#[test]
-fn environment_and_size() {
-    let (handle, rx) = spawn("printf \"$TERM $COLORTERM\"; stty size");
+fn environment_and_size(engine: Engine) {
+    let (handle, rx) = spawn(engine, "printf \"$TERM $COLORTERM\"; stty size");
     wait_for_exit(&rx);
 
     assert_eq!(line_text(&handle, 0), "xterm-256color truecolor5 40");
 }
 
-#[test]
-fn extra_environment() {
+fn extra_environment(engine: Engine) {
     let env = vec![
         ("NUNTIO_CONFIG".to_owned(), "/tmp/x.toml".to_owned()),
         ("TERM".to_owned(), "dumb".to_owned()),
     ];
-    let (handle, rx) = spawn_with_env("printf \"$NUNTIO_CONFIG $TERM\"", env);
+    let (handle, rx) = spawn_with_env(engine, "printf \"$NUNTIO_CONFIG $TERM\"", env);
     wait_for_exit(&rx);
 
     assert_eq!(line_text(&handle, 0), "/tmp/x.toml dumb");
 }
 
-#[test]
-fn title_is_reported() {
-    let (_handle, rx) = spawn("printf '\\033]0;my title\\007'");
+fn title_is_reported(engine: Engine) {
+    let (_handle, rx) = spawn(engine, "printf '\\033]0;my title\\007'");
     let events = wait_for_exit(&rx);
 
     assert!(
@@ -131,9 +130,8 @@ fn at(column: usize, line: usize) -> GridPoint {
     }
 }
 
-#[test]
-fn selection_kinds() {
-    let (handle, rx) = spawn("printf 'hello world\\r\\nsecond line'");
+fn selection_kinds(engine: Engine) {
+    let (handle, rx) = spawn(engine, "printf 'hello world\\r\\nsecond line'");
     wait_for_exit(&rx);
 
     handle.start_selection(SelectionKind::Semantic, at(7, 0));
@@ -161,9 +159,11 @@ fn selection_kinds() {
     assert_eq!(handle.selection_text(), None);
 }
 
-#[test]
-fn scrolling_stops_at_both_ends() {
-    let (handle, rx) = spawn("for i in $(seq 1 30); do echo line$i; done; printf end");
+fn scrolling_stops_at_both_ends(engine: Engine) {
+    let (handle, rx) = spawn(
+        engine,
+        "for i in $(seq 1 30); do echo line$i; done; printf end",
+    );
     wait_for_exit(&rx);
     let top = |h: &TermHandle| line_text(h, 0);
 
@@ -179,10 +179,9 @@ fn scrolling_stops_at_both_ends() {
     assert_eq!(top(&handle), "line27");
 }
 
-#[test]
 #[cfg(target_os = "linux")]
-fn foreground_process_and_directory() {
-    let (handle, _rx) = spawn("cd /tmp && exec sleep 5");
+fn foreground_process_and_directory(engine: Engine) {
+    let (handle, _rx) = spawn(engine, "cd /tmp && exec sleep 5");
     // Wait until the shell has exec'd into sleep.
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while handle.process_name() != "sleep" && std::time::Instant::now() < deadline {
@@ -197,16 +196,17 @@ fn foreground_process_and_directory() {
 
 /// A pane that runs a command has no prompt, even though the command is
 /// its own process group leader.
-#[test]
 #[cfg(unix)]
-fn a_command_is_not_an_idle_shell() {
-    let (handle, _rx) = spawn("exec sleep 5");
+fn a_command_is_not_an_idle_shell(engine: Engine) {
+    let (handle, _rx) = spawn(engine, "exec sleep 5");
     assert_eq!(handle.foreground_is_shell(), None);
 }
 
-#[test]
-fn reported_directory() {
-    let (handle, rx) = spawn(r"printf '\033]7;file://box/home/me/My%%20Files\033\\'");
+fn reported_directory(engine: Engine) {
+    let (handle, rx) = spawn(
+        engine,
+        r"printf '\033]7;file://box/home/me/My%%20Files\033\\'",
+    );
     wait_for_exit(&rx);
     assert_eq!(
         handle.reported_directory(),
@@ -216,9 +216,8 @@ fn reported_directory() {
 
 /// On macOS the user's shell runs behind `login`, which is the process
 /// nuntio started; the shell at its prompt still counts as idle.
-#[test]
 #[cfg(target_os = "macos")]
-fn login_shell_is_seen_behind_login() {
+fn login_shell_is_seen_behind_login(engine: Engine) {
     let (tx, _rx) = mpsc::channel();
     let options = SpawnOptions {
         shell: Some(Shell {
@@ -230,6 +229,7 @@ fn login_shell_is_seen_behind_login() {
         term: OPTIONS,
         palette: Default::default(),
         env: Vec::new(),
+        engine,
     };
     let handle = TermHandle::spawn(options, SIZE, move |event| {
         let _ = tx.send(event);
@@ -258,9 +258,9 @@ fn login_shell_is_seen_behind_login() {
     assert_eq!(handle.foreground_is_shell(), Some(false));
 }
 
-#[test]
-fn search_through_scrollback() {
+fn search_through_scrollback(engine: Engine) {
     let (handle, rx) = spawn(
+        engine,
         "echo marker-A; for i in $(seq 1 30); do echo x; done; echo marker-B; printf 'x\\r\\nx\\r\\nend'",
     );
     wait_for_exit(&rx);
@@ -297,9 +297,9 @@ fn screen_contains(handle: &TermHandle, text: &str) -> bool {
     (0..SIZE.lines as usize).any(|l| line_text(handle, l).contains(text))
 }
 
-#[test]
-fn links_in_text_and_osc8() {
+fn links_in_text_and_osc8(engine: Engine) {
     let (handle, rx) = spawn(
+        engine,
         "printf 'see https://example.com/x, ok\\r\\n\\033]8;;https://nuntio.dev\\033\\\\click\\033]8;;\\033\\\\ here'",
     );
     wait_for_exit(&rx);
@@ -315,11 +315,10 @@ fn links_in_text_and_osc8() {
     assert_eq!(handle.link_at(at(7, 1)), None);
 }
 
-#[test]
-fn links_across_wrapped_lines() {
+fn links_across_wrapped_lines(engine: Engine) {
     // 40 columns: the URL wraps onto the second row.
     let url = format!("https://example.com/{}", "a".repeat(40));
-    let (handle, rx) = spawn(&format!("printf '{url}'"));
+    let (handle, rx) = spawn(engine, &format!("printf '{url}'"));
     wait_for_exit(&rx);
 
     let link = handle.link_at(at(3, 1)).unwrap();
@@ -327,10 +326,9 @@ fn links_across_wrapped_lines() {
     assert_eq!((link.start, link.end), ((0, 0), (19, 1)));
 }
 
-#[test]
-fn search_survives_a_cleared_scrollback() {
+fn search_survives_a_cleared_scrollback(engine: Engine) {
     let script = "echo marker; for i in $(seq 1 60); do echo x; done; printf end";
-    let (handle, rx) = spawn(script);
+    let (handle, rx) = spawn(engine, script);
     wait_for_exit(&rx);
     let mut search = nuntio_term::Search::new("marker", false).unwrap();
     assert!(handle.search(&mut search, true));
@@ -343,7 +341,7 @@ fn search_survives_a_cleared_scrollback() {
     assert!(!handle.search(&mut search, false));
 
     // Refining the query continues from the old match position.
-    let (handle, rx) = spawn(script);
+    let (handle, rx) = spawn(engine, script);
     wait_for_exit(&rx);
     let mut search = nuntio_term::Search::new("marker", false).unwrap();
     assert!(handle.search(&mut search, true));
@@ -354,16 +352,15 @@ fn search_survives_a_cleared_scrollback() {
     assert!(!handle.search(&mut refined, true));
 }
 
-#[test]
-fn wide_characters_in_a_one_column_pane() {
-    let (handle, rx) = spawn("sleep 0.3; printf '漢字'");
+fn wide_characters_in_a_one_column_pane(engine: Engine) {
+    let (handle, rx) = spawn(engine, "sleep 0.3; printf '漢字'");
     handle.resize(TermSize { columns: 1, ..SIZE });
     wait_for_exit(&rx);
 }
 
-#[test]
-fn color_queries_see_runtime_overrides() {
+fn color_queries_see_runtime_overrides(engine: Engine) {
     let (handle, rx) = spawn(
+        engine,
         "stty raw -echo; printf '\\033]11;#102030\\007\\033]11;?\\007'; \
          r=$(dd bs=1 count=24 2>/dev/null); stty sane; \
          case \"$r\" in *1010/2020/3030*) printf OK;; *) printf NO;; esac",
@@ -381,18 +378,19 @@ fn color_queries_see_runtime_overrides() {
     assert!(screen_contains(&handle, "OK"));
 }
 
-#[test]
-fn osc8_links_with_unknown_schemes_are_ignored() {
-    let (handle, rx) = spawn("printf '\\033]8;;ms-msdt:/id x\\033\\\\click\\033]8;;\\033\\\\'");
+fn osc8_links_with_unknown_schemes_are_ignored(engine: Engine) {
+    let (handle, rx) = spawn(
+        engine,
+        "printf '\\033]8;;ms-msdt:/id x\\033\\\\click\\033]8;;\\033\\\\'",
+    );
     wait_for_exit(&rx);
 
     assert_eq!(line_text(&handle, 0), "click");
     assert_eq!(handle.link_at(at(2, 0)), None);
 }
 
-#[test]
-fn every_visible_match_is_highlighted() {
-    let (handle, rx) = spawn("printf 'ab ab\\r\\nx ab'");
+fn every_visible_match_is_highlighted(engine: Engine) {
+    let (handle, rx) = spawn(engine, "printf 'ab ab\\r\\nx ab'");
     wait_for_exit(&rx);
     let mut search = nuntio_term::Search::new("ab", false).unwrap();
     let snapshot = handle.search_snapshot(&mut search);
@@ -409,9 +407,34 @@ fn every_visible_match_is_highlighted() {
     assert_eq!(marked(1), "..##.");
 }
 
-#[test]
-fn scrollback_can_shrink() {
-    let (handle, rx) = spawn("i=1; while [ $i -le 50 ]; do echo line$i; i=$((i+1)); done");
+/// More output than the scrollback holds, so the oldest lines are dropped
+/// while new ones arrive.
+fn output_beyond_the_scrollback(engine: Engine) {
+    let (handle, rx) = spawn(
+        engine,
+        "i=1; while [ $i -le 300 ]; do echo line$i; i=$((i+1)); done",
+    );
+    wait_for_exit(&rx);
+    assert_eq!(line_text(&handle, 3), "line300");
+
+    // 100 lines of history above the 5 on screen.
+    handle.scroll(1000);
+    assert_eq!(line_text(&handle, 0), "line197");
+    handle.start_selection(SelectionKind::Lines, at(0, 0));
+    assert_eq!(handle.selection_text().as_deref(), Some("line197\n"));
+
+    let mut dropped = nuntio_term::Search::new("line150", false).unwrap();
+    assert!(!handle.search(&mut dropped, true));
+    let mut kept = nuntio_term::Search::new("line250", false).unwrap();
+    assert!(handle.search(&mut kept, true));
+    assert!(screen_contains(&handle, "line250"));
+}
+
+fn scrollback_can_shrink(engine: Engine) {
+    let (handle, rx) = spawn(
+        engine,
+        "i=1; while [ $i -le 50 ]; do echo line$i; i=$((i+1)); done",
+    );
     wait_for_exit(&rx);
     // line47 to line50 and an empty line are on screen, the rest is history.
     handle.scroll(1000);
@@ -425,8 +448,7 @@ fn scrollback_can_shrink() {
     assert_eq!(line_text(&handle, 0), "line37");
 }
 
-#[test]
-fn clipboard_writes_can_be_denied() {
+fn clipboard_writes_can_be_denied(engine: Engine) {
     // OSC 52 with "hi" in base64.
     let script = "printf '\\033]52;c;aGk=\\a'";
     let stored = |clipboard_write| {
@@ -434,15 +456,14 @@ fn clipboard_writes_can_be_denied() {
             clipboard_write,
             ..OPTIONS
         };
-        let (_handle, rx) = spawn_with(script, Vec::new(), term);
+        let (_handle, rx) = spawn_with(engine, script, Vec::new(), term);
         wait_for_exit(&rx).contains(&TermEvent::ClipboardStore("hi".into()))
     };
     assert!(stored(true));
     assert!(!stored(false));
 }
 
-#[test]
-fn kitty_keyboard_can_be_turned_off() {
+fn kitty_keyboard_can_be_turned_off(engine: Engine) {
     // Push "disambiguate escape codes" onto the keyboard mode stack.
     let script = "printf '\\033[>1u'";
     let mode = |kitty_keyboard| {
@@ -450,10 +471,53 @@ fn kitty_keyboard_can_be_turned_off() {
             kitty_keyboard,
             ..OPTIONS
         };
-        let (handle, rx) = spawn_with(script, Vec::new(), term);
+        let (handle, rx) = spawn_with(engine, script, Vec::new(), term);
         wait_for_exit(&rx);
         handle.mode()
     };
     assert!(mode(true).contains(TermMode::DISAMBIGUATE_ESC_CODES));
     assert!(!mode(false).intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
 }
+
+/// Every test above, once per engine.
+macro_rules! engine_tests {
+    ($($(#[$attr:meta])* $name:ident),* $(,)?) => {
+        mod alacritty {
+            use super::*;
+            $( $(#[$attr])* #[test] fn $name() { super::$name(Engine::Alacritty) } )*
+        }
+        #[cfg(feature = "wezterm")]
+        mod wezterm {
+            use super::*;
+            $( $(#[$attr])* #[test] fn $name() { super::$name(Engine::Wezterm) } )*
+        }
+    };
+}
+
+engine_tests!(
+    output_reaches_the_grid,
+    environment_and_size,
+    extra_environment,
+    title_is_reported,
+    selection_kinds,
+    scrolling_stops_at_both_ends,
+    #[cfg(target_os = "linux")]
+    foreground_process_and_directory,
+    #[cfg(unix)]
+    a_command_is_not_an_idle_shell,
+    reported_directory,
+    #[cfg(target_os = "macos")]
+    login_shell_is_seen_behind_login,
+    search_through_scrollback,
+    links_in_text_and_osc8,
+    links_across_wrapped_lines,
+    search_survives_a_cleared_scrollback,
+    wide_characters_in_a_one_column_pane,
+    color_queries_see_runtime_overrides,
+    osc8_links_with_unknown_schemes_are_ignored,
+    every_visible_match_is_highlighted,
+    scrollback_can_shrink,
+    output_beyond_the_scrollback,
+    clipboard_writes_can_be_denied,
+    kitty_keyboard_can_be_turned_off,
+);

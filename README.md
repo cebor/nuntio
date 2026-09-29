@@ -173,7 +173,7 @@ In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>
 | Crate | Role |
 |---|---|
 | [`crates/nuntio`](crates/nuntio) | The binary: winit event loop, window and layout, tabs, split tree, key and mouse encoding, shortcuts, tab bar, find bar and banners |
-| [`crates/nuntio-term`](crates/nuntio-term) | Wrapper around `alacritty_terminal`: a PTY and IO thread per pane, snapshots of the visible screen, palette, search, URL detection, foreground process info |
+| [`crates/nuntio-term`](crates/nuntio-term) | Terminal emulation with `alacritty_terminal`, or WezTerm's `wezterm-term` in builds with the `wezterm` feature: a PTY and IO thread per pane, snapshots of the visible screen, palette, search, URL detection, foreground process info |
 | [`crates/nuntio-render`](crates/nuntio-render) | wgpu renderer: instanced quads for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases) and UI; procedural box drawing |
 | [`crates/nuntio-config`](crates/nuntio-config) | Config schema, loading and validation, editing in place, themes (built-in TOML and `.itermcolors`), file watcher |
 | [`crates/nuntio-config-tui`](crates/nuntio-config-tui) | The `nuntio-config` editor: a ratatui terminal UI built on the schema |

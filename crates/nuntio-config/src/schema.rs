@@ -213,6 +213,14 @@ pub static OPTION_AS_META: &[Variant] = &[
     variant("both", "Both Option keys act as Meta."),
 ];
 
+pub static ENGINE: &[Variant] = &[
+    variant("alacritty", "The emulator core of Alacritty."),
+    variant(
+        "wezterm",
+        "The emulator core of WezTerm. Needs a nuntio built with the `wezterm` feature.",
+    ),
+];
+
 const fn setting(
     path: &'static str,
     section: Section,
@@ -280,6 +288,13 @@ pub static SETTINGS: &[Setting] = &[
         "Kitty keyboard protocol",
         Kind::Bool,
         "Let programs like neovim, helix or fish turn on the kitty keyboard protocol, which tells keys like Ctrl+I and Tab apart.",
+    ),
+    setting(
+        "engine",
+        Section::General,
+        "Terminal engine",
+        Kind::Choice(ENGINE),
+        "The emulator core that parses the output of new panes. Open panes keep theirs.",
     ),
     setting(
         "updates.check",
@@ -582,7 +597,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Config, Decorations, MacosTitlebar, OptionAsMeta, StatusBarPosition, StatusItem, TabTitle,
+        Config, Decorations, Engine, MacosTitlebar, OptionAsMeta, StatusBarPosition, StatusItem,
+        TabTitle,
     };
 
     fn leaf_paths(value: &toml::Value, prefix: &str, out: &mut BTreeSet<String>) {
@@ -729,6 +745,10 @@ mod tests {
             Decorations::Custom | Decorations::System => (),
         };
         check(DECORATIONS, &[Decorations::Custom, Decorations::System]);
+        let _ = |e: Engine| match e {
+            Engine::Alacritty | Engine::Wezterm => (),
+        };
+        check(ENGINE, &[Engine::Alacritty, Engine::Wezterm]);
         let _ = |t: MacosTitlebar| match t {
             MacosTitlebar::Native | MacosTitlebar::Transparent | MacosTitlebar::None => (),
         };

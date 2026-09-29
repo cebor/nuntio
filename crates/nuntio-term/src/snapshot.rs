@@ -8,7 +8,7 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use crate::palette::{Palette, dim};
 
-const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
+pub(crate) const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
 /// Style bits the renderer cares about.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

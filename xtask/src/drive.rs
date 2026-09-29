@@ -20,12 +20,13 @@ use crate::{root, run};
 const USAGE: &str = "\
 usage: cargo xtask drive <command>
 
-  start [--visible] [--release] [--size WxH] [--config <file>] [-- <command>...]
+  start [--visible] [--release] [--wezterm] [--size WxH] [--config <file>] [-- <command>...]
                           build nuntio with the debug server and start it in
                           the background (with an empty config by default);
                           headless unless --visible: off-screen on Windows,
                           transparent on macOS, under Xvfb on Linux (needs
-                          xvfb-run)
+                          xvfb-run); --wezterm also builds in the wezterm
+                          engine (`engine = \"wezterm\"` picks it)
   stop                    quit it
   state                   window, tabs, panes, banner, idle time as JSON
   text [--pane N]         the visible lines of a pane
@@ -299,6 +300,7 @@ fn start(args: &mut Args) -> Result<()> {
     };
     let release = args.flag("--release");
     let visible = args.flag("--visible");
+    let wezterm = args.flag("--wezterm");
     let size = args.option("--size")?;
     let config = args.option("--config")?;
     ensure!(args.0.is_empty(), "start: unexpected {:?}", args.0);
@@ -314,7 +316,11 @@ fn start(args: &mut Args) -> Result<()> {
         "--bin",
         "nuntio",
         "--features",
-        "debug-server",
+        if wezterm {
+            "debug-server,wezterm"
+        } else {
+            "debug-server"
+        },
     ]);
     if release {
         build.arg("--release");

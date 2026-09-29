@@ -262,6 +262,24 @@ fn term_options(config: &Config) -> TermOptions {
     }
 }
 
+/// The emulator core of new panes, from the config.
+fn term_engine(config: &Config) -> nuntio_term::Engine {
+    match config.engine {
+        nuntio_config::Engine::Alacritty => nuntio_term::Engine::Alacritty,
+        #[cfg(feature = "wezterm")]
+        nuntio_config::Engine::Wezterm => nuntio_term::Engine::Wezterm,
+        #[cfg(not(feature = "wezterm"))]
+        nuntio_config::Engine::Wezterm => nuntio_term::Engine::Alacritty,
+    }
+}
+
+/// The configured engine isn't compiled in.
+fn engine_warning(config: &Config) -> Option<String> {
+    (cfg!(not(feature = "wezterm")) && config.engine == nuntio_config::Engine::Wezterm).then(|| {
+        "`engine = \"wezterm\"` needs a nuntio built with the `wezterm` feature; new panes use alacritty".into()
+    })
+}
+
 fn themes_dir(config_path: Option<&Path>) -> Option<PathBuf> {
     nuntio_config::themes_dir(config_path?)
 }
@@ -421,6 +439,7 @@ impl Core {
                 .into_iter()
                 .chain(binding_warnings)
                 .chain(theme_warning)
+                .chain(engine_warning(&core.config))
                 .collect(),
         ));
         core
@@ -686,6 +705,7 @@ impl Core {
         let (bindings, binding_warnings) = Bindings::from_config(&loaded.config.keybindings);
         warnings.extend(theme_warnings);
         warnings.extend(binding_warnings);
+        warnings.extend(engine_warning(&loaded.config));
 
         let old = std::mem::replace(&mut self.config, loaded.config);
         self.themes = themes;

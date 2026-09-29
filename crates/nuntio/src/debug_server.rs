@@ -444,6 +444,7 @@ impl Core {
                     "grid": grid,
                     "process": pane.term.process_name(),
                     "app_title": pane.title,
+                    "engine": format!("{:?}", pane.term.engine()).to_lowercase(),
                 }));
             }
             let title = match tab.content.pane_mut(focused) {

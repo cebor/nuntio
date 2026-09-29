@@ -8,7 +8,7 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
 
 /// Longest wrapped line considered when looking for URLs, in rows.
-const MAX_WRAPPED_ROWS: usize = 32;
+pub(crate) const MAX_WRAPPED_ROWS: usize = 32;
 
 /// A link on screen. Positions are viewport (column, line); `start` and
 /// `end` are inclusive and may lie outside the viewport.
@@ -93,7 +93,7 @@ const SCHEMES: [&str; 7] = [
 
 /// Whether `uri` uses one of [`SCHEMES`]. OSC 8 links can carry any URI,
 /// and opening e.g. `ms-msdt:` or `search-ms:` runs OS protocol handlers.
-fn has_known_scheme(uri: &str) -> bool {
+pub(crate) fn has_known_scheme(uri: &str) -> bool {
     let chars: Vec<char> = uri.chars().take(8).collect();
     SCHEMES.iter().any(|scheme| starts_with(&chars, scheme))
 }

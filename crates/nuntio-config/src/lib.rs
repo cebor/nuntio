@@ -36,6 +36,8 @@ pub struct Config {
     pub confirm_paste: bool,
     /// Programs may turn on the kitty keyboard protocol.
     pub kitty_keyboard: bool,
+    /// The emulator core for new panes.
+    pub engine: Engine,
     pub font: Font,
     pub window: Window,
     pub tabs: Tabs,
@@ -57,6 +59,7 @@ impl Default for Config {
             clipboard_write: true,
             confirm_paste: true,
             kitty_keyboard: true,
+            engine: Engine::default(),
             font: Font::default(),
             window: Window::default(),
             tabs: Tabs::default(),
@@ -161,6 +164,15 @@ impl Default for Padding {
     fn default() -> Self {
         Self { x: 8, y: 6 }
     }
+}
+
+/// The emulator core that parses a pane's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Engine {
+    #[default]
+    Alacritty,
+    Wezterm,
 }
 
 /// Who draws the window frame.

@@ -16,14 +16,14 @@ cargo xtask changelog <from>..HEAD
 cargo xtask site [serve] # build the website in site/ with Zola (needs `zola` on PATH)
 ```
 
-Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates. CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on all three OSes, also with `--features nuntio/debug-server`; `release.yml` builds packages when a `v*` tag is pushed.
+Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates. CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on all three OSes, also with `--features nuntio/debug-server` and with `--features nuntio/wezterm`; `release.yml` builds packages (without `wezterm`) when a `v*` tag is pushed.
 
 ## Seeing and driving nuntio (`cargo xtask drive`)
 
 To look at the running terminal or try out a change, use the debug server instead of asking the user for screenshots:
 
 ```sh
-cargo xtask drive start                  # build with --features debug-server, start headless in the background (empty config)
+cargo xtask drive start                  # build with --features debug-server, start headless in the background (empty config); --wezterm adds the wezterm engine
 cargo xtask drive wait-idle              # until no pane had output for 300 ms
 cargo xtask drive shot                   # target/nuntio-debug/shot.png, look at it with Read
 cargo xtask drive text                   # visible lines of the focused pane; `state` for tabs/panes/banner as JSON
@@ -41,7 +41,7 @@ Always test headless, the default: nothing shows up on the user's desktop. Use `
 | Crate | Role |
 |---|---|
 | `crates/nuntio` | Binaries `nuntio` and `nuntio-config` (`src/bin/`, a console program even on Windows). winit event loop (`app.rs`: `App` = `Core` + `Option<WindowState>`; handlers in the child modules `app_input.rs`, `app_panes.rs`), window state and layout (`window.rs`, with `window_pointer.rs` and `window_frame.rs`), tabs (`tabs.rs`), split tree (`pane_tree.rs`), key and mouse encoding (`input.rs`, `mouse.rs`), shortcuts (`actions.rs`), UI overlays (`tab_bar.rs`, `status_bar.rs`, `search_bar.rs`, `banner.rs`) with shared colors and `UiMetrics` (`style.rs`), the macOS menu bar (`macos_menu.rs`) |
-| `crates/nuntio-term` | Wrapper around `alacritty_terminal`: PTY and IO thread per pane (`pane.rs`), `Snapshot` of the visible screen for rendering, palette, search, URL detection, foreground process info |
+| `crates/nuntio-term` | Two emulator engines behind `TermHandle` (`pane.rs`, enum dispatch): `alacritty_terminal` (`alacritty.rs`, the default) and, with the cargo feature `wezterm`, wezterm-term (`src/wezterm/`, own PTY thread, viewport, selection and search; `spawn.rs` tests run against both). PTY per pane (alacritty's `tty` for both), `Snapshot` of the visible screen for rendering, palette, search, URL detection, foreground process info |
 | `crates/nuntio-render` | wgpu renderer: one instanced-quad pipeline for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases) and UI; box-drawing characters are drawn procedurally |
 | `crates/nuntio-config` | Config types, `schema.rs` (every setting with kind, allowed values, help; tests keep it in sync with `Config` and `docs/config.md`), loading/validation, `edit.rs` (toml_edit, keeps comments), key-combo syntax and action names (`keys.rs`), themes, file watcher |
 | `crates/nuntio-config-tui` | The `nuntio-config` TUI (ratatui). Logic in `state.rs` behind a `Store` trait, tested without a terminal; `ui.rs` only draws. Every valid change is written at once, and hot reload is the preview |

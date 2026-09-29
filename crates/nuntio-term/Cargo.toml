@@ -13,6 +13,14 @@ percent-encoding.workspace = true
 polling.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+anyhow = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+termwiz = { workspace = true, optional = true }
+wezterm-term = { workspace = true, optional = true }
+
+[features]
+# WezTerm's emulator core as a second engine.
+wezterm = ["dep:anyhow", "dep:regex", "dep:termwiz", "dep:wezterm-term"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc.workspace = true
