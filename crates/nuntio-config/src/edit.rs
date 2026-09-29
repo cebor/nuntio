@@ -79,9 +79,20 @@ impl ConfigDoc {
 
     /// Remove the value at `path`, so that the default applies. Tables that
     /// become empty are removed too, unless a comment is attached to them.
+    /// An emptied `shell` table is removed even with a comment, since it
+    /// would be invalid.
     pub fn unset(&mut self, path: &str) {
         let keys: Vec<&str> = path.split('.').collect();
         remove_in(self.doc.as_table_mut(), &keys);
+        if keys.first() == Some(&"shell")
+            && self
+                .doc
+                .get("shell")
+                .and_then(Item::as_table_like)
+                .is_some_and(TableLike::is_empty)
+        {
+            self.doc.remove("shell");
+        }
     }
 
     /// The `[[keybindings]]` entries, in file order. Missing fields are
@@ -435,6 +446,15 @@ mod tests {
 
         let out = edited("[font]\nsize = 12.0\n", |d| d.unset("font.family"));
         assert_eq!(out, "[font]\nsize = 12.0\n");
+    }
+
+    #[test]
+    fn emptied_shell_table_is_removed_even_with_a_comment() {
+        let out = edited("# my shell\n[shell]\nprogram = \"fish\"\n", |d| {
+            d.unset("shell.program")
+        });
+        assert!(!out.contains("[shell]"), "{out}");
+        assert!(crate::parse(&out).is_ok(), "{out}");
     }
 
     #[test]
