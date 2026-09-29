@@ -382,7 +382,9 @@ impl Renderer {
 
     /// Lay out the frame's instances and upload them with the uniforms.
     fn prepare(&mut self, frame: &Frame) {
-        if self.build_instances(frame).is_err() {
+        if self.build_instances(frame).is_ok() {
+            self.atlas_overflow = false;
+        } else {
             // The atlas filled up mid-frame: start over with an empty one.
             tracing::debug!("glyph atlas full, clearing");
             self.clear_glyphs();
