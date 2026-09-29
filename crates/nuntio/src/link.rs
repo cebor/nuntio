@@ -3,6 +3,7 @@
 //! doesn't tell where a click goes; and a `file://` link to a program
 //! would run it on macOS and Windows.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use nuntio_render::{Rect, UiRect, UiText};
@@ -60,11 +61,16 @@ const PROGRAM_EXTENSIONS: &[&str] = &[
     "applescript",
     "command",
     "dmg",
+    "fileloc",
+    "inetloc",
     "mpkg",
     "pkg",
+    "prefpane",
+    "saver",
     "scpt",
     "terminal",
     "tool",
+    "webloc",
     "workflow",
     // Linux
     "appimage",
@@ -84,7 +90,14 @@ pub fn check(url: &str) -> Result<(), String> {
     let Some(path) = file_path(url, &local_host())? else {
         return Ok(());
     };
-    // A missing file can't run; the opener reports it.
+    // What the path really names: `Evil.app/Contents/..` or a symlink can
+    // hide a program.
+    let path = match std::fs::canonicalize(&path) {
+        Ok(path) => path,
+        // A missing file can't run; the opener reports it.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => path,
+    };
     let Ok(metadata) = std::fs::metadata(&path) else {
         return Ok(());
     };
@@ -194,6 +207,20 @@ fn hint_bounds(columns: usize, pane: Rect, pointer: (f32, f32), metrics: UiMetri
     }
 }
 
+/// `url` without the userinfo of its authority (`user@`), which can make
+/// it look like it leads to another host.
+fn without_userinfo(url: &str) -> Cow<'_, str> {
+    let Some(scheme_end) = url.find("://").map(|i| i + 3) else {
+        return Cow::Borrowed(url);
+    };
+    let rest = &url[scheme_end..];
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    match authority.rfind('@') {
+        Some(at) => Cow::Owned(format!("{}{}", &url[..scheme_end], &rest[at + 1..])),
+        None => Cow::Borrowed(url),
+    }
+}
+
 /// Draw where the link `url` leads, in `pane`, in the small UI font.
 pub fn draw_hint(
     url: &str,
@@ -207,8 +234,9 @@ pub fn draw_hint(
     let margin = metrics.logical(MARGIN);
     let fits =
         ((pane.width - 2.0 * (margin + padding)) / metrics.small.width as f32).max(0.0) as usize;
-    // The start names the host and scheme; cut the end.
-    let text = truncate(url, fits);
+    // The start names the scheme and host (userinfo dropped, it can fake a
+    // host); cut the end.
+    let text = truncate(&without_userinfo(url), fits);
     let bounds = hint_bounds(text.width(), pane, pointer, metrics);
     let rects = framed_box(bounds, hairline(metrics.scale), background, foreground);
     let texts = vec![UiText::new(bounds.x + padding, bounds.y + padding, text, foreground).small()];
@@ -268,7 +296,7 @@ mod tests {
     #[test]
     fn programs_are_not_opened() {
         let dir = std::env::temp_dir().join(format!("nuntio-link-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("Evil.app")).unwrap();
+        std::fs::create_dir_all(dir.join("Evil.app").join("Contents")).unwrap();
         let (text, exe) = (dir.join("notes.txt"), dir.join("setup.EXE"));
         std::fs::write(&text, "").unwrap();
         std::fs::write(&exe, "").unwrap();
@@ -285,7 +313,14 @@ mod tests {
             check(&url(&dir.join("missing.exe"))),
             check(&format!("{}#x", url(&dir.join("Evil.app")))),
             check(&format!("{}?x", url(&exe))),
+            check(&url(&dir.join("Evil.app").join("Contents").join(".."))),
         ];
+        #[cfg(unix)]
+        let symlink = {
+            let link = dir.join("notes2.txt");
+            std::os::unix::fs::symlink(dir.join("Evil.app"), &link).unwrap();
+            check(&url(&link))
+        };
         #[cfg(unix)]
         let script = {
             use std::os::unix::fs::PermissionsExt;
@@ -303,9 +338,24 @@ mod tests {
         assert!(results[4].is_ok(), "missing file");
         assert!(results[5].is_err(), "app bundle with a fragment");
         assert!(results[6].is_err(), "exe with a query");
+        assert!(results[7].is_err(), "app bundle behind `..`");
         #[cfg(unix)]
         assert!(script.is_err(), "executable");
+        #[cfg(unix)]
+        assert!(symlink.is_err(), "symlink to an app bundle");
         assert!(check("https://example.com/x.exe").is_ok());
+    }
+
+    #[test]
+    fn hint_hides_userinfo() {
+        assert_eq!(
+            without_userinfo("https://github.com.x@evil.example/p"),
+            "https://evil.example/p"
+        );
+        assert_eq!(
+            without_userinfo("https://a.example/x@y"),
+            "https://a.example/x@y"
+        );
     }
 
     #[test]
