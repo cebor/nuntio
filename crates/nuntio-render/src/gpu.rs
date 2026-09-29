@@ -72,9 +72,35 @@ impl GpuContext {
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())),
-        );
+        let descriptor =
+            || wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
+        if std::env::var_os("WGPU_BACKEND").is_some() {
+            return Self::create(window.clone(), width, height, options, descriptor());
+        }
+        // Probing GL initializes EGL, which makes Mesa print errors on
+        // systems without a DRI driver (WSLg) even when Vulkan works. Only
+        // machines without any other backend get to see them.
+        let mut without_gl = descriptor();
+        without_gl.backends.remove(wgpu::Backends::GL);
+        Self::create(window.clone(), width, height, options, without_gl).or_else(|err| {
+            tracing::debug!("no GPU without GL, trying it: {err}");
+            let mut gl = descriptor();
+            gl.backends = wgpu::Backends::GL;
+            Self::create(window.clone(), width, height, options, gl).map_err(|_| err)
+        })
+    }
+
+    fn create<W>(
+        window: W,
+        width: u32,
+        height: u32,
+        options: GpuOptions,
+        descriptor: wgpu::InstanceDescriptor,
+    ) -> Result<Self, GpuError>
+    where
+        W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
+    {
+        let instance = wgpu::Instance::new(descriptor);
         // On Windows, DX12 presents through a DirectComposition visual of
         // our own. A swap chain made from the HWND looks like a game to
         // overlays such as NVIDIA's, which then announce themselves on every

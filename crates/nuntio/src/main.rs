@@ -186,12 +186,18 @@ fn restrict_dll_search() {
     }
 }
 
+/// wgpu, the clipboard and the window frame report things a working setup
+/// can't fix (no GL driver, no data control protocol, no settings portal).
+const DEFAULT_LOG_FILTER: &str = "info,wgpu_hal=warn,wgpu_core=warn,arboard=error,sctk_adwaita=off";
+
 fn main() -> Result<()> {
     let mut args = parse_args()?;
 
     let filter = match &args.log_level {
         Some(level) => EnvFilter::try_new(level)?,
-        None => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        None => {
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER))
+        }
     };
     // A remote-controlled instance has no stderr: it logs next to its
     // state file and leaves the real log alone.
