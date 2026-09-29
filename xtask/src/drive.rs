@@ -292,14 +292,15 @@ fn wait(timeout: Duration, what: &str, mut done: impl FnMut() -> Result<bool>) -
 }
 
 fn start(args: &mut Args) -> Result<()> {
-    let release = args.flag("--release");
-    let visible = args.flag("--visible");
-    let size = args.option("--size")?;
-    let config = args.option("--config")?;
+    // Everything after `--` is the command, not options for `start`.
     let command = match args.0.iter().position(|a| a == "--") {
         Some(i) => args.0.split_off(i).split_off(1),
         None => Vec::new(),
     };
+    let release = args.flag("--release");
+    let visible = args.flag("--visible");
+    let size = args.option("--size")?;
+    let config = args.option("--config")?;
     ensure!(args.0.is_empty(), "start: unexpected {:?}", args.0);
     if request(json!({ "cmd": "state" })).is_ok() {
         bail!("nuntio is already running; `cargo xtask drive stop` first");
@@ -323,7 +324,7 @@ fn start(args: &mut Args) -> Result<()> {
     let dir = dir();
     fs::create_dir_all(&dir)?;
     let config = match config {
-        Some(path) => PathBuf::from(path),
+        Some(path) => std::path::absolute(path)?,
         None => {
             // Defaults, whatever the user's own config says.
             let path = dir.join("config.toml");
