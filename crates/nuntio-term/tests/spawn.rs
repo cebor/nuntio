@@ -354,6 +354,13 @@ fn search_survives_a_cleared_scrollback() {
 }
 
 #[test]
+fn wide_characters_in_a_one_column_pane() {
+    let (handle, rx) = spawn("sleep 0.3; printf '漢字'");
+    handle.resize(TermSize { columns: 1, ..SIZE });
+    wait_for_exit(&rx);
+}
+
+#[test]
 fn osc8_links_with_unknown_schemes_are_ignored() {
     let (handle, rx) = spawn("printf '\\033]8;;ms-msdt:/id x\\033\\\\click\\033]8;;\\033\\\\'");
     wait_for_exit(&rx);

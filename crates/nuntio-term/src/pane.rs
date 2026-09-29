@@ -97,6 +97,15 @@ impl TermSize {
             cell_height: self.cell_height,
         }
     }
+
+    /// alacritty panics on wide characters in grids narrower than
+    /// `MIN_COLUMNS`.
+    fn clamped(self) -> Self {
+        Self {
+            columns: self.columns.max(term::MIN_COLUMNS as u16),
+            ..self
+        }
+    }
 }
 
 impl Dimensions for TermSize {
@@ -222,6 +231,7 @@ impl TermHandle {
         size: TermSize,
         callback: impl Fn(TermEvent) + Send + Sync + 'static,
     ) -> Result<Self, SpawnError> {
+        let size = size.clamped();
         let shell_program = options
             .shell
             .as_ref()
@@ -396,6 +406,7 @@ impl TermHandle {
     }
 
     pub fn resize(&self, size: TermSize) {
+        let size = size.clamped();
         *self
             .listener
             .inner
