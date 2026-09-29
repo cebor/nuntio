@@ -456,6 +456,7 @@ impl App {
 
     fn picker_key(&mut self, key: Key, mut mode: PickerMode) {
         let live = !matches!(mode.target, PickTarget::Action { .. });
+        let reloads = self.reloads;
         match key {
             Key::Esc => {
                 // Unless the file was changed elsewhere meanwhile: then
@@ -488,6 +489,10 @@ impl App {
                     self.apply(self.pick_edit(&mode.target, pick), false);
                 }
             }
+        }
+        // A reload meanwhile is the new state to return to.
+        if self.reloads != reloads {
+            mode.before = self.source.clone();
         }
         self.mode = Mode::Picker(mode);
     }

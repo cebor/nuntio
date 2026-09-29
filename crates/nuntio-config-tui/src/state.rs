@@ -281,6 +281,8 @@ pub struct App {
     pub open_editor: bool,
     /// What the footer calls the editor that `e` opens.
     pub editor_name: String,
+    /// Incremented whenever `reread` loads a changed file.
+    reloads: u64,
 }
 
 fn serialize(config: &Config) -> toml::Value {
@@ -375,6 +377,7 @@ impl App {
             quit: false,
             open_editor: false,
             editor_name: "editor".into(),
+            reloads: 0,
         };
         app.revalidate();
         Ok(app)
@@ -443,6 +446,7 @@ impl App {
             Ok(doc) => {
                 self.doc = doc;
                 self.source = current;
+                self.reloads += 1;
                 self.revalidate();
                 self.message = Some((Tone::Warn, message.into()));
             }
@@ -1151,6 +1155,14 @@ mod tests {
         app.key(Key::Esc);
         assert_eq!(memory.text(), "scrollback = 7\n");
         assert_eq!(app.config.scrollback, 7);
+
+        // Nor does it after the file was reloaded during the preview.
+        app.key(Key::Enter);
+        app.key(Key::Down);
+        memory.set("scrollback = 8\n");
+        app.key(Key::Down);
+        app.key(Key::Esc);
+        assert_eq!(memory.text(), "scrollback = 8\n");
     }
 
     #[test]
