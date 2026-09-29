@@ -766,13 +766,16 @@ fn is_console_default_title(title: &str, program: &str) -> bool {
 
 /// Whether a Windows path the shell reported is on this machine. Any
 /// program's output can report one, and merely looking at a network share
-/// (`\\host\share`) sends the user's credentials to that host; shares of
-/// WSL distributions are local.
+/// (`\\host\share`) sends the user's credentials to that host. Only drive
+/// paths (`C:\`, `c:/`) and shares of WSL distributions count as local.
 fn is_local(path: &str) -> bool {
     let bytes = path.as_bytes();
     let separator = |i: usize| matches!(bytes.get(i), Some(b'\\' | b'/'));
+    if bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':') {
+        return separator(2);
+    }
     if !(separator(0) && separator(1)) {
-        return true;
+        return false;
     }
     let host = path[2..].split(['\\', '/']).next().unwrap_or_default();
     host.eq_ignore_ascii_case("wsl.localhost") || host.eq_ignore_ascii_case("wsl$")
@@ -851,6 +854,11 @@ mod tests {
         assert!(!is_local("//evil/share"));
         assert!(!is_local(r"\\?\UNC\evil\share"));
         assert!(!is_local(r"\\wsl.localhost.evil.com\x"));
+        assert!(is_local("C:/Users"));
+        assert!(!is_local(r"\??\UNC\evil\share"));
+        assert!(!is_local(r"\??\GLOBALROOT\Device\Mup\evil\share"));
+        assert!(!is_local(r"\evil"));
+        assert!(!is_local("C:foo"));
     }
 
     #[test]
