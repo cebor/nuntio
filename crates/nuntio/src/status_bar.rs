@@ -311,10 +311,8 @@ impl StatusBar {
                 };
                 self.battery_icon(out, x, battery.level, colors);
                 self.sparkline(out, graph_x, &stats.battery, 100.0, colors);
-                let level = format!("{:.0}%", battery.level);
-                text(after_graph, format!("{level:>4}"), colors.value, out);
                 if battery.plugged_in {
-                    text(after_graph + 5, "⚡".into(), colors.value, out);
+                    text(after_graph, "⚡".into(), colors.value, out);
                 }
             }
             StatusItem::Datetime => {
@@ -347,6 +345,8 @@ impl StatusBar {
     fn graph_box(&self) -> (f32, f32) {
         let inset = (2.0 * self.scale).round();
         let top = self.top + self.padding + inset;
+                let level = format!("{:.0}%", battery.level);
+                text(after_graph + 3, format!("{level:>4}"), colors.value, out);
         (top, self.cell.height as f32 - 2.0 * inset)
     }
 
@@ -657,8 +657,8 @@ fn item_cells(item: StatusItem, datetime: &str, stats: &Stats) -> usize {
         StatusItem::Memory => CONTENT + GRAPH_CELLS + 1 + 5,
         // icon "↓1.2M " graph " ↑ 30K"
         StatusItem::Network => CONTENT + GRAPH_CELLS + 1 + 5 + 1 + 5,
-        // icon graph " 100% ⚡"
-        StatusItem::Battery => CONTENT + GRAPH_CELLS + 1 + 4 + 1 + 2,
+        // icon graph " ⚡ 100%"
+        StatusItem::Battery => CONTENT + GRAPH_CELLS + 1 + 2 + 1 + 4,
         // icon "Fri 25 Sep 10:50"
         StatusItem::Datetime => CONTENT + datetime.width(),
         // icon "0.1.6"
