@@ -121,19 +121,27 @@ impl ConfigWatcher {
 /// Watch each wanted directory, or its closest existing ancestor while it
 /// doesn't exist, skipping what is already watched. Directories deleted
 /// since are dropped first, so that their ancestor takes over and sees
-/// them come back. Returns whether a directory was added.
+/// them come back. Kept directories are watched anew: the OS ends the
+/// watch on deletion even if the directory is back by now. Returns whether
+/// a directory was added.
 fn watch_existing(
     watcher: &mut RecommendedWatcher,
     wanted: &[PathBuf],
     watched: &mut Vec<PathBuf>,
 ) -> notify::Result<bool> {
     watched.retain(|dir| {
-        let exists = dir.is_dir();
-        if !exists {
-            // The OS usually ended the watch already.
-            let _ = watcher.unwatch(dir);
+        // The OS usually ended the watch already.
+        let _ = watcher.unwatch(dir);
+        if !dir.is_dir() {
+            return false;
         }
-        exists
+        match watcher.watch(dir, RecursiveMode::NonRecursive) {
+            Ok(()) => true,
+            Err(err) => {
+                tracing::warn!("config watcher: {err}");
+                false
+            }
+        }
     });
     let mut added = false;
     for dir in wanted {
@@ -286,6 +294,34 @@ mod tests {
         assert!(
             changed.is_ok(),
             "config in a recreated directory not noticed"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn notices_a_directory_recreated_within_the_debounce() {
+        let base = std::env::temp_dir().join(format!("nuntio-watch-quick-{}", std::process::id()));
+        let dir = base.join("nuntio");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&path, None, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(&path, "scrollback = 5").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(
+            changed.is_ok(),
+            "config in a quickly recreated directory not noticed"
         );
     }
 
