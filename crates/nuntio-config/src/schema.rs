@@ -193,6 +193,10 @@ pub static STATUS_ITEMS: &[Variant] = &[
     variant("battery", "Charge level; hidden without a battery."),
     variant("datetime", "The local date and time."),
     variant(
+        "actions",
+        "A button that opens a menu of all actions; click an entry to run it.",
+    ),
+    variant(
         "update",
         "A newer nuntio release, once the update check found one; click it for the release page.",
     ),
@@ -761,6 +765,7 @@ mod tests {
             | StatusItem::Network
             | StatusItem::Battery
             | StatusItem::Datetime
+            | StatusItem::Actions
             | StatusItem::Update
             | StatusItem::Spring => (),
         };
@@ -772,6 +777,7 @@ mod tests {
                 StatusItem::Network,
                 StatusItem::Battery,
                 StatusItem::Datetime,
+                StatusItem::Actions,
                 StatusItem::Update,
                 StatusItem::Spring,
             ],

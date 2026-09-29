@@ -222,6 +222,7 @@ Each item starts with an icon:
 - `network`: throughput of the physical interfaces (loopback, container and VM bridges such as `docker0` are left out, so traffic isn't counted twice). Download grows up from the middle of the graph, upload down. The download rate is shown left of the graph, the upload rate right of it; rates under 0.1 K show as `0K`.
 - `battery`: charge level, with ⚡ while plugged in; the graph shows the level over about the last hour, one bar per minute. Hidden on machines without a battery.
 - `datetime`: the local date and time.
+- `actions`: a button that opens a menu of all actions, grouped by category and with their shortcuts. Click an entry to run it, or use <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>Enter</kbd>; <kbd>Esc</kbd> closes the menu. It is not in the default list; add it to `items`, or bind the `open_actions_menu` action to open the menu from the keyboard.
 - `update`: the version of a newer nuntio release; click it to open the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one and `updates.status_bar` is on.
 
 #### Springs
@@ -430,5 +431,6 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `clear_scrollback` | Clear the history of the focused pane |
 | `reload_config` | Reload the config file |
 | `open_settings` | Open `nuntio-config` in a new tab |
+| `open_actions_menu` | Open the menu of all actions (the `actions` status bar item opens it too) |
 | `check_for_updates` | Look for a newer nuntio release now, even with `updates.check` off |
 | `none` | Unbind the key combination |

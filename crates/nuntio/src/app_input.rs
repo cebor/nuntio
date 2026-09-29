@@ -14,6 +14,7 @@ use winit::window::{CursorIcon, ResizeDirection, Window};
 use super::app_panes::CloseTarget;
 use super::{CONFIRM_REPEAT, Core};
 use crate::actions::Action;
+use crate::actions_menu::Step;
 use crate::banner::{Banner, Severity};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
@@ -153,6 +154,10 @@ impl Core {
             Action::ZoomPane => state.toggle_zoom(&self.config),
             Action::Search => state.open_search(),
             Action::ToggleFullscreen => state.toggle_fullscreen(),
+            Action::OpenActionsMenu if state.actions_menu.is_some() => state.close_actions_menu(),
+            Action::OpenActionsMenu => {
+                state.open_actions_menu(&self.config, &self.stats, &self.bindings);
+            }
         }
         state.window.request_redraw();
     }
@@ -263,6 +268,10 @@ impl Core {
         event: &KeyPress,
         mods: ModifiersState,
     ) -> bool {
+        if state.actions_menu.is_some() {
+            self.actions_menu_key(state, event, mods);
+            return false;
+        }
         if state.search.is_some() && self.search_key(state, event) {
             return false;
         }
@@ -288,6 +297,47 @@ impl Core {
         self.bindings
             .lookup(unmodified, mods)
             .or_else(|| self.bindings.lookup(latin?, mods))
+    }
+
+    /// Keys for the open actions menu, which takes all of them: the arrows
+    /// move, Enter runs the selected entry and Escape closes. Only the
+    /// shortcut that opens the menu closes it again.
+    fn actions_menu_key(
+        &mut self,
+        state: &mut WindowState,
+        event: &KeyPress,
+        mods: ModifiersState,
+    ) {
+        let view = state.menu_view();
+        let Some(menu) = state.actions_menu.as_mut() else {
+            return;
+        };
+        let mut run = None;
+        match &event.logical {
+            Key::Named(NamedKey::Escape) => state.close_actions_menu(),
+            Key::Named(NamedKey::ArrowDown) => menu.select(Step::Next, view),
+            Key::Named(NamedKey::ArrowUp) => menu.select(Step::Previous, view),
+            Key::Named(NamedKey::Home) => menu.select(Step::First, view),
+            Key::Named(NamedKey::End) => menu.select(Step::Last, view),
+            Key::Named(NamedKey::Enter) => {
+                run = menu.selected_action();
+                if run.is_some() {
+                    state.close_actions_menu();
+                }
+            }
+            _ => {
+                let latin = input::latin_key(&event.unmodified, event.physical);
+                let opens = self.lookup_binding(&event.unmodified, latin.as_ref(), mods)
+                    == Some(Action::OpenActionsMenu);
+                if opens {
+                    state.close_actions_menu();
+                }
+            }
+        }
+        if let Some(action) = run {
+            self.run_action(state, action);
+        }
+        state.window.request_redraw();
     }
 
     /// Keys for the open find bar. Returns whether the key was used;
@@ -357,14 +407,24 @@ impl Core {
     }
 
     fn mouse_press(&mut self, state: &mut WindowState, button: Button, pos: PhysicalPosition<f64>) {
+        if state.actions_menu.is_some() {
+            self.press_actions_menu(state, button, pos);
+            return;
+        }
         if self.press_banner(state, pos) || self.press_window_chrome(state, button, pos) {
             return;
         }
         let left = button == Button::Left;
-        if left && state.status_item_at(&self.config, &self.stats, pos) == Some(StatusItem::Update)
-        {
-            self.open_update();
-            return;
+        match state.status_item_at(&self.config, &self.stats, pos) {
+            Some(StatusItem::Update) if left => {
+                self.open_update();
+                return;
+            }
+            Some(StatusItem::Actions) if left => {
+                self.run_action(state, Action::OpenActionsMenu);
+                return;
+            }
+            _ => {}
         }
         if state.search_bar_contains(&self.config, pos)
             || state.status_bar_contains(&self.config, pos)
@@ -424,6 +484,30 @@ impl Core {
         }
         if button == Button::Left && state.mouse.selecting {
             self.finish_selection(state);
+        }
+    }
+
+    /// A click while the actions menu is open: an entry runs its action, a
+    /// heading does nothing, anywhere else closes the menu. The menu takes
+    /// the click either way.
+    fn press_actions_menu(
+        &mut self,
+        state: &mut WindowState,
+        button: Button,
+        pos: PhysicalPosition<f64>,
+    ) {
+        let view = state.menu_view();
+        let (x, y) = (pos.x as f32, pos.y as f32);
+        let Some(menu) = &state.actions_menu else {
+            return;
+        };
+        if !menu.contains(view, x, y) {
+            state.close_actions_menu();
+        } else if button == Button::Left
+            && let Some(action) = menu.click(view, x, y)
+        {
+            state.close_actions_menu();
+            self.run_action(state, action);
         }
     }
 
@@ -568,6 +652,10 @@ impl Core {
 
     pub(super) fn cursor_moved(&mut self, state: &mut WindowState, pos: PhysicalPosition<f64>) {
         state.mouse.position = Some(pos);
+        if state.actions_menu.is_some() {
+            self.cursor_over_actions_menu(state, pos);
+            return;
+        }
         state.update_hover_link(&self.config);
         if let Some(divider) = state.mouse.divider_drag.clone() {
             state.drag_divider(&self.config, &divider, pos);
@@ -589,6 +677,25 @@ impl Core {
         }
     }
 
+    /// The pointer moved while the actions menu is open: select the entry
+    /// under it. Nothing else reacts to the pointer meanwhile.
+    fn cursor_over_actions_menu(&mut self, state: &mut WindowState, pos: PhysicalPosition<f64>) {
+        let view = state.menu_view();
+        let (x, y) = (pos.x as f32, pos.y as f32);
+        let Some(menu) = state.actions_menu.as_mut() else {
+            return;
+        };
+        let over_entry = menu.click(view, x, y).is_some();
+        if menu.hover(view, x, y) {
+            state.window.request_redraw();
+        }
+        state.window.set_cursor(if over_entry {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        });
+    }
+
     /// Show the pointer that fits what is under it at `pos`. Returns
     /// whether that is the terminal.
     fn set_cursor_icon(
@@ -605,7 +712,10 @@ impl Core {
         let in_terminal = bar_hit.is_none() && frame_icon.is_none();
         let over_link = state.mouse.hover_link.is_some();
         let over_update = bar_hit == Some(BarHit::Update)
-            || state.status_item_at(&self.config, &self.stats, pos) == Some(StatusItem::Update);
+            || matches!(
+                state.status_item_at(&self.config, &self.stats, pos),
+                Some(StatusItem::Update | StatusItem::Actions)
+            );
         state.window.set_cursor(if over_link || over_update {
             CursorIcon::Pointer
         } else if in_terminal {

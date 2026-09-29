@@ -328,6 +328,14 @@ impl WindowState {
         if lines == 0 {
             return;
         }
+        // An open actions menu scrolls (if it doesn't fit) instead of the pane.
+        let view = self.menu_view();
+        if let Some(menu) = self.actions_menu.as_mut() {
+            if menu.scroll_by(-(lines as isize), view) {
+                self.window.request_redraw();
+            }
+            return;
+        }
         let pos = self.mouse.position;
         let id = pos
             .and_then(|pos| self.pane_at(config, pos))

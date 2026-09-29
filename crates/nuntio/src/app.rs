@@ -659,6 +659,10 @@ impl Core {
             }
         };
         tracing::info!(path = %path.display(), "config reloaded");
+        // Its shortcuts and its status bar item may be gone.
+        if let Some(state) = state.as_deref_mut() {
+            state.close_actions_menu();
+        }
         let mut warnings = loaded.warnings;
         let (themes, theme_warnings) = ThemeSet::load(themes_dir(Some(&path)).as_deref());
         let (bindings, binding_warnings) = Bindings::from_config(&loaded.config.keybindings);
@@ -1103,6 +1107,7 @@ impl Core {
             WindowEvent::Resized(size) => {
                 // A resized window needs a fresh frame right away.
                 state.reveal = None;
+                state.close_actions_menu();
                 state.renderer.resize(size.width, size.height);
                 state.resize_terms(&self.config);
                 state.window.request_redraw();
@@ -1125,6 +1130,7 @@ impl Core {
                 } else {
                     state.send_focus(false);
                     state.focused = false;
+                    state.close_actions_menu();
                 }
                 state.window.request_redraw();
             }
@@ -1141,7 +1147,10 @@ impl Core {
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 state.preedit = None;
-                state.type_text(&text);
+                // The open actions menu takes all input, composed text too.
+                if state.actions_menu.is_none() {
+                    state.type_text(&text);
+                }
             }
             WindowEvent::Ime(Ime::Disabled) => {
                 if state.preedit.take().is_some() {

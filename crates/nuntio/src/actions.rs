@@ -39,11 +39,13 @@ pub enum Action {
     OpenSettings,
     /// Look for a newer release now.
     CheckForUpdates,
+    /// Open the menu of all actions.
+    OpenActionsMenu,
 }
 
 /// Every action by its name in the config (`nuntio_config::ACTIONS`
 /// documents them).
-const NAMES: &[(&str, Action)] = {
+pub(crate) const NAMES: &[(&str, Action)] = {
     use Action::*;
     use Direction::{Down, Left, Right, Up};
     &[
@@ -73,6 +75,7 @@ const NAMES: &[(&str, Action)] = {
         ("reload_config", ReloadConfig),
         ("open_settings", OpenSettings),
         ("check_for_updates", CheckForUpdates),
+        ("open_actions_menu", OpenActionsMenu),
         ("close_pane", ClosePane),
         ("split_vertical", SplitVertical),
         ("split_horizontal", SplitHorizontal),
@@ -250,6 +253,21 @@ impl Bindings {
         (Self(custom), warnings)
     }
 
+    /// The shortcut that runs `action`, spelled like in the config, e.g.
+    /// `Ctrl+Shift+T`. Combinations another binding takes first (or that
+    /// the config unbinds) don't count.
+    pub fn shortcut(&self, action: Action) -> Option<String> {
+        self.0.iter().enumerate().find_map(|(i, b)| {
+            let shadowed = self.0[..i]
+                .iter()
+                .any(|earlier| earlier.key == b.key && earlier.mods == b.mods);
+            if b.action != Some(action) || shadowed {
+                return None;
+            }
+            combo_of(b).map(|combo| combo.to_string())
+        })
+    }
+
     /// `key` should be the key without modifiers applied (so Ctrl+Shift+C
     /// arrives as `c`, not `C` or a control character).
     pub fn lookup(&self, key: &Key, mods: ModifiersState) -> Option<Action> {
@@ -292,6 +310,59 @@ fn parse_combo(combo: &str) -> Result<(BindKey, ModifiersState), String> {
         KeyName::Named(named) => BindKey::Named(named_key(named)),
     };
     Ok((key, mods))
+}
+
+/// The combination of `binding`, the reverse of `parse_combo`. `None` for
+/// a key the config has no name for.
+fn combo_of(binding: &Binding) -> Option<nuntio_config::KeyCombo> {
+    use nuntio_config::{KeyName, Mods};
+
+    let mods = Mods {
+        ctrl: binding.mods.control_key(),
+        shift: binding.mods.shift_key(),
+        alt: binding.mods.alt_key(),
+        super_key: binding.mods.super_key(),
+    };
+    let key = match &binding.key {
+        BindKey::Char(c) => KeyName::Char(*c),
+        BindKey::Named(named) => KeyName::Named(config_named_key(*named)?),
+    };
+    Some(nuntio_config::KeyCombo { mods, key })
+}
+
+/// The reverse of `named_key`.
+fn config_named_key(key: NamedKey) -> Option<nuntio_config::NamedKey> {
+    use nuntio_config::NamedKey as N;
+    Some(match key {
+        NamedKey::Enter => N::Enter,
+        NamedKey::Tab => N::Tab,
+        NamedKey::Escape => N::Escape,
+        NamedKey::Space => N::Space,
+        NamedKey::Backspace => N::Backspace,
+        NamedKey::Delete => N::Delete,
+        NamedKey::Insert => N::Insert,
+        NamedKey::Home => N::Home,
+        NamedKey::End => N::End,
+        NamedKey::PageUp => N::PageUp,
+        NamedKey::PageDown => N::PageDown,
+        NamedKey::ArrowUp => N::Up,
+        NamedKey::ArrowDown => N::Down,
+        NamedKey::ArrowLeft => N::Left,
+        NamedKey::ArrowRight => N::Right,
+        NamedKey::F1 => N::F(1),
+        NamedKey::F2 => N::F(2),
+        NamedKey::F3 => N::F(3),
+        NamedKey::F4 => N::F(4),
+        NamedKey::F5 => N::F(5),
+        NamedKey::F6 => N::F(6),
+        NamedKey::F7 => N::F(7),
+        NamedKey::F8 => N::F(8),
+        NamedKey::F9 => N::F(9),
+        NamedKey::F10 => N::F(10),
+        NamedKey::F11 => N::F(11),
+        NamedKey::F12 => N::F(12),
+        _ => return None,
+    })
 }
 
 pub(crate) fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
@@ -396,6 +467,40 @@ mod tests {
         documented.sort_unstable();
         known.sort_unstable();
         assert_eq!(documented, known);
+    }
+
+    #[test]
+    fn shortcuts_follow_the_bindings() {
+        // The platform's default of new_tab, which the config takes over.
+        let new_tab = if cfg!(target_os = "macos") {
+            "Cmd+T"
+        } else {
+            "Ctrl+Shift+T"
+        };
+        assert_eq!(
+            Bindings::platform_defaults()
+                .shortcut(Action::NewTab)
+                .as_deref(),
+            Some(new_tab)
+        );
+        let (b, _) = Bindings::from_config(&[
+            binding(new_tab, "close_tab"),
+            binding("F12", "open_actions_menu"),
+            binding("Ctrl+Alt+PageDown", "next_tab"),
+        ]);
+        assert_eq!(b.shortcut(Action::OpenActionsMenu).as_deref(), Some("F12"));
+        assert_eq!(b.shortcut(Action::CloseTab).as_deref(), Some(new_tab));
+        // Its default combination is taken by close_tab now.
+        assert_eq!(b.shortcut(Action::NewTab), None);
+        // The config's binding comes before the defaults.
+        assert_eq!(
+            b.shortcut(Action::NextTab).as_deref(),
+            Some("Ctrl+Alt+PageDown")
+        );
+        assert!(b.shortcut(Action::Search).is_some());
+        // Not bound by default.
+        let (b, _) = Bindings::from_config(&[]);
+        assert_eq!(b.shortcut(Action::OpenActionsMenu), None);
     }
 
     #[test]

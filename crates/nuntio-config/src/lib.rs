@@ -291,6 +291,8 @@ pub enum StatusItem {
     Network,
     Battery,
     Datetime,
+    /// A button that opens a menu of all actions.
+    Actions,
     /// A newer nuntio release; hidden while there is none.
     Update,
     /// A flexible gap; springs share the free space evenly.
@@ -307,6 +309,7 @@ impl StatusItem {
             Self::Network => "network",
             Self::Battery => "battery",
             Self::Datetime => "datetime",
+            Self::Actions => "actions",
             Self::Update => "update",
             Self::Spring => schema::SPRING,
         }

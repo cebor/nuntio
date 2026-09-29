@@ -24,6 +24,8 @@ const GAP_CELLS: usize = 2;
 const ICON_CELLS: usize = 2;
 /// Where an item's content starts after its icon, in cells.
 const CONTENT: usize = ICON_CELLS + 1;
+/// What the `actions` item says.
+const ACTIONS_LABEL: &str = "Actions";
 /// Network graphs scale to at least this rate, so idle chatter stays flat.
 const MIN_NET_SCALE: f32 = 1024.0;
 /// The battery graph keeps one of this many samples: one per minute, so
@@ -115,6 +117,8 @@ pub struct StatusBar {
     term_cell: CellMetrics,
     /// Items that fit, left to right.
     slots: Vec<Slot>,
+    /// An item shown as pressed, e.g. while its menu is open.
+    active: Option<StatusItem>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -197,7 +201,22 @@ impl StatusBar {
             cell,
             term_cell: metrics.cell,
             slots,
+            active: None,
         }
+    }
+
+    /// The bar with `item` shown as pressed.
+    pub fn with_active(self, item: Option<StatusItem>) -> Self {
+        Self {
+            active: item,
+            ..self
+        }
+    }
+
+    /// Left edge and width of `item`, if the bar shows it.
+    pub fn item_bounds(&self, item: StatusItem) -> Option<(f32, f32)> {
+        let slot = self.slots.iter().find(|s| s.item == item)?;
+        Some((slot.x, slot.width))
     }
 
     /// The item at `x`, for clicks.
@@ -228,6 +247,7 @@ impl StatusBar {
             graph: mix(bar_bg, foreground, 0.45),
             graph_alt: mix(bar_bg, foreground, 0.25),
             separator: mix(bar_bg, foreground, 0.15),
+            pressed: mix(bar_bg, foreground, 0.14),
         };
         let mut out = Output {
             rects: vec![rect(0.0, self.top, self.width, self.height, bar_bg)],
@@ -245,6 +265,17 @@ impl StatusBar {
                 stroke,
                 line_height,
                 colors.separator,
+            ));
+        }
+        // Behind the item, one gap wide on each side.
+        if let Some(slot) = self.slots.iter().find(|s| Some(s.item) == self.active) {
+            let pad = gap / 2.0;
+            out.rects.push(rect(
+                (slot.x - pad).max(0.0),
+                self.top,
+                slot.width + 2.0 * pad,
+                self.height,
+                colors.pressed,
             ));
         }
         let n = self.slots.len();
@@ -314,10 +345,16 @@ impl StatusBar {
                 if battery.plugged_in {
                     text(after_graph, "⚡".into(), colors.value, out);
                 }
+                let level = format!("{:.0}%", battery.level);
+                text(after_graph + 3, format!("{level:>4}"), colors.value, out);
             }
             StatusItem::Datetime => {
                 self.clock_icon(out, x, colors);
                 text(CONTENT, datetime.to_owned(), colors.value, out);
+            }
+            StatusItem::Actions => {
+                self.menu_icon(out, x, colors);
+                text(CONTENT, ACTIONS_LABEL.into(), colors.value, out);
             }
             StatusItem::Update => {
                 let Some(version) = &stats.update else {
@@ -345,8 +382,6 @@ impl StatusBar {
     fn graph_box(&self) -> (f32, f32) {
         let inset = (2.0 * self.scale).round();
         let top = self.top + self.padding + inset;
-                let level = format!("{:.0}%", battery.level);
-                text(after_graph + 3, format!("{level:>4}"), colors.value, out);
         (top, self.cell.height as f32 - 2.0 * inset)
     }
 
@@ -540,6 +575,24 @@ impl StatusBar {
             .push(rect(x0 + center, y0 + center, hand, st, color));
     }
 
+    /// A menu: three lines below each other.
+    fn menu_icon(&self, out: &mut Output, x: f32, colors: &Colors) {
+        let st = self.stroke();
+        let (x0, y0, size) = self.icon_box(x);
+        let line = (st * 2.0).max(1.0);
+        let inset = (size * 0.15).round();
+        let step = ((size - 2.0 * inset - line) / 2.0).round();
+        for k in 0..3 {
+            out.rects.push(rect(
+                x0 + inset,
+                y0 + inset + k as f32 * step,
+                size - 2.0 * inset,
+                line,
+                colors.label,
+            ));
+        }
+    }
+
     /// An outlined battery with a knob on the right, filled to `level`.
     fn battery_icon(&self, out: &mut Output, x: f32, level: f32, colors: &Colors) {
         let stroke = self.stroke();
@@ -581,6 +634,8 @@ struct Colors {
     graph: Rgb,
     graph_alt: Rgb,
     separator: Rgb,
+    /// Behind an item shown as pressed.
+    pressed: Rgb,
 }
 
 impl Colors {
@@ -661,6 +716,8 @@ fn item_cells(item: StatusItem, datetime: &str, stats: &Stats) -> usize {
         StatusItem::Battery => CONTENT + GRAPH_CELLS + 1 + 2 + 1 + 4,
         // icon "Fri 25 Sep 10:50"
         StatusItem::Datetime => CONTENT + datetime.width(),
+        // icon "Actions"
+        StatusItem::Actions => CONTENT + ACTIONS_LABEL.width(),
         // icon "0.1.6"
         StatusItem::Update => CONTENT + stats.update.as_deref().map_or(0, str::width),
         StatusItem::Spring => 0,
@@ -940,6 +997,50 @@ mod tests {
         assert_eq!(bar.item_at(995.0 - 40.0), Some(StatusItem::Datetime));
         let (_, texts) = bar.draw(&stats, "12:34", Rgb::default(), Rgb::default(), false);
         assert!(texts.iter().any(|t| t.text == "0.1.6"));
+    }
+
+    #[test]
+    fn actions_item_is_clickable_and_can_be_shown_pressed() {
+        use StatusItem::{Actions, Cpu, Datetime};
+        let (bg, fg) = (
+            Rgb { r: 0, g: 0, b: 0 },
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        );
+        let stats = stats(false);
+        let items = arranged(&[Actions, Cpu, Datetime]);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
+        // Icon, space and "Actions" (10 cells) after the one-cell margin.
+        assert_eq!(bar.item_bounds(Actions), Some((10.0, 100.0)));
+        assert_eq!(bar.item_at(10.0), Some(Actions));
+        assert_eq!(bar.item_at(109.0), Some(Actions));
+        assert_eq!(bar.item_at(110.0), None);
+        let (_, texts) = bar.draw(&stats, "12:34", bg, fg, false);
+        assert!(texts.iter().any(|t| t.text == "Actions"));
+
+        // Pressed: a background one gap wider than the item, and only then.
+        let pressed = mix(bar_background(bg), fg, 0.14);
+        let backgrounds = |bar: &StatusBar| {
+            let (rects, _) = bar.draw(&stats, "12:34", bg, fg, false);
+            rects
+                .into_iter()
+                .filter(|r| r.color == pressed)
+                .collect::<Vec<_>>()
+        };
+        assert!(backgrounds(&bar).is_empty());
+        let shown = bar.clone().with_active(Some(Actions));
+        let rects = backgrounds(&shown);
+        assert_eq!(rects.len(), 1);
+        assert_eq!((rects[0].x, rects[0].width), (0.0, 120.0));
+        // An item that isn't shown can't be pressed.
+        assert!(backgrounds(&bar.clone().with_active(Some(StatusItem::Battery))).is_empty());
+
+        let items = arranged(&[Cpu, Datetime]);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
+        assert_eq!(bar.item_bounds(Actions), None);
     }
 
     #[test]

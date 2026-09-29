@@ -14,6 +14,8 @@ use winit::event::Modifiers;
 use winit::keyboard::PhysicalKey;
 use winit::window::{Fullscreen, Window};
 
+use crate::actions::Bindings;
+use crate::actions_menu::{ActionsMenu, Anchor, View};
 use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::pane_tree::{Direction, Layout, PaneTree};
@@ -260,6 +262,8 @@ pub struct WindowState {
     pub preedit: Option<String>,
     /// The find bar, searching the focused pane.
     pub search: Option<SearchBar>,
+    /// The menu of all actions, opened by the `actions` status bar item.
+    pub actions_menu: Option<ActionsMenu>,
     pub blink: Blink,
     /// Frames skipped in a row, to stop retrying a stuck surface.
     pub skipped_frames: u32,
@@ -298,6 +302,7 @@ impl WindowState {
             focused: true,
             preedit: None,
             search: None,
+            actions_menu: None,
             blink: Blink {
                 active: false,
                 visible: true,
@@ -439,14 +444,63 @@ impl WindowState {
     /// The status bar, if shown.
     fn status_bar(&self, config: &Config, stats: &Stats, datetime: &str) -> Option<StatusBar> {
         let (top, _) = self.status_bar_bounds(config)?;
-        Some(StatusBar::new(
+        let bar = StatusBar::new(
             self.window.inner_size().width as f32,
             top,
             &config.status_bar.arranged_items(),
             stats,
             datetime,
             self.ui_metrics(),
-        ))
+        );
+        Some(bar.with_active(self.actions_menu.is_some().then_some(StatusItem::Actions)))
+    }
+
+    /// The window as the actions menu is laid out in it.
+    pub fn menu_view(&self) -> View {
+        let size = self.window.inner_size();
+        View {
+            window: (size.width as f32, size.height as f32),
+            metrics: self.ui_metrics(),
+        }
+    }
+
+    /// Open the menu of all actions: below or above the `actions` status
+    /// bar item, or, without one, at the top of the terminal area.
+    pub fn open_actions_menu(&mut self, config: &Config, stats: &Stats, bindings: &Bindings) {
+        let bounds = self.status_bar_bounds(config);
+        let item = bounds.and_then(|_| {
+            self.status_bar(config, stats, &datetime(config))?
+                .item_bounds(StatusItem::Actions)
+        });
+        let anchor = match (bounds, item) {
+            (Some((top, height)), Some((x, _))) => {
+                let opens_up = config.status_bar.position == StatusBarPosition::Bottom;
+                Anchor {
+                    x,
+                    y: if opens_up { top } else { top + height },
+                    opens_up,
+                    centered: false,
+                }
+            }
+            _ => Anchor {
+                x: 0.0,
+                y: self.terminal_area(config).y,
+                opens_up: false,
+                centered: true,
+            },
+        };
+        self.actions_menu = Some(ActionsMenu::new(anchor, bindings));
+        // Nothing under the menu reacts to the pointer.
+        self.mouse.hover_link = None;
+        self.mouse.hovered_bar = None;
+        self.window.request_redraw();
+    }
+
+    /// Close the menu of all actions, if it is open.
+    pub fn close_actions_menu(&mut self) {
+        if self.actions_menu.take().is_some() {
+            self.window.request_redraw();
+        }
     }
 
     /// Whether the status bar looks different from the last time this

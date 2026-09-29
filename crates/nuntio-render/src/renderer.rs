@@ -10,7 +10,7 @@ use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::font::{CellMetrics, FaceStyle, Fonts};
-use crate::frame::{Frame, Rect, UiText};
+use crate::frame::{Frame, Rect, UiRect, UiText};
 use crate::gpu::{FrameStatus, GpuContext, GpuError, GpuOptions};
 use crate::{box_drawing, decoration};
 
@@ -503,17 +503,8 @@ impl Renderer {
             self.pane_batches.push((start..end, pane.area));
         }
         self.ui_start = self.instances.len();
-        for r in frame.rects {
-            let mut instance = Instance::solid(r.x, r.y, r.width, r.height, r.color);
-            if r.radius > 0.0 {
-                instance.kind = KIND_ROUNDED;
-                instance.uv[0] = r.radius;
-            }
-            self.instances.push(instance);
-        }
-        for text in frame.texts {
-            self.push_text(text)?;
-        }
+        self.push_ui(frame.rects, frame.texts)?;
+        self.push_ui(frame.popup_rects, frame.popup_texts)?;
         self.cutout_start = self.instances.len();
         let radius = frame.corner_radius.round();
         if radius > 0.0 && self.gpu.transparent() {
@@ -524,6 +515,22 @@ impl Renderer {
                 corner.uv[0] = radius;
                 self.instances.push(corner);
             }
+        }
+        Ok(())
+    }
+
+    /// UI rectangles, then the text over them.
+    fn push_ui(&mut self, rects: &[UiRect], texts: &[UiText]) -> Result<(), AtlasFull> {
+        for r in rects {
+            let mut instance = Instance::solid(r.x, r.y, r.width, r.height, r.color);
+            if r.radius > 0.0 {
+                instance.kind = KIND_ROUNDED;
+                instance.uv[0] = r.radius;
+            }
+            self.instances.push(instance);
+        }
+        for text in texts {
+            self.push_text(text)?;
         }
         Ok(())
     }

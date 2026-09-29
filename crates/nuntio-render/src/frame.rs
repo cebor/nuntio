@@ -1,7 +1,8 @@
 use nuntio_term::{Rgb, Snapshot};
 
 /// Everything drawn in one frame, back to front: terminal panes, then UI
-/// rectangles, then UI text.
+/// rectangles, then UI text, then popups (rectangles and text) that cover
+/// all of it.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame<'a> {
     /// Clear color for areas nothing else covers.
@@ -12,6 +13,8 @@ pub struct Frame<'a> {
     pub panes: &'a [PaneView<'a>],
     pub rects: &'a [UiRect],
     pub texts: &'a [UiText],
+    pub popup_rects: &'a [UiRect],
+    pub popup_texts: &'a [UiText],
     /// Radius of the window's outer corners in physical pixels, cut out to
     /// transparent; 0 keeps them square. Needs a transparent surface.
     pub corner_radius: f32,

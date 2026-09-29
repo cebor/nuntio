@@ -482,6 +482,7 @@ impl Core {
             "tabs": tabs,
             "search": state.search.as_ref().map(|bar| json!({ "query": bar.query(), "regex": bar.regex() })),
             "banner": banner,
+            "actions_menu": state.actions_menu.as_ref().map(|menu| json!({ "selected": menu.selected_label() })),
             "pending_close": self.pending_close.is_some(),
             "pending_paste": self.pending_paste.is_some(),
             "idle_ms": self.debug.last_output.map(|t| now.duration_since(t).as_millis() as u64),

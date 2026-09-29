@@ -33,6 +33,9 @@ struct PaneShot {
 struct Overlay {
     rects: Vec<UiRect>,
     texts: Vec<UiText>,
+    /// Drawn over everything else, text included.
+    popup_rects: Vec<UiRect>,
+    popup_texts: Vec<UiText>,
 }
 
 impl Overlay {
@@ -100,6 +103,8 @@ impl WindowState {
             panes: &panes,
             rects: &overlay.rects,
             texts: &overlay.texts,
+            popup_rects: &overlay.popup_rects,
+            popup_texts: &overlay.popup_texts,
             corner_radius,
         };
         Some(draw(&mut self.renderer, &frame))
@@ -205,6 +210,12 @@ impl WindowState {
             let (rect, text) = banner.draw(width, self.banner_bottom(config), metrics);
             overlay.rects.push(rect);
             overlay.texts.push(text);
+        }
+
+        if let Some(menu) = &self.actions_menu {
+            let (rects, texts) = menu.draw(self.menu_view(), background, foreground);
+            overlay.popup_rects = rects;
+            overlay.popup_texts = texts;
         }
         overlay
     }
