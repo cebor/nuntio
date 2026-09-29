@@ -1106,7 +1106,9 @@ impl Core {
                     tab.bell = true;
                 }
                 if !active || !state.focused {
-                    state.window.request_user_attention(None);
+                    state.window.request_user_attention(Some(
+                        winit::window::UserAttentionType::Informational,
+                    ));
                 }
                 state.window.request_redraw();
             }
