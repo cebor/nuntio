@@ -183,7 +183,11 @@ impl EventListener for Listener {
             // `Exit` follows once the terminal is done.
             Event::Exit => TermEvent::Exit,
             Event::ChildExit(status) => {
-                tracing::debug!(%status, "shell exited");
+                if status.success() {
+                    tracing::debug!(%status, "shell exited");
+                } else {
+                    tracing::info!(%status, "shell exited");
+                }
                 return;
             }
             Event::ClipboardStore(_, text) => TermEvent::ClipboardStore(text),
