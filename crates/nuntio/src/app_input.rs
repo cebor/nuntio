@@ -198,8 +198,10 @@ impl Core {
     fn open_settings(&mut self, state: &mut WindowState) {
         match crate::pane_env::helper() {
             Some(helper) => {
-                let command = vec![helper.to_string_lossy().into_owned()];
-                self.new_tab(state, Launch::Command(command));
+                self.new_tab(
+                    state,
+                    Launch::Settings(helper.to_string_lossy().into_owned()),
+                );
             }
             None => self.notify(Banner::new(
                 Severity::Warning,

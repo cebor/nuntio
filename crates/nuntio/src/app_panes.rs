@@ -94,6 +94,10 @@ impl Core {
                 program: argv.remove(0),
                 args: argv,
             }),
+            Launch::Settings(program) => Some(Shell {
+                program,
+                args: Vec::new(),
+            }),
             Launch::Shell(ShellChoice { shell: None, .. }) => None,
             Launch::Shell(ShellChoice { shell: Some(s), .. }) => {
                 let wsl_dir = match &dir {

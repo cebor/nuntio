@@ -20,6 +20,8 @@ pub enum Launch {
     Shell(ShellChoice),
     /// argv, never empty.
     Command(Vec<String>),
+    /// `nuntio-config`, the settings tab: this program without arguments.
+    Settings(String),
 }
 
 impl Launch {
@@ -31,6 +33,7 @@ impl Launch {
                 .first()
                 .map(|program| detect::program_stem(program).to_owned())
                 .unwrap_or_default(),
+            Self::Settings(_) => "Shell".to_owned(),
         }
     }
 
