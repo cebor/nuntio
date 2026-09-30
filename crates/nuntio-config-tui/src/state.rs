@@ -805,26 +805,27 @@ impl App {
 
     /// Help, the chosen value, range and default of a setting.
     fn setting_details(&self, s: &Setting) -> Vec<(Tone, String)> {
-        let mut lines = vec![(Tone::Normal, s.help.into())];
+        let default = match value_at(&self.defaults, s.path) {
+            Some(value) => format_value(value),
+            None => s.unset.unwrap_or("").to_owned(),
+        };
+        let mut summary = format!("Default: {default}");
+        match s.kind {
+            Kind::Int { min, max, .. } => summary.push_str(&format!(" · Range: {min} to {max}")),
+            Kind::Float { min, max, .. } => summary.push_str(&format!(
+                " · Range: {} to {}",
+                format_float(min),
+                format_float(max)
+            )),
+            _ => {}
+        }
+        let mut lines = vec![(Tone::Normal, s.help.into()), (Tone::Dim, summary)];
         if let Kind::Choice(variants) = s.kind
             && let Some(current) = value_at(&self.values, s.path).and_then(|v| v.as_str())
             && let Some(v) = variants.iter().find(|v| v.value == current)
         {
             lines.push((Tone::Accent, format!("{}: {}", v.value, v.help)));
         }
-        match s.kind {
-            Kind::Int { min, max, .. } => lines.push((Tone::Dim, format!("Range: {min} to {max}"))),
-            Kind::Float { min, max, .. } => lines.push((
-                Tone::Dim,
-                format!("Range: {} to {}", format_float(min), format_float(max)),
-            )),
-            _ => {}
-        }
-        let default = match value_at(&self.defaults, s.path) {
-            Some(value) => format_value(value),
-            None => s.unset.unwrap_or("").to_owned(),
-        };
-        lines.push((Tone::Dim, format!("Default: {default}")));
         if let Some(platform) = s.platform {
             lines.push((
                 Tone::Dim,
@@ -1691,7 +1692,7 @@ mod tests {
         assert!(app.row_is_set(row));
         let details = app.details();
         assert!(
-            details.iter().any(|(_, l)| l == "Default: 0.15"),
+            details.iter().any(|(_, l)| l.starts_with("Default: 0.15")),
             "{details:?}"
         );
         go_to(&mut app, "font.family");
