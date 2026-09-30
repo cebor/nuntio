@@ -443,21 +443,39 @@ impl Core {
         let Some(new) = banner else {
             return;
         };
-        for message in &new.messages {
-            match new.severity {
-                Severity::Error => tracing::error!("{message}"),
-                Severity::Warning => tracing::warn!("{message}"),
-                Severity::Info => tracing::info!("{message}"),
-            }
-        }
+        Self::log_banner(&new);
         self.banner = match self.banner.take() {
             Some(mut old) if old.severity == new.severity && old.title == new.title => {
-                old.messages.extend(new.messages);
+                for message in new.messages {
+                    if !old.messages.contains(&message) {
+                        old.messages.push(message);
+                    }
+                }
                 Some(old)
             }
             Some(old) if old.severity == Severity::Error => Some(old),
             _ => Some(new),
         };
+        self.request_redraw();
+    }
+
+    fn log_banner(banner: &Banner) {
+        for message in &banner.messages {
+            match banner.severity {
+                Severity::Error => tracing::error!("{message}"),
+                Severity::Warning => tracing::warn!("{message}"),
+                Severity::Info => tracing::info!("{message}"),
+            }
+        }
+    }
+
+    /// Show `banner` in place of any other, even an error. `None` keeps the
+    /// current one.
+    fn replace_banner(&mut self, banner: Option<Banner>) {
+        if let Some(banner) = banner {
+            Self::log_banner(&banner);
+            self.banner = Some(banner);
+        }
         self.request_redraw();
     }
 
@@ -481,9 +499,7 @@ impl Core {
     /// any other banner, even an error: the action must not look like it
     /// failed.
     fn ask_to_repeat(&mut self, title: &'static str, message: String) {
-        tracing::info!("{message}");
-        self.banner = Banner::new(Severity::Warning, title, vec![message]);
-        self.request_redraw();
+        self.replace_banner(Banner::new(Severity::Warning, title, vec![message]));
     }
 
     /// Open `url` in the browser, or say why not.
@@ -629,7 +645,12 @@ impl Core {
         let release = match checked.result {
             Ok(release) => release,
             Err(err) if show_banner => {
-                self.notify(Banner::new(Severity::Warning, "Update check", vec![err]));
+                let banner = Banner::new(Severity::Warning, "Update check", vec![err]);
+                if checked.manual {
+                    self.replace_banner(banner);
+                } else {
+                    self.notify(banner);
+                }
                 return;
             }
             Err(err) => {
@@ -649,10 +670,15 @@ impl Core {
         };
         if let Some((message, url)) = message {
             let banner = Banner::new(Severity::Info, update::BANNER, vec![message]);
-            self.notify(banner.map(|b| match url {
+            let banner = banner.map(|b| match url {
                 Some(url) => b.with_url(url),
                 None => b,
-            }));
+            });
+            if checked.manual {
+                self.replace_banner(banner);
+            } else {
+                self.notify(banner);
+            }
         }
         self.set_update(state, update);
     }
