@@ -179,7 +179,29 @@ fn with_meta(mut bytes: Vec<u8>, meta: bool) -> Vec<u8> {
     bytes
 }
 
+/// F13–F35 as xterm's terminfo defines them: F13–F24 are Shift+F1–F12 and
+/// F25–F35 are Ctrl+F1–F11. Returns the base key and whether Ctrl (not
+/// Shift) is added.
+fn high_function_key(key: NamedKey) -> Option<(NamedKey, bool)> {
+    use NamedKey::*;
+    const HIGH: [NamedKey; 23] = [
+        F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30,
+        F31, F32, F33, F34, F35,
+    ];
+    const LOW: [NamedKey; 12] = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
+    let i = HIGH.iter().position(|&k| k == key)?;
+    Some((LOW[i % 12], i >= 12))
+}
+
 fn encode_named(key: NamedKey, input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
+    if let Some((base, ctrl)) = high_function_key(key) {
+        let input = KeyInput {
+            shift: input.shift || !ctrl,
+            ctrl: input.ctrl || ctrl,
+            ..input.clone()
+        };
+        return encode_named(base, &input, mode);
+    }
     // Option+←/→/⌫ work on words, as in Terminal.app: the Emacs keys that
     // readline, zsh and fish know without any setup.
     if input.option && !input.ctrl && !input.shift {
@@ -371,7 +393,7 @@ fn control_byte(s: &str) -> Option<u8> {
         '\\' | '4' => Some(0x1c),
         ']' | '5' => Some(0x1d),
         '^' | '6' => Some(0x1e),
-        '_' | '-' | '7' => Some(0x1f),
+        '_' | '-' | '/' | '7' => Some(0x1f),
         '?' | '8' => Some(0x7f),
         _ => None,
     }
@@ -442,6 +464,21 @@ mod tests {
             mods,
             TermMode::empty(),
         )
+    }
+
+    #[test]
+    fn high_function_keys_use_shift_and_ctrl_f1_to_f12() {
+        let none = TermMode::empty();
+        assert_eq!(named(NamedKey::F13, NONE, none), b"\x1b[1;2P");
+        assert_eq!(named(NamedKey::F17, NONE, none), b"\x1b[15;2~");
+        assert_eq!(named(NamedKey::F24, NONE, none), b"\x1b[24;2~");
+        assert_eq!(named(NamedKey::F25, NONE, none), b"\x1b[1;5P");
+        assert_eq!(named(NamedKey::F13, SHIFT, none), b"\x1b[1;2P");
+    }
+
+    #[test]
+    fn ctrl_slash_is_unit_separator() {
+        assert_eq!(char_key("/", Some("/"), CTRL), Some(vec![0x1f]));
     }
 
     #[test]
