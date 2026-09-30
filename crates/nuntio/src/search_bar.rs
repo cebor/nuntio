@@ -161,7 +161,7 @@ impl SearchBar {
             }
             right.push_str(&status);
         }
-        let right = head(&right, columns.saturating_sub(4));
+        let right = crate::style::truncate(&right, columns.saturating_sub(4));
         let right_width = right.width();
         let query = tail(&self.query, columns.saturating_sub(right_width + 2));
 
@@ -192,17 +192,6 @@ fn format_position(position: MatchPosition) -> String {
         Some(index) => format!("{index}/{}{more}", position.total),
         None => format!("{}{more}", position.total),
     }
-}
-
-/// The first `columns` display columns of `text`.
-fn head(text: &str, columns: usize) -> String {
-    let mut width = 0;
-    text.chars()
-        .take_while(|c| {
-            width += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-            width <= columns
-        })
-        .collect()
 }
 
 /// The last `columns` display columns of `text` (keeps the typed end visible).
@@ -274,7 +263,7 @@ mod tests {
 
     #[test]
     fn status_is_cut_by_display_width() {
-        assert_eq!(head("日本語", 4), "日本");
+        assert_eq!(crate::style::truncate("日本語", 4), "日…");
         let mut bar = SearchBar::new();
         bar.error = Some("日本語のエラー".repeat(10));
         let narrow = Rect {

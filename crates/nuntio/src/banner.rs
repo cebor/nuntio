@@ -6,7 +6,7 @@ use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::rgb;
 
 use crate::style::UiMetrics;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 const CONFIG_ERROR: &str = "Config error, not applied";
 const CONFIG_WARNING: &str = "Config warning";
@@ -117,12 +117,11 @@ impl Banner {
         let (background, foreground) = match self.severity {
             Severity::Error => (rgb(0xb3261e), rgb(0xffffff)),
             Severity::Warning => (rgb(0x7a5c00), rgb(0xffffff)),
-            Severity::Info => (rgb(0x1f5fa8), rgb(0xffffff)),
         };
         let padding = (height - cell.height as f32) / 2.0;
         // Leave room for the closing "×" at the right.
         let columns = ((window_width - 2.0 * padding) / cell.width as f32) as usize;
-        let text = fit(&self.text(), columns.saturating_sub(2));
+        let text = crate::style::truncate(&self.text(), columns.saturating_sub(2));
         // Pad by display width, so the × stays at the edge after wide text.
         let pad = columns.saturating_sub(2).saturating_sub(text.width());
         let text = format!("{text}{} ×", " ".repeat(pad));
@@ -131,17 +130,6 @@ impl Banner {
             UiText::new(padding, top + padding, text, foreground),
         )
     }
-}
-
-/// Cut `text` to `columns` display columns.
-fn fit(text: &str, columns: usize) -> String {
-    let mut used = 0;
-    text.chars()
-        .take_while(|c| {
-            used += c.width().unwrap_or(0);
-            used <= columns
-        })
-        .collect()
 }
 
 #[cfg(test)]
