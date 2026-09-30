@@ -301,6 +301,9 @@ struct Core {
     system_monitor: Option<SystemMonitor>,
     /// The window is hidden (minimized or covered); sampling pauses.
     occluded: bool,
+    /// The warning the last theme lookup gave, so a light/dark switch can
+    /// replace it and keep other config messages.
+    palette_warning: Option<String>,
     stats: Stats,
     /// The daily update check, while an update indicator is on.
     update_checker: Option<Checker>,
@@ -395,6 +398,7 @@ impl Core {
             bindings,
             system_monitor: None,
             occluded: false,
+            palette_warning: None,
             stats: Stats::default(),
             update_checker: None,
             update: None,
@@ -535,6 +539,7 @@ impl Core {
             }
             state.window.request_redraw();
         }
+        self.palette_warning = warning.clone();
         warning
     }
 
@@ -545,8 +550,15 @@ impl Core {
         }
         self.os_dark = dark;
         if matches!(self.config.theme, ThemeSelection::Auto { .. }) {
+            let previous = self.palette_warning.take();
             let warning = self.update_palette(state);
-            self.clear_config_banner();
+            if let Some(previous) = previous
+                && let Some(banner) = self.banner.as_mut()
+                && banner.is_config()
+                && !banner.remove_message(&previous)
+            {
+                self.banner = None;
+            }
             self.notify(Banner::config(
                 Severity::Warning,
                 warning.into_iter().collect(),

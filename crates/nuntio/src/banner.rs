@@ -64,6 +64,15 @@ impl Banner {
         self.title == CONFIG_ERROR || self.title == CONFIG_WARNING
     }
 
+    /// Drop `message`. Returns whether any message is left.
+    pub fn remove_message(&mut self, message: &str) -> bool {
+        self.messages.retain(|m| m != message);
+        if self.shown >= self.messages.len() {
+            self.shown = 0;
+        }
+        !self.messages.is_empty()
+    }
+
     fn text(&self) -> String {
         let message = &self.messages[self.shown];
         match self.messages.len() {
