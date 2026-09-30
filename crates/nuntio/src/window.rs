@@ -850,7 +850,7 @@ impl WindowState {
     pub fn send_focus(&self, focused: bool) {
         let term = self.term();
         if self.focused && term.mode().contains(TermMode::FOCUS_IN_OUT) {
-            term.write(if focused {
+            term.send(if focused {
                 &b"\x1b[I"[..]
             } else {
                 &b"\x1b[O"[..]

@@ -201,7 +201,7 @@ impl WindowState {
         if let Some(bytes) =
             mouse::encode_report(button, action, mods, point.column, point.line, term.mode())
         {
-            term.write(bytes);
+            term.send(bytes);
         }
     }
 

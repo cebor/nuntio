@@ -255,7 +255,7 @@ impl Core {
         };
         match kind {
             // Letting go of a key doesn't count as typing.
-            KeyEventKind::Release => state.term().write(bytes),
+            KeyEventKind::Release => state.term().send(bytes),
             _ => state.type_bytes(bytes),
         }
     }

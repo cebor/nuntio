@@ -350,7 +350,7 @@ impl TermHandle {
         }
     }
 
-    /// Send user input to the shell.
+    /// Send typed or pasted input to the shell; jumps back to the bottom.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
         let bytes = bytes.into();
         if bytes.is_empty() {
@@ -358,6 +358,15 @@ impl TermHandle {
         }
         // Typing jumps back to the bottom, like every terminal does.
         self.term.lock().scroll_display(Scroll::Bottom);
+        let _ = self.sender.send(Msg::Input(bytes));
+    }
+
+    /// Send machine-generated input (reports) without moving the view.
+    pub fn send(&self, bytes: impl Into<Cow<'static, [u8]>>) {
+        let bytes = bytes.into();
+        if bytes.is_empty() {
+            return;
+        }
         let _ = self.sender.send(Msg::Input(bytes));
     }
 
