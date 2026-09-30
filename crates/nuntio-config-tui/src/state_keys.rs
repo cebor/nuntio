@@ -779,10 +779,19 @@ impl App {
         for (s, section) in Section::ALL.iter().enumerate() {
             for (r, row) in self.rows(*section).into_iter().enumerate() {
                 let haystack = match row {
-                    Row::Setting(setting) => {
-                        format!("{} {} {}", setting.label, setting.path, setting.help)
-                    }
-                    _ => format!("{} {}", self.row_label(row), section.label()),
+                    Row::Setting(setting) => format!(
+                        "{} {} {} {}",
+                        section.label(),
+                        setting.label,
+                        setting.path,
+                        setting.help
+                    ),
+                    _ => format!(
+                        "{} {} {}",
+                        self.row_label(row),
+                        self.row_value(row).1,
+                        section.label()
+                    ),
                 };
                 if haystack.to_lowercase().contains(&query) {
                     results.push((s, r));

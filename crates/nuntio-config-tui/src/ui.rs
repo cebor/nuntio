@@ -221,11 +221,12 @@ fn item_line(app: &App, entry: Entry, width: usize) -> ListItem<'static> {
 }
 
 fn draw_search(frame: &mut Frame, app: &App, mode: &SearchMode) {
-    let inner = open_popup(frame, 60, mode.results.len() as u16 + 3, "Search");
+    let height = mode.results.len().max(1) as u16 + 3;
+    let inner = open_popup(frame, 60, height, "Search");
     let [line_area, list_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
     draw_input(frame, line_area, &mode.input);
-    let items = mode
+    let items: Vec<ListItem> = mode
         .results
         .iter()
         .map(|&(section, row)| {
@@ -237,6 +238,10 @@ fn draw_search(frame: &mut Frame, app: &App, mode: &SearchMode) {
             ]))
         })
         .collect();
+    if items.is_empty() {
+        let empty = Line::styled("No matches", tone(Tone::Dim));
+        frame.render_widget(Paragraph::new(empty), list_area);
+    }
     draw_list(frame, list_area, items, mode.selected);
 }
 

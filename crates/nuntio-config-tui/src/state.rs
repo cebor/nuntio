@@ -1643,6 +1643,28 @@ mod tests {
     }
 
     #[test]
+    fn search_finds_sections_and_actions() {
+        let (app, _) = app(Some(
+            "[[keybindings]]\nkey = \"Ctrl+T\"\naction = \"split_vertical\"\n",
+        ));
+        let bar = Section::ALL
+            .iter()
+            .position(|s| *s == Section::StatusBar)
+            .unwrap();
+        let enabled = app
+            .rows(Section::StatusBar)
+            .iter()
+            .position(|r| matches!(r, Row::Setting(s) if s.path == "status_bar.enabled"))
+            .unwrap();
+        assert!(app.search("status bar").contains(&(bar, enabled)));
+        let keys = Section::ALL
+            .iter()
+            .position(|s| *s == Section::Keybindings)
+            .unwrap();
+        assert!(app.search("split").iter().any(|(s, _)| *s == keys));
+    }
+
+    #[test]
     fn navigation_moves_between_sections() {
         let (mut app, _) = app(None);
         assert_eq!(app.current_section(), Section::General);
