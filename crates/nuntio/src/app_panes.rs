@@ -129,7 +129,29 @@ impl Core {
             Some(dir) => self.existing_dir(dir).map(StartDir::Local),
             None => self.configured_dir(command.is_none()),
         };
-        self.spawn_pane(dir, command, INITIAL_GRID)
+        let is_shell = command.is_none();
+        let err = match self.spawn_pane(dir, command, INITIAL_GRID) {
+            Ok(pane) => return Ok(pane),
+            Err(err) => err,
+        };
+        if !is_shell || self.config.shell.is_none() {
+            return Err(err);
+        }
+        // A broken `shell` setting shouldn't keep the window from opening.
+        let shell = self.config.shell.take();
+        let fallback = self.spawn_pane(dirs::home_dir().map(StartDir::Local), None, INITIAL_GRID);
+        self.config.shell = shell;
+        let Ok(pane) = fallback else {
+            return Err(err);
+        };
+        self.notify(Banner::new(
+            Severity::Error,
+            "Shell",
+            vec![format!(
+                "failed to start: {err}; started the default shell instead"
+            )],
+        ));
+        Ok(pane)
     }
 
     /// Start a shell, or `command`, for a new tab or split: in the focused
