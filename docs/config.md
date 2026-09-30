@@ -401,6 +401,8 @@ A key combination is zero or more modifiers followed by one key, joined with `+`
 | Alt / Option | `Alt`, `Opt`, `Option` |
 | Cmd / Super / Windows key | `Cmd`, `Command`, `Super`, `Win`, `Meta` |
 
+`nuntio-config` and the actions menu write this modifier as `Cmd` on macOS, `Win` on Windows and `Super` on Linux.
+
 The key is either a single character (`T`, `1`, `,`, `]`) or one of these names:
 
 `Enter` (`Return`), `Tab`, `Escape` (`Esc`), `Space`, `Backspace`, `Delete` (`Del`), `Insert` (`Ins`), `Home`, `End`, `PageUp` (`PgUp`), `PageDown` (`PgDn`), `Up`, `Down`, `Left`, `Right`, `F1` to `F12`, `Plus`, `Minus`

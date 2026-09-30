@@ -150,6 +150,15 @@ fn parse_key(key: &str) -> Result<KeyName, KeyComboError> {
     Ok(KeyName::Named(named))
 }
 
+/// How the super modifier is written for display; all three are accepted when parsing.
+const SUPER_NAME: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else if cfg!(windows) {
+    "Win"
+} else {
+    "Super"
+};
+
 /// Canonical spelling, e.g. `Ctrl+Shift+T`.
 impl fmt::Display for KeyCombo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -162,7 +171,7 @@ impl fmt::Display for KeyCombo {
         for (on, name) in [
             (ctrl, "Ctrl"),
             (alt, "Alt"),
-            (super_key, "Cmd"),
+            (super_key, SUPER_NAME),
             (shift, "Shift"),
         ] {
             if on {
@@ -289,7 +298,10 @@ mod tests {
     #[test]
     fn canonical_spelling() {
         assert_eq!(combo("shift + ctrl + t").to_string(), "Ctrl+Shift+T");
-        assert_eq!(combo("Cmd+Opt+pgdn").to_string(), "Alt+Cmd+PageDown");
+        assert_eq!(
+            combo("Cmd+Opt+pgdn").to_string(),
+            format!("Alt+{SUPER_NAME}+PageDown")
+        );
         assert_eq!(combo("ctrl+plus").to_string(), "Ctrl+Plus");
         assert_eq!(combo("f12").to_string(), "F12");
         assert_eq!(combo(&combo("Ctrl+Alt+,").to_string()), combo("Ctrl+Alt+,"));
