@@ -581,6 +581,10 @@ impl App {
                     .err();
                 (problem, None)
             }
+            InputTarget::BindingKey { .. } if text.trim().is_empty() => (
+                None,
+                Some((Tone::Dim, "Type a combination like Ctrl+Shift+N".into())),
+            ),
             InputTarget::BindingKey { index } => match KeyCombo::parse(text) {
                 Err(err) => (Some(err.to_string()), None),
                 Ok(combo) => {
@@ -613,8 +617,10 @@ impl App {
                     }
                 }
                 InputTarget::BindingKey { index } => {
-                    self.open_action_picker(*index, mode.input.text.trim().to_owned());
-                    return;
+                    if !mode.input.text.trim().is_empty() {
+                        self.open_action_picker(*index, mode.input.text.trim().to_owned());
+                        return;
+                    }
                 }
             },
             key => {
