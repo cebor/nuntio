@@ -50,7 +50,7 @@ pub fn strip_user_host(title: &str) -> String {
 pub fn tilde_path(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok()) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~/{}", rest.display()),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         None => path.display().to_string(),
     }
 }
@@ -78,6 +78,18 @@ mod tests {
         );
         assert_eq!(tilde_path(Path::new("/home/felixx"), home), "/home/felixx");
         assert_eq!(tilde_path(Path::new("/etc"), None), "/etc");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn home_becomes_tilde_on_windows() {
+        assert_eq!(
+            tilde_path(
+                Path::new(r"C:\Users\f\code"),
+                Some(Path::new(r"C:\Users\f"))
+            ),
+            "~\\code"
+        );
     }
 
     fn info(shell_idle: Option<bool>) -> TitleInfo {
