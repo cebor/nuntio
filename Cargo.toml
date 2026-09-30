@@ -66,7 +66,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 # Color matching of the Metal layer.
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "objc2-core-graphics"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGColorSpace"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 # The DirectComposition tree of the window. The version wgpu already uses.
 windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_DirectComposition"] }
 

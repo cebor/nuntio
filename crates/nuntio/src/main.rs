@@ -103,10 +103,12 @@ fn parse_args() -> Result<Args, lexopt::Error> {
                 args.startup.command = Some(command(program.string()?, &mut parser)?);
             }
             Short('h') | Long("help") => {
+                attach_parent_console();
                 print!("{HELP}{DEBUG_HELP}");
                 std::process::exit(0);
             }
             Short('V') | Long("version") => {
+                attach_parent_console();
                 println!("nuntio {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
@@ -186,11 +188,33 @@ fn restrict_dll_search() {
     }
 }
 
+/// Release builds on Windows have no console; use the one of the shell that
+/// started nuntio, so that help, version and errors show up there.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+
+    // SAFETY: no pointers; fails harmlessly when there is no parent console.
+    unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}
+
 /// wgpu, the clipboard and the window frame report things a working setup
 /// can't fix (no GL driver, no data control protocol, no settings portal).
 const DEFAULT_LOG_FILTER: &str = "info,wgpu_hal=warn,wgpu_core=warn,arboard=error,sctk_adwaita=off";
 
 fn main() -> Result<()> {
+    let result = run();
+    // Startup errors go to stderr, which a GUI-subsystem build doesn't have.
+    if result.is_err() {
+        attach_parent_console();
+    }
+    result
+}
+
+fn run() -> Result<()> {
     let mut args = parse_args()?;
 
     let filter = match &args.log_level {
