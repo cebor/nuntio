@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use nuntio_config::ThemeSet;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
+};
 
 use crate::state::{App, Key, Sources, Store, Tone};
 
@@ -215,20 +218,27 @@ pub fn main() -> Result<()> {
 
     let mut view = ui::View::default();
     let mut terminal = ratatui::init();
+    let _ = ratatui::crossterm::execute!(io::stdout(), EnableBracketedPaste);
     let result = (|| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| ui::draw(frame, &app, &mut view))?;
             // Blocks until there is input: no CPU use while idle.
-            if let Event::Key(key) = event::read()?
-                && let Some(key) = map_key(key)
-            {
-                app.key(key);
+            match event::read()? {
+                Event::Key(key) => {
+                    if let Some(key) = map_key(key) {
+                        app.key(key);
+                    }
+                }
+                Event::Paste(text) => app.paste(&text),
+                _ => {}
             }
             if app.open_editor {
                 app.open_editor = false;
+                let _ = ratatui::crossterm::execute!(io::stdout(), DisableBracketedPaste);
                 ratatui::restore();
                 let edited = run_editor(&path);
                 terminal = ratatui::init();
+                let _ = ratatui::crossterm::execute!(io::stdout(), EnableBracketedPaste);
                 match edited {
                     Ok(()) => app.reload(),
                     Err(err) => app.message = Some((Tone::Error, format!("{err:#}"))),
@@ -237,6 +247,7 @@ pub fn main() -> Result<()> {
         }
         Ok(())
     })();
+    let _ = ratatui::crossterm::execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
 }

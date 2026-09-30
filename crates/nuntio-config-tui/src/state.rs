@@ -1627,6 +1627,22 @@ mod tests {
     }
 
     #[test]
+    fn paste_only_reaches_text_fields() {
+        let (mut app, _) = app(None);
+        let section = app.current_section();
+        app.paste("Dracula\nq");
+        assert!(!app.quit);
+        assert_eq!(app.current_section(), section);
+        assert!(matches!(app.mode, Mode::Normal));
+        app.key(Key::Char('/'));
+        app.paste("Dracula\nq");
+        let Mode::Search(mode) = &app.mode else {
+            panic!("not searching");
+        };
+        assert_eq!(mode.input.text, "Dracula");
+    }
+
+    #[test]
     fn navigation_moves_between_sections() {
         let (mut app, _) = app(None);
         assert_eq!(app.current_section(), Section::General);

@@ -31,6 +31,20 @@ impl App {
         }
     }
 
+    /// Pasted text goes to the open text field, first line only. Elsewhere
+    /// it would be read as commands, so it is dropped.
+    pub fn paste(&mut self, text: &str) {
+        if !matches!(
+            self.mode,
+            Mode::Input(_) | Mode::Picker(_) | Mode::Search(_)
+        ) {
+            return;
+        }
+        for c in text.lines().next().unwrap_or("").chars() {
+            self.key(Key::Char(c));
+        }
+    }
+
     fn normal_key(&mut self, key: Key) {
         self.message = None;
         match key {
