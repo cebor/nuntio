@@ -76,8 +76,6 @@ enum GlyphKey {
     Char(char, FaceStyle),
     /// A character of small UI text.
     Small(char, FaceStyle),
-    /// A base character with combining marks.
-    Cluster(Box<str>, FaceStyle),
     /// A patterned underline, one cell wide.
     Underline(UnderlineStyle),
 }
@@ -99,6 +97,9 @@ enum AtlasFull {
     Color,
 }
 
+/// Cached sprites of one cluster, one slot per size/bold/italic combination.
+type ClusterSlots = [Option<Rc<[Sprite]>>; 8];
+
 /// A frame read back by [`Renderer::capture`].
 #[cfg(feature = "capture")]
 #[derive(Debug, Clone)]
@@ -116,6 +117,11 @@ pub struct Renderer {
     mask_atlas: Atlas,
     color_atlas: Atlas,
     glyphs: HashMap<GlyphKey, Rc<[Sprite]>>,
+    /// Glyphs of characters with combining marks, by text and a slot for
+    /// each size/bold/italic combination.
+    clusters: HashMap<Box<str>, ClusterSlots>,
+    /// Scratch buffer for building cluster text without allocating.
+    cluster_text: String,
     pipeline: wgpu::RenderPipeline,
     /// Cuts the window's rounded corners out of the finished frame.
     cutout_pipeline: wgpu::RenderPipeline,
@@ -213,6 +219,8 @@ impl Renderer {
             mask_atlas,
             color_atlas,
             glyphs: HashMap::new(),
+            clusters: HashMap::new(),
+            cluster_text: String::new(),
             pipeline,
             cutout_pipeline,
             bind_group,
@@ -293,6 +301,7 @@ impl Renderer {
 
     fn clear_glyphs(&mut self) {
         self.glyphs.clear();
+        self.clusters.clear();
         self.mask_atlas.clear();
         self.color_atlas.clear();
     }
@@ -601,19 +610,38 @@ impl Renderer {
             italic: false,
         };
         let mut x = text.x;
-        for c in text.text.chars() {
+        let mut chars = text.text.chars().peekable();
+        while let Some(c) = chars.next() {
             let width = c.width().unwrap_or(0);
             if width == 0 {
                 continue;
             }
-            if c != ' ' {
+            let mut marks = std::mem::take(&mut self.cluster_text);
+            marks.clear();
+            marks.push(c);
+            while let Some(&mark) = chars.peek() {
+                if mark.width() != Some(0) {
+                    break;
+                }
+                marks.push(mark);
+                chars.next();
+            }
+            let has_marks = marks.len() > c.len_utf8();
+            let sprites = if has_marks {
+                Some(self.cluster_sprites(&marks, style, text.small))
+            } else if c != ' ' {
                 let key = if text.small {
                     GlyphKey::Small(c, style)
                 } else {
                     GlyphKey::Char(c, style)
                 };
-                let sprites = self.glyph_sprites(key)?;
-                self.push_sprites(&sprites, x, text.y, text.color);
+                Some(self.glyph_sprites(key))
+            } else {
+                None
+            };
+            self.cluster_text = marks;
+            if let Some(sprites) = sprites {
+                self.push_sprites(&sprites?, x, text.y, text.color);
             }
             x += width as f32 * cw;
         }
@@ -765,16 +793,39 @@ impl Renderer {
             bold: cell.style.bold,
             italic: cell.style.italic,
         };
-        let key = match &cell.zerowidth {
-            None => GlyphKey::Char(cell.c, style),
-            Some(marks) => GlyphKey::Cluster(
-                std::iter::once(cell.c)
-                    .chain(marks.iter().copied())
-                    .collect(),
-                style,
-            ),
-        };
-        self.glyph_sprites(key)
+        match &cell.zerowidth {
+            None => self.glyph_sprites(GlyphKey::Char(cell.c, style)),
+            Some(marks) => {
+                let mut text = std::mem::take(&mut self.cluster_text);
+                text.clear();
+                text.push(cell.c);
+                text.extend(marks.iter().copied());
+                let result = self.cluster_sprites(&text, style, false);
+                self.cluster_text = text;
+                result
+            }
+        }
+    }
+
+    /// Look up or rasterize the glyphs of a base character with combining
+    /// marks, without allocating on a hit.
+    fn cluster_sprites(
+        &mut self,
+        text: &str,
+        style: FaceStyle,
+        small: bool,
+    ) -> Result<Rc<[Sprite]>, AtlasFull> {
+        let slot = usize::from(small) * 4 + usize::from(style.bold) * 2 + usize::from(style.italic);
+        if let Some(sprites) = self
+            .clusters
+            .get(text)
+            .and_then(|slots| slots[slot].as_ref())
+        {
+            return Ok(sprites.clone());
+        }
+        let sprites: Rc<[Sprite]> = self.font_sprites(text, style, small)?.into();
+        self.clusters.entry(text.into()).or_default()[slot] = Some(sprites.clone());
+        Ok(sprites)
     }
 
     /// Look up or rasterize the glyphs for a key.
@@ -785,7 +836,6 @@ impl Renderer {
         let sprites: Rc<[Sprite]> = match &key {
             GlyphKey::Char(c, style) => self.char_sprites(*c, *style, false)?,
             GlyphKey::Small(c, style) => self.char_sprites(*c, *style, true)?,
-            GlyphKey::Cluster(text, style) => self.font_sprites(text, *style, false)?,
             GlyphKey::Underline(style) => self.underline_sprites(*style)?,
         }
         .into();
