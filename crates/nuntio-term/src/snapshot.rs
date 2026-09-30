@@ -180,6 +180,7 @@ impl Snapshot {
             }
             let hidden = flags.contains(Flags::HIDDEN)
                 || flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
+            let spacer = flags.contains(Flags::WIDE_CHAR_SPACER);
 
             cells[line as usize * columns + indexed.point.column.0] = SnapshotCell {
                 c: if hidden { ' ' } else { cell.c },
@@ -193,13 +194,20 @@ impl Snapshot {
                 style: CellStyle {
                     bold: flags.contains(Flags::BOLD),
                     italic: flags.contains(Flags::ITALIC),
-                    underline: UnderlineStyle::from_flags(flags),
-                    strikeout: flags.contains(Flags::STRIKEOUT),
+                    underline: if spacer {
+                        None
+                    } else {
+                        UnderlineStyle::from_flags(flags)
+                    },
+                    strikeout: !spacer && flags.contains(Flags::STRIKEOUT),
                     wide: flags.contains(Flags::WIDE_CHAR),
                 },
-                underline_color: cell
-                    .underline_color()
-                    .map(|color| palette.resolve(color, overrides)),
+                underline_color: if spacer {
+                    None
+                } else {
+                    cell.underline_color()
+                        .map(|color| palette.resolve(color, overrides))
+                },
             };
         }
 
