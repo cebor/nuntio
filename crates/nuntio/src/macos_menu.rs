@@ -177,6 +177,11 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
     b.separator(&view);
     b.action(&view, "Zoom Pane", Action::ZoomPane);
     b.separator(&view);
+    b.action(&view, "Scroll Page Up", Action::ScrollPageUp);
+    b.action(&view, "Scroll Page Down", Action::ScrollPageDown);
+    b.action(&view, "Scroll Line Up", Action::ScrollLineUp);
+    b.action(&view, "Scroll Line Down", Action::ScrollLineDown);
+    b.separator(&view);
     // AppKit retitles it (Enter/Exit Full Screen) and adds no second one.
     let full_screen = b.native(&view, "Enter Full Screen", sel!(toggleFullScreen:), "f");
     full_screen.setKeyEquivalentModifierMask(
@@ -198,6 +203,14 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
         ("Select Pane on the Right", Direction::Right),
     ] {
         b.action(&window, title, Action::FocusPane(direction));
+    }
+    for (title, direction) in [
+        ("Resize Pane Left", Direction::Left),
+        ("Resize Pane Right", Direction::Right),
+        ("Resize Pane Up", Direction::Up),
+        ("Resize Pane Down", Direction::Down),
+    ] {
+        b.action(&window, title, Action::ResizePane(direction));
     }
     b.separator(&window);
     b.native(&window, "Bring All to Front", sel!(arrangeInFront:), "");
