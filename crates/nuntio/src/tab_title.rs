@@ -59,6 +59,11 @@ pub fn tilde_path(path: &Path, home: Option<&Path>) -> String {
 mod tests {
     use super::*;
 
+    /// `~` and `rest` joined as `tilde_path` does on this platform.
+    fn tilde(rest: &str) -> String {
+        format!("~{}{rest}", std::path::MAIN_SEPARATOR)
+    }
+
     #[test]
     fn user_and_host_are_stripped() {
         assert_eq!(strip_user_host("felix@box: ~/code"), "~/code");
@@ -74,7 +79,7 @@ mod tests {
         assert_eq!(tilde_path(Path::new("/home/felix"), home), "~");
         assert_eq!(
             tilde_path(Path::new("/home/felix/code/nuntio"), home),
-            "~/code/nuntio"
+            tilde("code/nuntio")
         );
         assert_eq!(tilde_path(Path::new("/home/felixx"), home), "/home/felixx");
         assert_eq!(tilde_path(Path::new("/etc"), None), "/etc");
@@ -104,7 +109,7 @@ mod tests {
     #[test]
     fn auto_shows_the_directory_at_the_prompt_and_the_program_otherwise() {
         let home = Some(Path::new("/home/felix"));
-        assert_eq!(title(TabTitle::Auto, info(Some(true)), home), "~/src");
+        assert_eq!(title(TabTitle::Auto, info(Some(true)), home), tilde("src"));
         assert_eq!(title(TabTitle::Auto, info(Some(false)), home), "htop");
         // Without process information, fall back to the cleaned-up OSC title.
         assert_eq!(title(TabTitle::Auto, info(None), home), "~/code");
@@ -118,7 +123,7 @@ mod tests {
     #[test]
     fn fixed_modes() {
         let home = Some(Path::new("/home/felix"));
-        assert_eq!(title(TabTitle::Path, info(Some(false)), home), "~/src");
+        assert_eq!(title(TabTitle::Path, info(Some(false)), home), tilde("src"));
         assert_eq!(title(TabTitle::Process, info(Some(true)), home), "htop");
         assert_eq!(
             title(TabTitle::Application, info(Some(true)), home),
