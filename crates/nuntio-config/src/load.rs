@@ -145,14 +145,7 @@ pub(crate) fn line_at(source: &str, offset: usize) -> usize {
 pub(crate) fn describe(err: &toml::de::Error, source: &str) -> String {
     let message = err.message().trim_end();
     match err.span() {
-        Some(span) => {
-            let line = source.as_bytes()[..span.start.min(source.len())]
-                .iter()
-                .filter(|&&b| b == b'\n')
-                .count()
-                + 1;
-            format!("line {line}: {message}")
-        }
+        Some(span) => format!("line {}: {message}", line_at(source, span.start)),
         None => message.to_owned(),
     }
 }
@@ -284,17 +277,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keys_in_tables_name_the_entry() {
-        let loaded =
-            parse("[[keybindings]]\nkey = \"Ctrl+T\"\naction = \"new_tab\"\nactoin = \"x\"")
-                .unwrap();
-        assert_eq!(
-            loaded.warnings,
-            ["unknown key `actoin` in [[keybindings]] entry 1"]
-        );
-    }
-
-    #[test]
     fn unknown_keys_are_warnings() {
         let mut loaded = parse("scrolback = 5\n[font]\nsize = 12.0\nfamliy = \"Hack\"").unwrap();
         assert_eq!(loaded.config.font.size, 12.0);
@@ -302,6 +284,17 @@ mod tests {
         assert_eq!(
             loaded.warnings,
             ["unknown key `font.famliy`", "unknown key `scrolback`"]
+        );
+    }
+
+    #[test]
+    fn unknown_keys_in_tables_name_the_entry() {
+        let loaded =
+            parse("[[keybindings]]\nkey = \"Ctrl+T\"\naction = \"new_tab\"\nactoin = \"x\"")
+                .unwrap();
+        assert_eq!(
+            loaded.warnings,
+            ["unknown key `actoin` in [[keybindings]] entry 1"]
         );
     }
 

@@ -21,7 +21,14 @@ impl ConfigDoc {
     pub fn parse(source: &str) -> Result<Self, String> {
         DocumentMut::from_str(source)
             .map(|doc| Self { doc })
-            .map_err(|e| e.to_string().trim_end().to_owned())
+            .map_err(|e| match e.span() {
+                Some(span) => format!(
+                    "line {}: {}",
+                    crate::load::line_at(source, span.start),
+                    e.message().trim_end()
+                ),
+                None => e.message().trim_end().to_owned(),
+            })
     }
 
     /// The item at a dotted path like `font.size`, if the file sets it.
@@ -539,6 +546,9 @@ mod tests {
     #[test]
     fn syntax_errors_are_reported() {
         assert!(ConfigDoc::parse("[font\n").is_err());
+        let err = ConfigDoc::parse("[font").unwrap_err();
+        assert!(err.starts_with("line 1: "), "{err}");
+        assert!(!err.contains('\n'), "{err}");
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
