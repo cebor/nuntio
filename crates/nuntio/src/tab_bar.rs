@@ -115,7 +115,7 @@ impl TabBar {
             0.0
         };
         let start = left_inset + inset;
-        let gap = logical(PILL_GAP);
+        let gap = 2.0 * (logical(PILL_GAP) / 2.0).floor();
         let new_tab_width = height - 2.0 * inset + gap;
         let badge_width = if update_badge { new_tab_width } else { 0.0 };
         let available =
@@ -286,10 +286,12 @@ impl TabBar {
             ));
 
             let indicator_x = slot.x + self.padding + ((side - cw) / 2.0).floor();
-            if label.bell {
-                texts.push(UiText::new(indicator_x, self.top, "●", BELL_COLOR));
-            } else if label.activity {
-                texts.push(UiText::new(indicator_x, self.top, "•", inactive_text));
+            if slot.width >= self.padding + side {
+                if label.bell {
+                    texts.push(UiText::new(indicator_x, self.top, "●", BELL_COLOR));
+                } else if label.activity {
+                    texts.push(UiText::new(indicator_x, self.top, "•", inactive_text));
+                }
             }
 
             if (label.active || hovered_tab == Some(i)) && self.has_close(*slot) {
