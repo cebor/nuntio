@@ -11,7 +11,14 @@ use std::path::PathBuf;
 /// the shell itself.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn foreground_pid(shell_pid: u32) -> u32 {
-    sys::tpgid(shell_pid).unwrap_or(shell_pid)
+    let Some(pgid) = sys::tpgid(shell_pid) else {
+        return shell_pid;
+    };
+    // A dead or zombie leader (`ls | less`) has no cwd.
+    if sys::cwd(pgid).is_some() {
+        return pgid;
+    }
+    sys::group_member(pgid).unwrap_or(pgid)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -71,6 +78,20 @@ mod sys {
     pub fn cwd(pid: u32) -> Option<PathBuf> {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
+
+    /// The highest pid in process group `pgid`.
+    pub fn group_member(pgid: u32) -> Option<u32> {
+        std::fs::read_dir("/proc")
+            .ok()?
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|stat| super::parse_pgrp(&stat))
+                    == Some(pgid)
+            })
+            .max()
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -124,6 +145,23 @@ mod sys {
             .collect()
     }
 
+    /// The highest pid in process group `pgid`.
+    pub fn group_member(pgid: u32) -> Option<u32> {
+        // From <sys/proc_info.h>; the libc crate doesn't export it.
+        const PROC_PGRP_ONLY: u32 = 2;
+        let mut pids = [0 as libc::pid_t; 64];
+        let size = c_int::try_from(size_of_val(&pids)).expect("small buffer");
+        // SAFETY: the pointer and size describe `pids`.
+        let written =
+            unsafe { libc::proc_listpids(PROC_PGRP_ONLY, pgid, pids.as_mut_ptr().cast(), size) };
+        // Returns bytes, unlike `proc_listchildpids`.
+        let count = usize::try_from(written).unwrap_or(0) / size_of::<libc::pid_t>();
+        pids[..count.min(pids.len())]
+            .iter()
+            .filter_map(|&pid| u32::try_from(pid).ok().filter(|&pid| pid > 0))
+            .max()
+    }
+
     pub fn cwd(pid: u32) -> Option<PathBuf> {
         let info: libc::proc_vnodepathinfo = pidinfo(pid, libc::PROC_PIDVNODEPATHINFO)?;
         let path = info.pvi_cdir.vip_path.as_flattened();
@@ -147,6 +185,14 @@ fn parse_tpgid(stat: &str) -> Option<u32> {
     u32::try_from(tpgid).ok().filter(|&pid| pid > 0)
 }
 
+/// Field 5 (`pgrp`) of `/proc/<pid>/stat`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_pgrp(stat: &str) -> Option<u32> {
+    let after_comm = &stat[stat.rfind(')')? + 1..];
+    // state ppid pgrp
+    after_comm.split_whitespace().nth(2)?.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +207,13 @@ mod tests {
     fn command_names_with_spaces_and_parens() {
         let stat = "42 (my (weird) cmd) R 1 42 42 34816 99 0";
         assert_eq!(parse_tpgid(stat), Some(99));
+    }
+
+    #[test]
+    fn pgrp_from_stat() {
+        let stat = "1234 (zsh) S 1 1234 1234 34816 5678 4194304 0 0";
+        assert_eq!(parse_pgrp(stat), Some(1234));
+        assert_eq!(parse_pgrp("42 (my (weird) cmd) R 1 77 42 0 -1"), Some(77));
     }
 
     #[test]
