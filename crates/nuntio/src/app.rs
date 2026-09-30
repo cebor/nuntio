@@ -1148,9 +1148,16 @@ impl Core {
                 } else if let Some(tab) = state.tabs.get_mut(index)
                     && !tab.activity
                 {
-                    // Hidden output only changes the tab's activity mark.
-                    tab.activity = true;
-                    state.window.request_redraw();
+                    // Hidden output only changes the tab's activity mark; a
+                    // program redrawing for a resize isn't activity.
+                    let redraw = tab
+                        .content
+                        .pane(pane)
+                        .is_some_and(|p| p.ack_resize_redraw(Instant::now()));
+                    if !redraw {
+                        tab.activity = true;
+                        state.window.request_redraw();
+                    }
                 }
             }
             TermEvent::Title(title) => set_pane_title(state, index, pane, Some(title)),

@@ -48,6 +48,10 @@ const REVEAL_MAX: Duration = Duration::from_millis(300);
 /// Cells a pane grows or shrinks per resize shortcut, so each press is
 /// clearly visible.
 const RESIZE_STEP_CELLS: u32 = 2;
+/// Output a pane sends this soon after a resize is its redraw for the new
+/// size (a shell reprints its prompt on SIGWINCH, ConPTY repaints), not
+/// activity worth marking its tab for.
+const RESIZE_REDRAW: Duration = Duration::from_secs(1);
 /// Holds back frames after a new tab or split opens, until its shell has
 /// drawn its first screen. Otherwise the window flashes the empty pane and
 /// then the startup output line by line, as each read of the pty is drawn.
@@ -89,6 +93,8 @@ pub struct Pane {
     pub title: Option<String>,
     /// Current grid size, to skip redundant resizes.
     size: Option<TermSize>,
+    /// When the grid size last changed.
+    resized: Option<Instant>,
     /// The last computed title: reading the process info on every frame
     /// would cost several syscalls per tab under heavy output.
     title_cache: Option<CachedTitle>,
@@ -119,6 +125,7 @@ impl Pane {
             wsl,
             title: None,
             size: None,
+            resized: None,
             title_cache: None,
         }
     }
@@ -170,8 +177,20 @@ impl Pane {
     fn resize(&mut self, size: TermSize) {
         if self.size != Some(size) {
             self.size = Some(size);
+            self.resized = Some(Instant::now());
             self.term.resize(size);
         }
+    }
+
+    /// Whether output arriving at `now` is the redraw for a recent resize.
+    /// Then its wakeup is acknowledged, so the pane's next output wakes the
+    /// app again.
+    pub fn ack_resize_redraw(&self, now: Instant) -> bool {
+        let redraw = self.resized.is_some_and(|at| now < at + RESIZE_REDRAW);
+        if redraw {
+            self.term.ack_wakeup();
+        }
+        redraw
     }
 }
 
