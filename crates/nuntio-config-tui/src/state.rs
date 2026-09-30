@@ -639,8 +639,10 @@ impl App {
     pub fn row_label(&self, row: Row) -> String {
         match row {
             Row::Setting(s) => match s.platform {
-                Some(platform) => format!("{} ({})", s.label, platform.label()),
-                None => s.label.into(),
+                Some(platform) if s.section != Section::MacOs => {
+                    format!("{} ({})", s.label, platform.label())
+                }
+                _ => s.label.into(),
             },
             Row::FollowOs => "Follow OS appearance".into(),
             Row::Theme(ThemeSlot::Single) => "Theme".into(),
