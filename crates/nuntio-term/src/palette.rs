@@ -84,18 +84,6 @@ impl Palette {
         self.colors[index]
     }
 
-    pub fn foreground(&self) -> Rgb {
-        self.colors[NamedColor::Foreground as usize]
-    }
-
-    pub fn background(&self) -> Rgb {
-        self.colors[NamedColor::Background as usize]
-    }
-
-    pub fn cursor(&self) -> Rgb {
-        self.colors[NamedColor::Cursor as usize]
-    }
-
     /// Resolve a cell color, honoring runtime overrides (OSC 4/10/11/12).
     pub fn resolve(&self, color: Color, overrides: &Colors) -> Rgb {
         let index = match color {

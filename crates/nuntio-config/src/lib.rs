@@ -72,6 +72,7 @@ impl Default for Config {
 }
 
 impl Config {
+    #[cfg(test)]
     pub fn from_toml(s: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(s)
     }
