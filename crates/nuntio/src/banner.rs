@@ -5,7 +5,7 @@
 use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::rgb;
 
-use crate::style::UiMetrics;
+use crate::style::{INFO_COLOR, UiMetrics};
 use unicode_width::UnicodeWidthStr;
 
 const CONFIG_ERROR: &str = "Config error, not applied";
@@ -117,6 +117,7 @@ impl Banner {
         let (background, foreground) = match self.severity {
             Severity::Error => (rgb(0xb3261e), rgb(0xffffff)),
             Severity::Warning => (rgb(0x7a5c00), rgb(0xffffff)),
+            Severity::Info => (INFO_COLOR, rgb(0xffffff)),
         };
         let padding = (height - cell.height as f32) / 2.0;
         // Leave room for the closing "×" at the right.

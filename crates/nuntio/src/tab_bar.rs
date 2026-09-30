@@ -3,7 +3,7 @@
 use nuntio_render::{CellMetrics, Rect, UiRect, UiText};
 use nuntio_term::{Rgb, rgb};
 
-use crate::style::{UiMetrics, WHITE, bar_background, hairline, mix, rect, truncate};
+use crate::style::{INFO_COLOR, UiMetrics, WHITE, bar_background, hairline, mix, rect, truncate};
 use unicode_width::UnicodeWidthStr;
 
 /// Widest a tab gets, in cells, so a few tabs don't stretch across the window.
@@ -11,8 +11,6 @@ const MAX_TAB_CELLS: f32 = 28.0;
 const BELL_COLOR: Rgb = rgb(0xe5c07b);
 /// Hover color of the close-window button, as on Windows.
 const CLOSE_HOVER: Rgb = rgb(0xe81123);
-/// The update badge, in the blue of the update banner.
-const UPDATE_COLOR: Rgb = rgb(0x1f5fa8);
 /// Space above and below the text, in logical pixels.
 const BAR_PADDING: f64 = 7.0;
 /// Space between the bar's edges and the tab pills, in logical pixels.
@@ -367,9 +365,9 @@ impl TabBar {
         let x = self.badge_x() + self.gap / 2.0;
         let size = self.badge_width - self.gap;
         let color = if hovered {
-            mix(UPDATE_COLOR, WHITE, 0.15)
+            mix(INFO_COLOR, WHITE, 0.15)
         } else {
-            UPDATE_COLOR
+            INFO_COLOR
         };
         rects.push(self.pill(x, size, color));
         texts.push(UiText::new(
@@ -622,7 +620,7 @@ mod tests {
             bell: false,
         }];
         let (rects, texts) = bar.draw(&labels, None, false, Rgb { r: 0, g: 0, b: 0 }, WHITE);
-        assert!(rects.iter().any(|r| r.color == UPDATE_COLOR));
+        assert!(rects.iter().any(|r| r.color == INFO_COLOR));
         assert!(texts.iter().any(|t| t.text == "↑"));
     }
 

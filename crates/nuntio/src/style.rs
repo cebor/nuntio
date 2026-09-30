@@ -24,6 +24,8 @@ impl UiMetrics {
 
 pub const WHITE: Rgb = rgb(0xffffff);
 pub const BLACK: Rgb = rgb(0x000000);
+/// The blue of informational banners and the update badge.
+pub const INFO_COLOR: Rgb = rgb(0x1f5fa8);
 
 /// `a` moved towards `b` by `t` (0.0 = `a`, 1.0 = `b`).
 pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
