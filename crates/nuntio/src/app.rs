@@ -754,11 +754,14 @@ impl Core {
             old.window.decorations != self.config.window.decorations
         };
         if chrome_changed {
-            warnings.push("window decorations change when nuntio is restarted".into());
+            warnings.push("window decorations take effect when nuntio is restarted".into());
         }
         // A window created opaque can't become transparent.
         let opaque = state.is_some_and(|s| !s.transparent);
-        if opaque && self.config.window.opacity < 1.0 && old.window.opacity >= 1.0 {
+        if opaque
+            && self.config.window.opacity < 1.0
+            && old.window.opacity != self.config.window.opacity
+        {
             warnings.push("window opacity takes effect when nuntio is restarted".into());
         }
         warnings
