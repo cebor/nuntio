@@ -18,6 +18,18 @@ const INTERVAL: Duration = Duration::from_secs(1);
 /// cable should show up within a few seconds.
 const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Whether the monitor reads anything for `item`.
+pub fn is_sampled(item: StatusItem) -> bool {
+    matches!(
+        item,
+        StatusItem::Cpu
+            | StatusItem::Memory
+            | StatusItem::Network
+            | StatusItem::Battery
+            | StatusItem::Datetime
+    )
+}
+
 /// One reading; `None` for sources that aren't sampled or not available.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Sample {

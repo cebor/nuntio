@@ -23,7 +23,7 @@ use crate::banner::{Banner, Severity};
 use crate::event::{MenuCommand, PaneId, UserEvent};
 use crate::input::KeyPress;
 use crate::status_bar::Stats;
-use crate::sysmon::SystemMonitor;
+use crate::sysmon::{SystemMonitor, is_sampled};
 use crate::update::{self, Build, Checker, Update};
 use crate::window::{Chrome, DEFAULT_TITLE, WindowState};
 
@@ -301,6 +301,8 @@ struct Core {
     system_monitor: Option<SystemMonitor>,
     /// The window is hidden (minimized or covered); sampling pauses.
     occluded: bool,
+    /// What `stats` belongs to: the sampled items of the status bar.
+    sampled_items: Vec<StatusItem>,
     /// The warning the last theme lookup gave, so a light/dark switch can
     /// replace it and keep other config messages.
     palette_warning: Option<String>,
@@ -398,6 +400,7 @@ impl Core {
             bindings,
             system_monitor: None,
             occluded: false,
+            sampled_items: Vec::new(),
             palette_warning: None,
             stats: Stats::default(),
             update_checker: None,
@@ -587,18 +590,27 @@ impl Core {
     /// Start, restart or stop sampling to match the status bar config.
     fn sync_system_monitor(&mut self) {
         let bar = &self.config.status_bar;
-        // Without springs, so that moving one doesn't restart sampling.
-        let wanted: Option<Vec<StatusItem>> = (bar.visible() && !self.occluded).then(|| {
-            let items = bar.items.iter().copied();
-            items.filter(|&item| item != StatusItem::Spring).collect()
-        });
+        let sampled: Vec<StatusItem> = if bar.visible() {
+            bar.items
+                .iter()
+                .copied()
+                .filter(|&i| is_sampled(i))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if sampled != self.sampled_items {
+            self.stats.clear();
+            self.sampled_items = sampled.clone();
+        }
+        // Occlusion pauses sampling but keeps the history.
+        let wanted = (!sampled.is_empty() && !self.occluded).then_some(sampled);
         let running = self.system_monitor.as_ref().map(SystemMonitor::items);
         if wanted.as_deref() == running {
             return;
         }
         // Dropping the old monitor stops its thread.
         self.system_monitor = None;
-        self.stats.clear();
         if let Some(items) = wanted {
             tracing::debug!("starting system monitor");
             self.system_monitor = Some(SystemMonitor::start(&items, self.proxy.clone()));
