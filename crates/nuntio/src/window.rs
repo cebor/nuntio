@@ -709,7 +709,7 @@ impl WindowState {
         self.mouse.hover_link = None;
         self.mouse.selecting = false;
         self.mouse.autoscroll = None;
-        self.mouse.reported_button = None;
+        self.mouse.reported_buttons.clear();
         self.mouse.last_reported_cell = None;
         self.ime_cell = None;
         self.window.request_redraw();

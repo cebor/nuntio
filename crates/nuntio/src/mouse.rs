@@ -31,6 +31,45 @@ pub struct MouseMods {
     pub ctrl: bool,
 }
 
+/// The buttons currently held down and reported to the application.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HeldButtons(u8);
+
+impl HeldButtons {
+    fn bit(button: Button) -> u8 {
+        match button {
+            Button::Left => 1,
+            Button::Middle => 2,
+            Button::Right => 4,
+            Button::WheelUp | Button::WheelDown => 0,
+        }
+    }
+
+    /// Wheel buttons are ignored.
+    pub fn insert(&mut self, button: Button) {
+        self.0 |= Self::bit(button);
+    }
+
+    /// Returns whether the button was held.
+    pub fn remove(&mut self, button: Button) -> bool {
+        let bit = Self::bit(button);
+        let held = self.0 & bit != 0;
+        self.0 &= !bit;
+        held
+    }
+
+    /// The held button that motion is reported for: Left, Middle, then Right.
+    pub fn first(self) -> Option<Button> {
+        [Button::Left, Button::Middle, Button::Right]
+            .into_iter()
+            .find(|&b| self.0 & Self::bit(b) != 0)
+    }
+
+    pub fn clear(&mut self) {
+        self.0 = 0;
+    }
+}
+
 /// The application wants mouse events instead of local selection.
 pub fn reporting_enabled(mode: TermMode) -> bool {
     mode.intersects(TermMode::MOUSE_MODE)

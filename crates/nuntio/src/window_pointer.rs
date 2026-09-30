@@ -11,7 +11,7 @@ use winit::window::ResizeDirection;
 
 use super::{Chrome, WindowState};
 use crate::event::PaneId;
-use crate::mouse::{self, Button, ClickCounter, MouseAction, MouseMods};
+use crate::mouse::{self, Button, ClickCounter, HeldButtons, MouseAction, MouseMods};
 use crate::pane_tree::{Axis, Divider};
 use crate::tab_bar::{BarHit, TabBar};
 
@@ -38,7 +38,7 @@ const TAB_DRAG_THRESHOLD: f64 = 4.0;
 pub struct MouseState {
     pub position: Option<PhysicalPosition<f64>>,
     /// Button held down that is reported to the application.
-    pub reported_button: Option<Button>,
+    pub reported_buttons: HeldButtons,
     /// Last cell a motion event was reported for, to avoid duplicates.
     pub last_reported_cell: Option<(usize, usize)>,
     /// A local selection drag is in progress.
@@ -310,7 +310,7 @@ impl WindowState {
         let cell = (point.column, point.line);
         if self.reports_mouse(self.term().mode()) && self.mouse.last_reported_cell != Some(cell) {
             self.mouse.last_reported_cell = Some(cell);
-            let held = self.mouse.reported_button;
+            let held = self.mouse.reported_buttons.first();
             self.report(held, MouseAction::Motion, point);
         }
     }

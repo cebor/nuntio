@@ -448,7 +448,7 @@ impl Core {
         // Application mouse mode: forward presses and matching releases.
         if state.reports_mouse(state.term().mode()) {
             state.report(Some(button), MouseAction::Press, point);
-            state.mouse.reported_button = Some(button);
+            state.mouse.reported_buttons.insert(button);
             // Where a release outside the window is reported.
             state.mouse.last_reported_cell = Some((point.column, point.line));
             return;
@@ -476,8 +476,7 @@ impl Core {
         {
             return;
         }
-        if state.mouse.reported_button == Some(button) {
-            state.mouse.reported_button = None;
+        if state.mouse.reported_buttons.remove(button) {
             let point = state.cell_at(&self.config, pos);
             state.report(Some(button), MouseAction::Release, point);
             return;
@@ -634,16 +633,15 @@ impl Core {
         if button == Button::Left {
             state.mouse.end_drags();
         }
-        if state.mouse.reported_button == Some(button) {
-            state.mouse.reported_button = None;
-            if let Some((column, line)) = state.mouse.last_reported_cell {
-                let point = GridPoint {
-                    column,
-                    line,
-                    right_half: false,
-                };
-                state.report(Some(button), MouseAction::Release, point);
-            }
+        if state.mouse.reported_buttons.remove(button)
+            && let Some((column, line)) = state.mouse.last_reported_cell
+        {
+            let point = GridPoint {
+                column,
+                line,
+                right_half: false,
+            };
+            state.report(Some(button), MouseAction::Release, point);
         }
         if button == Button::Left && state.mouse.selecting {
             self.finish_selection(state);
