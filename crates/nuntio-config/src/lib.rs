@@ -248,7 +248,7 @@ pub enum TabTitle {
 pub struct Tabs {
     pub hide_when_single: bool,
     pub title: TabTitle,
-    /// New tabs start in the focused pane's directory instead of at home.
+    /// New tabs start in the focused pane's directory instead of in `working_directory`.
     pub inherit_directory: bool,
 }
 
@@ -292,7 +292,7 @@ pub enum StatusItem {
     Network,
     Battery,
     Datetime,
-    /// A button that opens a menu of all actions.
+    /// A button that opens the menu of actions.
     Actions,
     /// A newer nuntio release; hidden while there is none.
     Update,

@@ -194,7 +194,7 @@ pub static STATUS_ITEMS: &[Variant] = &[
     variant("datetime", "The local date and time."),
     variant(
         "actions",
-        "A button that opens a menu of all actions; click an entry to run it.",
+        "A button that opens a menu of actions; click an entry to run it.",
     ),
     variant(
         "update",
@@ -388,7 +388,7 @@ pub static SETTINGS: &[Setting] = &[
             setting(
                 "window.macos_titlebar",
                 Section::Window,
-                "macOS title bar",
+                "Title bar",
                 Kind::Choice(MACOS_TITLEBAR),
                 "Overrides decorations on macOS.",
             ),
@@ -442,7 +442,7 @@ pub static SETTINGS: &[Setting] = &[
         "Inherit directory",
         Kind::Bool,
         "Open a new tab in the working directory of the focused pane instead \
-         of the home directory.",
+         of in `working_directory` (home by default).",
     ),
     setting(
         "panes.dim_inactive",
