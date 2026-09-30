@@ -139,7 +139,7 @@ Changes apply as soon as you save the file. Or run `nuntio-config` in a nuntio t
 
 ## Keyboard shortcuts
 
-On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts add <kbd>Shift</kbd> so that plain <kbd>Ctrl</kbd> combinations still reach the shell. All shortcuts can be changed or disabled in the [config](docs/config.md#keybindings).
+On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts add <kbd>Shift</kbd> so that plain <kbd>Ctrl</kbd> combinations still reach the shell. Exceptions are the font size (<kbd>Ctrl</kbd><kbd>+</kbd>/<kbd>-</kbd>/<kbd>0</kbd>), <kbd>Ctrl</kbd><kbd>,</kbd>, <kbd>Ctrl</kbd><kbd>Tab</kbd>, <kbd>Ctrl</kbd><kbd>PgUp</kbd>/<kbd>PgDn</kbd> and <kbd>Alt</kbd><kbd>1</kbd>–<kbd>9</kbd>; bind them to `none` to send them to the program. All shortcuts can be changed or disabled in the [config](docs/config.md#keybindings).
 
 | Action | Linux / Windows | macOS |
 |---|---|---|
@@ -147,7 +147,7 @@ On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts a
 | Paste | <kbd>Shift</kbd><kbd>Insert</kbd> | <kbd>Shift</kbd><kbd>Insert</kbd> |
 | New tab | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>T</kbd> | <kbd>Cmd</kbd><kbd>T</kbd> |
 | Close pane (or tab) | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>W</kbd> | <kbd>Cmd</kbd><kbd>W</kbd> |
-| Next / previous tab | <kbd>Ctrl</kbd><kbd>Tab</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Tab</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>]</kbd> / <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>[</kbd> |
+| Next / previous tab | <kbd>Ctrl</kbd><kbd>Tab</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Tab</kbd> (also <kbd>Ctrl</kbd><kbd>PgDn</kbd> / <kbd>Ctrl</kbd><kbd>PgUp</kbd>) | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>]</kbd> / <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>[</kbd> (also <kbd>Cmd</kbd><kbd>→</kbd> / <kbd>Cmd</kbd><kbd>←</kbd>) |
 | Go to tab 1–9 | <kbd>Alt</kbd><kbd>1</kbd> … <kbd>Alt</kbd><kbd>9</kbd> | <kbd>Cmd</kbd><kbd>1</kbd> … <kbd>Cmd</kbd><kbd>9</kbd> |
 | Split side by side | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>D</kbd> | <kbd>Cmd</kbd><kbd>D</kbd> |
 | Split top / bottom | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>E</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>D</kbd> |
@@ -156,7 +156,7 @@ On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts a
 | Zoom pane | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Enter</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>Enter</kbd> |
 | Find | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>F</kbd> | <kbd>Cmd</kbd><kbd>F</kbd> |
 | Font size bigger / smaller / reset | <kbd>Ctrl</kbd><kbd>+</kbd> / <kbd>Ctrl</kbd><kbd>-</kbd> / <kbd>Ctrl</kbd><kbd>0</kbd> | <kbd>Cmd</kbd><kbd>+</kbd> / <kbd>Cmd</kbd><kbd>-</kbd> / <kbd>Cmd</kbd><kbd>0</kbd> |
-| Full screen | <kbd>F11</kbd> | <kbd>Cmd</kbd><kbd>Enter</kbd> |
+| Full screen | <kbd>F11</kbd> | <kbd>Cmd</kbd><kbd>Enter</kbd> or <kbd>Ctrl</kbd><kbd>Cmd</kbd><kbd>F</kbd> |
 | Clear scrollback | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>K</kbd> | <kbd>Cmd</kbd><kbd>K</kbd> |
 | Scroll a page | <kbd>Shift</kbd><kbd>PgUp</kbd> / <kbd>Shift</kbd><kbd>PgDn</kbd> | <kbd>Shift</kbd><kbd>PgUp</kbd> / <kbd>Shift</kbd><kbd>PgDn</kbd> |
 | Scroll a line | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>↑</kbd> / <kbd>↓</kbd> | <kbd>Cmd</kbd><kbd>↑</kbd> / <kbd>↓</kbd> |

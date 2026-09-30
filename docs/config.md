@@ -49,7 +49,7 @@ Run `nuntio-config` in a nuntio tab to change settings without editing TOML by h
 | <kbd>R</kbd> | Restore the file as it was when `nuntio-config` started |
 | <kbd>q</kbd> | Quit |
 
-In a list of choices, typing filters it; moving through themes or fonts previews each one, <kbd>Enter</kbd> keeps it and <kbd>Esc</kbd> goes back. The font list also accepts any name you type. In the status bar items, <kbd>Space</kbd> shows or hides an item and <kbd>Shift</kbd><kbd>↑</kbd>/<kbd>↓</kbd> moves it. <kbd>S</kbd> adds a spring below the cursor and <kbd>D</kbd> removes one; a line above the list sketches the bar.
+In a list of choices, typing filters it; moving through themes or fonts previews each one, <kbd>Enter</kbd> keeps it and <kbd>Esc</kbd> goes back. The font list also accepts any name you type. In the status bar items, <kbd>Space</kbd> shows or hides an item and <kbd>Shift</kbd><kbd>↑</kbd>/<kbd>↓</kbd> moves it. <kbd>s</kbd> adds a spring below the cursor and <kbd>d</kbd> (or <kbd>Delete</kbd>) removes one; a line above the list sketches the bar.
 
 A key combination for a keybinding is typed as text, like `Ctrl+Shift+Enter` (see [Key syntax](#key-syntax)), because a terminal can't report every combination reliably. The editor checks it as you type and warns when the combination is already bound.
 
@@ -59,13 +59,12 @@ If you edit the file in another editor while `nuntio-config` is open, it reloads
 
 nuntio watches the config file and the `themes/` directory and applies changes as soon as you save. You can also reload manually with <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>,</kbd> (<kbd>Cmd</kbd><kbd>Shift</kbd><kbd>,</kbd> on macOS).
 
-- **Syntax and type errors** show a red banner with the line number. The previous settings stay active.
-- **Invalid values** (for example a font size outside the allowed range) are handled the same way.
+- **Syntax and type errors** show a red banner with the line number, and **invalid values** (for example a font size outside the allowed range) one that names the setting and the allowed range. The previous settings stay active.
 - **Unknown keys** (typos like `famliy`) show a warning banner. Everything else in the file is still applied.
 - If the config is invalid at **startup**, nuntio starts with the defaults and shows the error.
 - With several problems, the banner shows how many (`(1/3)`). Click it for the next one, or click the × to close it.
 
-Most settings apply to open panes right away; `scrollback` too, and a smaller value drops the oldest lines. `shell` applies to panes opened after the change.
+Most settings apply to open panes right away; `scrollback` too, and a smaller value drops the oldest lines. `shell` and `working_directory` apply to panes opened after the change. `window.columns` and `window.lines` are read at startup, and `window.decorations` needs a restart; so does `window.opacity` below `1.0` when nuntio started opaque.
 
 ## Full example
 
@@ -320,6 +319,8 @@ The same works for PowerShell and cmd on Windows: a directory reported by OSC 7 
 ## Themes
 
 Themes are color schemes: each one sets the foreground, background, cursor and selection colors and the 16 ANSI colors. The tab bar and other overlays take their colors from the theme too.
+
+`theme` is one name, or a pair `theme = { light = "…", dark = "…" }` that follows the OS appearance. Other keys inside `theme = { … }` are an error, not a warning.
 
 ![The same window in Solarized Light and Tokyo Night, split diagonally](../assets/screenshots/themes.png)
 
