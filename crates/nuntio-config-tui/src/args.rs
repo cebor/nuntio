@@ -35,6 +35,11 @@ pub fn join(args: &[String]) -> String {
                 && !arg.contains(|c: char| c.is_whitespace() || c == '"' || c == '\'')
             {
                 arg.clone()
+            } else if arg.contains('"') && arg.contains('\'') {
+                arg.split('\'')
+                    .map(|p| format!("'{p}'"))
+                    .collect::<Vec<_>>()
+                    .join("\"'\"")
             } else if arg.contains('"') {
                 format!("'{arg}'")
             } else {
@@ -69,7 +74,7 @@ mod tests {
         for args in [
             strings(&["-l"]),
             strings(&["-c", "echo hi", ""]),
-            strings(&["say \"hi\"", "it's"]),
+            strings(&["say \"hi\"", "it's", "a\"b'c"]),
         ] {
             assert_eq!(split(&join(&args)).unwrap(), args, "{}", join(&args));
         }
