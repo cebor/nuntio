@@ -197,6 +197,10 @@ pub static STATUS_ITEMS: &[Variant] = &[
         "A button that opens a menu of actions; click an entry to run it.",
     ),
     variant(
+        "shell",
+        "The focused pane's shell; click it for a menu of shells to open a new tab with.",
+    ),
+    variant(
         "update",
         "A newer nuntio release, once the update check found one; click it for the release page.",
     ),
@@ -612,6 +616,7 @@ mod tests {
             &mut defaults,
         );
         defaults.remove("keybindings");
+        defaults.remove("profiles");
         let required: BTreeSet<String> = SETTINGS
             .iter()
             .filter(|s| s.unset.is_none())
@@ -766,6 +771,7 @@ mod tests {
             | StatusItem::Battery
             | StatusItem::Datetime
             | StatusItem::Actions
+            | StatusItem::Shell
             | StatusItem::Update
             | StatusItem::Spring => (),
         };
@@ -778,6 +784,7 @@ mod tests {
                 StatusItem::Battery,
                 StatusItem::Datetime,
                 StatusItem::Actions,
+                StatusItem::Shell,
                 StatusItem::Update,
                 StatusItem::Spring,
             ],

@@ -724,13 +724,52 @@ fn term_config(options: TermOptions) -> term::Config {
     }
 }
 
-/// The shell alacritty starts when none is configured.
-fn default_shell_name() -> String {
+/// The shell alacritty starts when none is configured: `$SHELL`, else the
+/// user's login shell from the password database.
+pub fn default_shell_name() -> String {
     if cfg!(windows) {
-        "powershell".into()
-    } else {
-        std::env::var("SHELL").unwrap_or_else(|_| "sh".into())
+        return "powershell".into();
     }
+    if let Ok(shell) = std::env::var("SHELL") {
+        return shell;
+    }
+    #[cfg(unix)]
+    if let Some(shell) = passwd_shell() {
+        return shell;
+    }
+    "sh".into()
+}
+
+/// The current user's login shell from the password database.
+#[cfg(unix)]
+fn passwd_shell() -> Option<String> {
+    use std::ffi::CStr;
+    use std::mem::MaybeUninit;
+
+    let mut entry = MaybeUninit::<libc::passwd>::uninit();
+    let mut buffer = [0 as libc::c_char; 1024];
+    let mut result = std::ptr::null_mut();
+    // SAFETY: every pointer is valid for the call, `buffer.len()` is its size.
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            entry.as_mut_ptr(),
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() {
+        return None;
+    }
+    // SAFETY: `getpwuid_r` filled `entry`, whose strings live in `buffer`.
+    let shell = unsafe { entry.assume_init().pw_shell };
+    if shell.is_null() {
+        return None;
+    }
+    // SAFETY: a NUL-terminated string in `buffer`.
+    let shell = unsafe { CStr::from_ptr(shell) }.to_string_lossy();
+    (!shell.is_empty()).then(|| shell.into_owned())
 }
 
 /// Run `shell` as a login shell the way alacritty runs the default one:

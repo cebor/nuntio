@@ -17,6 +17,7 @@ mod pane_env;
 mod pane_tree;
 mod search_bar;
 mod shell_words;
+mod shells;
 mod status_bar;
 mod style;
 mod sysmon;

@@ -197,7 +197,21 @@ impl Config {
             return Err("`font.family` must not be empty; remove it to use the default".into());
         }
         if let Some(shell) = &self.shell {
-            shell.validate()?;
+            shell.validate("shell")?;
+        }
+        for (i, profile) in self.profiles.iter().enumerate() {
+            let n = i + 1;
+            let prefix = |message: String| format!("[[profiles]] entry {n}: {message}");
+            if profile.name.trim().is_empty() {
+                return Err(prefix("`name` must not be empty".into()));
+            }
+            if self.profiles[..i].iter().any(|p| p.name == profile.name) {
+                return Err(prefix(format!(
+                    "the name \"{}\" is taken by an earlier entry",
+                    profile.name
+                )));
+            }
+            profile.shell().validate("profiles").map_err(prefix)?;
         }
         if let Some(dir) = &self.working_directory {
             validate_working_directory(dir)?;
@@ -224,22 +238,23 @@ fn validate_working_directory(dir: &str) -> Result<(), String> {
 }
 
 impl Shell {
-    fn validate(&self) -> Result<(), String> {
+    /// `table` names the TOML table in errors: `shell` or `profiles`.
+    fn validate(&self, table: &str) -> Result<(), String> {
         let not_empty = |name: &str, value: &Option<String>| match value {
-            Some(v) if v.trim().is_empty() => Err(format!("`{name}` must not be empty")),
+            Some(v) if v.trim().is_empty() => Err(format!("`{table}.{name}` must not be empty")),
             _ => Ok(()),
         };
-        not_empty("shell.program", &self.program)?;
-        not_empty("shell.wsl", &self.wsl)?;
-        not_empty("shell.wsl_user", &self.wsl_user)?;
+        not_empty("program", &self.program)?;
+        not_empty("wsl", &self.wsl)?;
+        not_empty("wsl_user", &self.wsl_user)?;
         if self.program.is_none() && self.wsl.is_none() {
-            return Err("`shell` needs `program` or `wsl`".into());
+            return Err(format!("`{table}` needs `program` or `wsl`"));
         }
         if self.wsl_user.is_some() && self.wsl.is_none() {
-            return Err("`shell.wsl_user` needs `shell.wsl`".into());
+            return Err(format!("`{table}.wsl_user` needs `{table}.wsl`"));
         }
         if !self.args.is_empty() && self.program.is_none() {
-            return Err("`shell.args` needs `shell.program`".into());
+            return Err(format!("`{table}.args` needs `{table}.program`"));
         }
         Ok(())
     }
@@ -364,6 +379,38 @@ mod tests {
         }
         assert!(parse("shell = { wsl = \"Ubuntu\", wsl_user = \"root\" }").is_ok());
         assert!(parse("shell = { wsl = \"Ubuntu\", program = \"fish\" }").is_ok());
+    }
+
+    #[test]
+    fn invalid_profiles_are_errors() {
+        for (source, expected) in [
+            (
+                "[[profiles]]\nname = \" \"\nprogram = \"sh\"",
+                "entry 1: `name` must not be empty",
+            ),
+            (
+                "[[profiles]]\nname = \"a\"\nprogram = \"sh\"\n[[profiles]]\nname = \"a\"\nwsl = \"Ubuntu\"",
+                "entry 2: the name \"a\" is taken",
+            ),
+            (
+                "[[profiles]]\nname = \"x\"",
+                "entry 1: `profiles` needs `program` or `wsl`",
+            ),
+        ] {
+            let err = parse(source).unwrap_err();
+            assert!(err.contains(expected), "{source}: {err}");
+        }
+        let loaded = parse(
+            "[[profiles]]\nname = \"PowerShell\"\nprogram = \"pwsh\"\nargs = [\"-NoLogo\"]\n\
+             [[profiles]]\nname = \"Debian\"\nwsl = \"Debian\"\nwsl_user = \"root\"",
+        )
+        .unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded.config.profiles.len(), 2);
+        assert_eq!(
+            loaded.config.profiles[1].shell().wsl_user.as_deref(),
+            Some("root")
+        );
     }
 
     #[test]

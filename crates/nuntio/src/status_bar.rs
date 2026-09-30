@@ -1,6 +1,6 @@
-//! Status bar layout and drawing: system graphs, date and time, a newer
-//! release. It is laid out in the cells of the small UI font
-//! (`UiMetrics::small`).
+//! Status bar layout and drawing: system graphs, date and time, the
+//! focused pane's shell, a newer release. It is laid out in the cells of
+//! the small UI font (`UiMetrics::small`).
 
 use std::collections::VecDeque;
 
@@ -119,6 +119,8 @@ pub struct StatusBar {
     slots: Vec<Slot>,
     /// An item shown as pressed, e.g. while its menu is open.
     active: Option<StatusItem>,
+    /// The focused pane's shell, for the `shell` item.
+    shell: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -147,13 +149,15 @@ impl StatusBar {
 
     /// Lay out `items` in a bar of `width` pixels whose top edge is at
     /// `top`, in the small UI font. Springs share the free space. Items
-    /// without data to show (no battery, no update) are left out.
+    /// without data to show (no battery, no update) are left out. `shell`
+    /// names the focused pane's shell.
     pub fn new(
         width: f32,
         top: f32,
         items: &[StatusItem],
         stats: &Stats,
         datetime: &str,
+        shell: &str,
         metrics: UiMetrics,
     ) -> Self {
         let cell = metrics.small;
@@ -173,7 +177,7 @@ impl StatusBar {
             .iter()
             .map(|&item| match item {
                 StatusItem::Spring => Piece::Spring,
-                item => Piece::Item(item_cells(item, datetime, stats) as f32 * cw),
+                item => Piece::Item(item_cells(item, datetime, shell, stats) as f32 * cw),
             })
             .collect();
         let mut positions = layout(width, cw, GAP_CELLS as f32 * cw, &pieces).into_iter();
@@ -186,7 +190,7 @@ impl StatusBar {
                 slots.push(Slot {
                     item,
                     x,
-                    width: item_cells(item, datetime, stats) as f32 * cw,
+                    width: item_cells(item, datetime, shell, stats) as f32 * cw,
                     spring_before,
                 });
                 spring_before = false;
@@ -202,6 +206,7 @@ impl StatusBar {
             term_cell: metrics.cell,
             slots,
             active: None,
+            shell: shell.to_owned(),
         }
     }
 
@@ -355,6 +360,10 @@ impl StatusBar {
             StatusItem::Actions => {
                 self.menu_icon(out, x, colors);
                 text(CONTENT, ACTIONS_LABEL.into(), colors.value, out);
+            }
+            StatusItem::Shell => {
+                self.shell_icon(out, x, colors);
+                text(CONTENT, self.shell.clone(), colors.value, out);
             }
             StatusItem::Update => {
                 let Some(version) = &stats.update else {
@@ -593,6 +602,26 @@ impl StatusBar {
         }
     }
 
+    /// A terminal window: an outline with a title bar and a cursor.
+    fn shell_icon(&self, out: &mut Output, x: f32, colors: &Colors) {
+        let st = self.stroke();
+        let (x0, y0, size) = self.icon_box(x);
+        let color = colors.label;
+        outline(out, x0, y0, size, size, st, color);
+        out.rects
+            .push(rect(x0, y0, size, (size * 0.25).round().max(st), color));
+        let cursor_w = (size * 0.3).round();
+        let cursor_h = (st * 2.0).max(1.0);
+        let inset = (size * 0.2).round();
+        out.rects.push(rect(
+            x0 + inset,
+            y0 + size - inset - cursor_h,
+            cursor_w,
+            cursor_h,
+            color,
+        ));
+    }
+
     /// An outlined battery with a knob on the right, filled to `level`.
     fn battery_icon(&self, out: &mut Output, x: f32, level: f32, colors: &Colors) {
         let stroke = self.stroke();
@@ -704,7 +733,7 @@ fn outline(out: &mut Output, x: f32, y: f32, width: f32, height: f32, stroke: f3
 
 /// Width of an item in cells. Values have a fixed width so items don't
 /// shift as the numbers change.
-fn item_cells(item: StatusItem, datetime: &str, stats: &Stats) -> usize {
+fn item_cells(item: StatusItem, datetime: &str, shell: &str, stats: &Stats) -> usize {
     match item {
         // icon graph " 100%"
         StatusItem::Cpu => CONTENT + GRAPH_CELLS + 1 + 4,
@@ -718,6 +747,8 @@ fn item_cells(item: StatusItem, datetime: &str, stats: &Stats) -> usize {
         StatusItem::Datetime => CONTENT + datetime.width(),
         // icon "Actions"
         StatusItem::Actions => CONTENT + ACTIONS_LABEL.width(),
+        // icon "PowerShell 7"
+        StatusItem::Shell => CONTENT + shell.width(),
         // icon "0.1.6"
         StatusItem::Update => CONTENT + stats.update.as_deref().map_or(0, str::width),
         StatusItem::Spring => 0,
@@ -970,13 +1001,13 @@ mod tests {
     #[test]
     fn missing_battery_is_left_out() {
         let items = arranged(&[StatusItem::Cpu, StatusItem::Battery, StatusItem::Datetime]);
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(false), "12:34", METRICS);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(false), "12:34", "", METRICS);
         let shown: Vec<_> = bar.slots.iter().map(|s| s.item).collect();
         assert_eq!(shown, [StatusItem::Cpu, StatusItem::Datetime]);
         // Icon, space and "12:34" (8 cells) sit at the right margin of one cell.
         assert_eq!(bar.slots[1].x, 1000.0 - 10.0 - 80.0);
 
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", METRICS);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats(true), "12:34", "", METRICS);
         assert_eq!(bar.slots.len(), 3);
     }
 
@@ -984,12 +1015,12 @@ mod tests {
     fn update_shows_only_when_there_is_one_and_is_clickable() {
         let items = arranged(&[StatusItem::Update, StatusItem::Datetime]);
         let mut stats = stats(false);
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", "", METRICS);
         assert_eq!(bar.item_at(20.0), None);
 
         stats.set_update(Some("0.1.6".into()));
         stats.clear();
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", "", METRICS);
         // Icon, space and "0.1.6" (8 cells) after the one-cell margin.
         assert_eq!(bar.item_at(10.0), Some(StatusItem::Update));
         assert_eq!(bar.item_at(89.0), Some(StatusItem::Update));
@@ -1012,7 +1043,7 @@ mod tests {
         );
         let stats = stats(false);
         let items = arranged(&[Actions, Cpu, Datetime]);
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", "", METRICS);
         // Icon, space and "Actions" (10 cells) after the one-cell margin.
         assert_eq!(bar.item_bounds(Actions), Some((10.0, 100.0)));
         assert_eq!(bar.item_at(10.0), Some(Actions));
@@ -1039,8 +1070,39 @@ mod tests {
         assert!(backgrounds(&bar.clone().with_active(Some(StatusItem::Battery))).is_empty());
 
         let items = arranged(&[Cpu, Datetime]);
-        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", METRICS);
+        let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", "", METRICS);
         assert_eq!(bar.item_bounds(Actions), None);
+    }
+
+    #[test]
+    fn shell_item_shows_the_shell_name() {
+        use StatusItem::{Datetime, Shell};
+        let stats = stats(false);
+        let items = arranged(&[Shell, Datetime]);
+        let bar = StatusBar::new(
+            1000.0,
+            0.0,
+            &items,
+            &stats,
+            "12:34",
+            "PowerShell 7",
+            METRICS,
+        );
+        // Icon, space and "PowerShell 7" (15 cells) after the one-cell margin.
+        assert_eq!(bar.item_bounds(Shell), Some((10.0, 150.0)));
+        let black = Rgb { r: 0, g: 0, b: 0 };
+        let (_, texts) = bar.draw(
+            &stats,
+            "12:34",
+            black,
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            false,
+        );
+        assert!(texts.iter().any(|t| t.text == "PowerShell 7"));
     }
 
     #[test]
@@ -1053,7 +1115,15 @@ mod tests {
             StatusItem::Datetime,
         ];
         let stats = stats(true);
-        let bar = StatusBar::new(1200.0, 500.0, &arranged(&items), &stats, "12:34", METRICS);
+        let bar = StatusBar::new(
+            1200.0,
+            500.0,
+            &arranged(&items),
+            &stats,
+            "12:34",
+            "",
+            METRICS,
+        );
         assert_eq!(bar.height, 28.0);
         let (bg, fg) = (
             Rgb { r: 0, g: 0, b: 0 },
@@ -1090,7 +1160,7 @@ mod tests {
         for rainbow in [false, true] {
             let count = |items: &[StatusItem]| {
                 let stats = stats(false);
-                let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", METRICS);
+                let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", "", METRICS);
                 let (rects, _) = bar.draw(&stats, "12:34", bg, fg, rainbow);
                 rects.iter().filter(|r| r.color == separator).count()
             };
@@ -1115,7 +1185,7 @@ mod tests {
         use StatusItem::*;
         let stats = stats(false);
         let items = [Cpu, Memory, Datetime];
-        let bar = StatusBar::new(1200.0, 0.0, &items, &stats, "12:34", METRICS);
+        let bar = StatusBar::new(1200.0, 0.0, &items, &stats, "12:34", "", METRICS);
         let (_, texts) = bar.draw(&stats, "12:34", bg, fg, rainbow);
         texts.iter().map(|t| t.color).collect()
     }

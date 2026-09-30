@@ -1,6 +1,7 @@
 //! Config schema, loading, validation, themes and file watching.
 
 mod color;
+pub mod detect;
 mod edit;
 mod keys;
 mod load;
@@ -46,6 +47,8 @@ pub struct Config {
     pub mouse: Mouse,
     pub macos: MacOs,
     pub keybindings: Vec<Keybinding>,
+    /// Shells the shell menu offers for new tabs, besides `shell`.
+    pub profiles: Vec<Profile>,
 }
 
 impl Default for Config {
@@ -67,6 +70,7 @@ impl Default for Config {
             mouse: Mouse::default(),
             macos: MacOs::default(),
             keybindings: Vec::new(),
+            profiles: Vec::new(),
         }
     }
 }
@@ -132,6 +136,30 @@ impl Shell {
 
     pub fn is_wsl(&self) -> bool {
         self.wsl.is_some()
+    }
+}
+
+/// A shell the shell menu offers for new tabs, besides `shell`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Profile {
+    /// Shown in the shell menu and the `shell` status bar item.
+    pub name: String,
+    pub program: Option<String>,
+    pub args: Vec<String>,
+    pub wsl: Option<String>,
+    pub wsl_user: Option<String>,
+}
+
+impl Profile {
+    /// The shell it runs.
+    pub fn shell(&self) -> Shell {
+        Shell {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            wsl: self.wsl.clone(),
+            wsl_user: self.wsl_user.clone(),
+        }
     }
 }
 
@@ -294,6 +322,8 @@ pub enum StatusItem {
     Datetime,
     /// A button that opens the menu of actions.
     Actions,
+    /// The focused pane's shell; opens the menu of shells.
+    Shell,
     /// A newer nuntio release; hidden while there is none.
     Update,
     /// A flexible gap; springs share the free space evenly.
@@ -311,6 +341,7 @@ impl StatusItem {
             Self::Battery => "battery",
             Self::Datetime => "datetime",
             Self::Actions => "actions",
+            Self::Shell => "shell",
             Self::Update => "update",
             Self::Spring => schema::SPRING,
         }

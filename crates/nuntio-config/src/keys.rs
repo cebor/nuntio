@@ -253,6 +253,10 @@ pub static ACTIONS: &[Variant] = &[
     action("check_for_updates", "Look for a newer nuntio release now"),
     action("open_actions_menu", "Open the menu of actions"),
     action(
+        "open_shell_menu",
+        "Open the menu of shells to start a new tab with",
+    ),
+    action(
         "none",
         "Unbind the key combination; it goes to the terminal",
     ),

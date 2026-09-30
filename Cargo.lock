@@ -2149,6 +2149,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "toml_edit",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2163,7 +2164,6 @@ dependencies = [
  "ratatui",
  "toml 0.9.12+spec-1.1.0",
  "unicode-width",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

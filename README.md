@@ -146,6 +146,7 @@ On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts a
 | Copy / paste | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>V</kbd> | <kbd>Cmd</kbd><kbd>C</kbd> / <kbd>Cmd</kbd><kbd>V</kbd> |
 | Paste | <kbd>Shift</kbd><kbd>Insert</kbd> | <kbd>Shift</kbd><kbd>Insert</kbd> |
 | New tab | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>T</kbd> | <kbd>Cmd</kbd><kbd>T</kbd> |
+| New tab with another shell | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Alt</kbd><kbd>T</kbd> | <kbd>Cmd</kbd><kbd>Opt</kbd><kbd>T</kbd> |
 | Close pane (or tab) | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>W</kbd> | <kbd>Cmd</kbd><kbd>W</kbd> |
 | Next / previous tab | <kbd>Ctrl</kbd><kbd>Tab</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Tab</kbd> (also <kbd>Ctrl</kbd><kbd>PgDn</kbd> / <kbd>Ctrl</kbd><kbd>PgUp</kbd>) | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>]</kbd> / <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>[</kbd> (also <kbd>Cmd</kbd><kbd>→</kbd> / <kbd>Cmd</kbd><kbd>←</kbd>) |
 | Go to tab 1–9 | <kbd>Alt</kbd><kbd>1</kbd> … <kbd>Alt</kbd><kbd>9</kbd> | <kbd>Cmd</kbd><kbd>1</kbd> … <kbd>Cmd</kbd><kbd>9</kbd> |

@@ -41,6 +41,10 @@ pub enum Action {
     CheckForUpdates,
     /// Open the menu of all actions.
     OpenActionsMenu,
+    /// Open the menu of shells for a new tab.
+    OpenShellMenu,
+    /// Open a new tab with entry N of the open shell menu.
+    NewTabWithShell(usize),
 }
 
 /// Every action by its name in the config (`nuntio_config::ACTIONS`
@@ -76,6 +80,7 @@ pub(crate) const NAMES: &[(&str, Action)] = {
         ("open_settings", OpenSettings),
         ("check_for_updates", CheckForUpdates),
         ("open_actions_menu", OpenActionsMenu),
+        ("open_shell_menu", OpenShellMenu),
         ("close_pane", ClosePane),
         ("split_vertical", SplitVertical),
         ("split_horizontal", SplitHorizontal),
@@ -166,6 +171,7 @@ impl Bindings {
             named(NamedKey::ArrowUp, cmd_shift, ScrollLineUp),
             named(NamedKey::ArrowDown, cmd_shift, ScrollLineDown),
             char('t', cmd_shift, NewTab),
+            char('t', cmd_shift | ModifiersState::ALT, OpenShellMenu),
             char('w', cmd_shift, ClosePane),
             char('f', cmd_shift, Search),
             char(',', cmd_shift | shift, ReloadConfig),

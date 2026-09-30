@@ -3,7 +3,6 @@
 //! change is applied live through nuntio's hot reload.
 
 mod args;
-mod detect;
 mod state;
 mod ui;
 mod widgets;
@@ -212,8 +211,8 @@ pub fn main() -> Result<()> {
         themes,
         Sources {
             fonts: Box::new(installed_fonts),
-            shells: Box::new(detect::installed_shells),
-            wsl_distributions: Box::new(detect::wsl_distributions),
+            shells: Box::new(nuntio_config::detect::installed_shells),
+            wsl_distributions: Box::new(nuntio_config::detect::wsl_distributions),
         },
     )
     .map_err(anyhow::Error::msg)?;

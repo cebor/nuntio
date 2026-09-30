@@ -147,6 +147,11 @@ impl TabBar {
         }
     }
 
+    /// Left edge of the new-tab button's area.
+    pub fn new_tab_x(&self) -> f32 {
+        self.new_tab_x
+    }
+
     /// Width of the new-tab button's area: a square pill plus the gap.
     fn new_tab_width(&self) -> f32 {
         self.height - 2.0 * self.inset + self.gap

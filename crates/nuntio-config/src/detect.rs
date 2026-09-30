@@ -1,5 +1,6 @@
-//! What is installed on this system, to offer in the pickers: shells for
-//! `shell.program` and WSL distributions for `shell.wsl`.
+//! What is installed on this system: shells for `shell.program` and WSL
+//! distributions for `shell.wsl`, for `nuntio-config`'s pickers and
+//! nuntio's shell menu.
 
 /// A value to offer, with a short description.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +18,36 @@ impl Found {
     }
 }
 
+/// Well-known Windows shells by program name, most common first.
+const WINDOWS_SHELLS: [(&str, &str); 4] = [
+    ("pwsh", "PowerShell 7"),
+    ("powershell", "Windows PowerShell 5.1"),
+    ("cmd", "Command Prompt"),
+    ("nu", "Nushell"),
+];
+
+/// The name of a well-known shell by its program (`pwsh`, `C:\…\pwsh.exe`):
+/// "PowerShell 7" etc.
+pub fn known_shell_name(program: &str) -> Option<&'static str> {
+    let stem = program_stem(program);
+    WINDOWS_SHELLS
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(stem))
+        .map(|(_, help)| *help)
+}
+
+/// The file name of `program` without a trailing `.exe`, split on both `/`
+/// and `\` (`Path` doesn't split `\` outside Windows).
+pub fn program_stem(program: &str) -> &str {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    match file.len().checked_sub(4) {
+        Some(cut) if file.is_char_boundary(cut) && file[cut..].eq_ignore_ascii_case(".exe") => {
+            &file[..cut]
+        }
+        _ => file,
+    }
+}
+
 /// Shells found on this system, most common first.
 pub fn installed_shells() -> Vec<Found> {
     #[cfg(windows)]
@@ -24,13 +55,7 @@ pub fn installed_shells() -> Vec<Found> {
         // Only programs on PATH: alacritty doesn't quote the program, so a
         // path with spaces (like Git Bash's) wouldn't start reliably.
         // `bash` is left out, it's WSL's launcher on Windows.
-        const KNOWN: [(&str, &str); 4] = [
-            ("pwsh", "PowerShell 7"),
-            ("powershell", "Windows PowerShell 5.1"),
-            ("cmd", "Command Prompt"),
-            ("nu", "Nushell"),
-        ];
-        KNOWN
+        WINDOWS_SHELLS
             .iter()
             .filter(|(name, _)| on_path(&format!("{name}.exe")))
             .map(|(name, help)| Found::new(*name, *help))

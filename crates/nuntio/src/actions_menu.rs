@@ -1,7 +1,9 @@
-//! The menu of all actions that the `actions` status bar item opens: a
-//! list with a heading per category, each entry with its shortcut. It is
-//! laid out in the cells of the small UI font (`UiMetrics::small`).
+//! The menus that open from the status bar: the menu of all actions that
+//! the `actions` item opens, a list with a heading per category, each entry
+//! with its shortcut, and the menu of shells for a new tab. They are laid
+//! out in the cells of the small UI font (`UiMetrics::small`).
 
+use nuntio_config::StatusItem;
 use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
@@ -19,13 +21,15 @@ const MARGIN: f64 = 2.0;
 /// Space between label and shortcut, in cells.
 const GAP_CELLS: usize = 3;
 
-/// Every action the menu offers, by category. `select_tab_1` … `select_tab_9`
-/// are left out (the tab bar has the tabs) and so is the menu's own action.
+/// Every action the actions menu offers, by category. `select_tab_1` …
+/// `select_tab_9` are left out (the tab bar has the tabs) and so is the
+/// menu's own action; "New Tab With…" opens the shell menu.
 const MENU: &[(&str, &[(&str, Action)])] = &[
     (
         "Tabs",
         &[
             ("New Tab", Action::NewTab),
+            ("New Tab With…", Action::OpenShellMenu),
             ("Close Tab", Action::CloseTab),
             ("Next Tab", Action::NextTab),
             ("Previous Tab", Action::PreviousTab),
@@ -80,6 +84,31 @@ const MENU: &[(&str, &[(&str, Action)])] = &[
     ),
 ];
 
+/// What a menu lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuKind {
+    Actions,
+    Shells,
+}
+
+impl MenuKind {
+    /// The action that opens (and, pressed again, closes) the menu.
+    pub fn opener(self) -> Action {
+        match self {
+            Self::Actions => Action::OpenActionsMenu,
+            Self::Shells => Action::OpenShellMenu,
+        }
+    }
+
+    /// The status bar item shown pressed while it is open.
+    pub fn status_item(self) -> StatusItem {
+        match self {
+            Self::Actions => StatusItem::Actions,
+            Self::Shells => StatusItem::Shell,
+        }
+    }
+}
+
 /// Where the menu grows from: the left edge of the status bar item and the
 /// edge of the bar it touches.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,7 +134,7 @@ pub struct View {
 enum Row {
     Heading(&'static str),
     Entry {
-        label: &'static str,
+        label: String,
         action: Action,
         shortcut: Option<String>,
     },
@@ -128,6 +157,7 @@ pub enum Step {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionsMenu {
+    kind: MenuKind,
     anchor: Anchor,
     rows: Vec<Row>,
     /// Index into `rows`, always an entry.
@@ -176,25 +206,52 @@ impl Geometry {
 }
 
 impl ActionsMenu {
-    /// A menu whose shortcuts are the ones `bindings` has now.
+    /// The actions menu, whose shortcuts are the ones `bindings` has now.
     pub fn new(anchor: Anchor, bindings: &Bindings) -> Self {
         let mut rows = Vec::new();
         for &(title, entries) in MENU {
             rows.push(Row::Heading(title));
             for &(label, action) in entries {
                 rows.push(Row::Entry {
-                    label,
+                    label: label.to_owned(),
                     action,
                     shortcut: bindings.shortcut(action),
                 });
             }
         }
+        Self::with_rows(MenuKind::Actions, anchor, rows)
+    }
+
+    /// The menu of shells for a new tab: entry `i` runs
+    /// `Action::NewTabWithShell(i)`; the first, the default shell, shows the
+    /// `new_tab` shortcut.
+    pub fn shells(anchor: Anchor, names: &[String], bindings: &Bindings) -> Self {
+        let mut rows = vec![Row::Heading("New Tab With")];
+        rows.extend(names.iter().enumerate().map(|(i, name)| Row::Entry {
+            label: name.clone(),
+            action: Action::NewTabWithShell(i),
+            shortcut: if i == 0 {
+                bindings.shortcut(Action::NewTab)
+            } else {
+                None
+            },
+        }));
+        Self::with_rows(MenuKind::Shells, anchor, rows)
+    }
+
+    fn with_rows(kind: MenuKind, anchor: Anchor, rows: Vec<Row>) -> Self {
         Self {
+            kind,
             anchor,
             rows,
             selected: None,
             scroll: 0,
         }
+    }
+
+    /// What the menu lists.
+    pub fn kind(&self) -> MenuKind {
+        self.kind
     }
 
     fn geometry(&self, view: View) -> Geometry {
@@ -287,11 +344,23 @@ impl ActionsMenu {
 
     /// The label of the selected entry, for the debug server.
     #[cfg(feature = "debug-server")]
-    pub fn selected_label(&self) -> Option<&'static str> {
+    pub fn selected_label(&self) -> Option<&str> {
         match self.rows.get(self.selected?) {
             Some(Row::Entry { label, .. }) => Some(label),
             _ => None,
         }
+    }
+
+    /// The labels of all entries in order, for the debug server.
+    #[cfg(feature = "debug-server")]
+    pub fn labels(&self) -> Vec<&str> {
+        self.rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Entry { label, .. } => Some(label.as_str()),
+                Row::Heading(_) => None,
+            })
+            .collect()
     }
 
     fn action(&self, row: usize) -> Option<Action> {
@@ -384,7 +453,7 @@ impl ActionsMenu {
                         rects.push(UiRect::fill(row_rect, highlight));
                     }
                     let label_x = x + geometry.cell_width;
-                    texts.push(UiText::new(label_x, y, (*label).to_owned(), text_color).small());
+                    texts.push(UiText::new(label_x, y, label.clone(), text_color).small());
                     if let Some(shortcut) = shortcut {
                         let width = shortcut.width() as f32 * geometry.cell_width;
                         texts.push(
@@ -521,7 +590,7 @@ mod tests {
         assert_eq!(menu.selected_action(), Some(Action::CheckForUpdates));
         menu.select(Step::Next, view);
         assert_eq!(menu.selected_action(), Some(Action::NewTab));
-        for _ in 0..4 {
+        for _ in 0..5 {
             menu.select(Step::Next, view);
         }
         // Past the last tab entry, over the "Panes" heading.
@@ -546,7 +615,7 @@ mod tests {
         assert!(menu.hover(view, x, row_y(1)));
         assert!(!menu.hover(view, x, row_y(1)));
         assert_eq!(menu.selected_action(), Some(Action::NewTab));
-        assert_eq!(menu.click(view, x, row_y(2)), Some(Action::CloseTab));
+        assert_eq!(menu.click(view, x, row_y(2)), Some(Action::OpenShellMenu));
         // Elsewhere keeps the selection.
         assert!(!menu.hover(view, 900.0, 700.0));
         assert_eq!(menu.selected_action(), Some(Action::NewTab));
@@ -606,5 +675,31 @@ mod tests {
         }
         // Everything fits: no scroll arrows.
         assert!(!strings.contains(&"▲") && !strings.contains(&"▼"));
+    }
+
+    #[test]
+    fn the_shell_menu_opens_numbered_tabs_and_shows_the_new_tab_shortcut() {
+        let anchor = Anchor {
+            x: 10.0,
+            y: 28.0,
+            opens_up: false,
+            centered: false,
+        };
+        let names = ["Ubuntu".to_owned(), "PowerShell 7".to_owned()];
+        let bindings = Bindings::platform_defaults();
+        let menu = ActionsMenu::shells(anchor, &names, &bindings);
+        assert_eq!(menu.kind(), MenuKind::Shells);
+        assert_eq!(
+            entries(&menu),
+            [Action::NewTabWithShell(0), Action::NewTabWithShell(1)]
+        );
+        let (_, texts) = menu.draw(view(1000.0, 800.0), BLACK, WHITE);
+        let strings: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
+        let new_tab = bindings.shortcut(Action::NewTab).unwrap();
+        for expected in ["NEW TAB WITH", "Ubuntu", "PowerShell 7", new_tab.as_str()] {
+            assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
+        }
+        let shortcuts = texts.iter().filter(|t| t.text.contains('+')).count();
+        assert_eq!(shortcuts, 1, "{strings:?}");
     }
 }

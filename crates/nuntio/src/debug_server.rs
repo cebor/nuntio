@@ -30,6 +30,7 @@ use winit::keyboard::{
 
 use super::Core;
 use crate::actions::{Action, named_key};
+use crate::actions_menu::MenuKind;
 use crate::banner::Banner;
 use crate::event::{PaneId, UserEvent};
 use crate::input::{KeyEventKind, KeyPress};
@@ -444,6 +445,7 @@ impl Core {
                     "grid": grid,
                     "process": pane.term.process_name(),
                     "app_title": pane.title,
+                    "shell": pane.shell_name,
                 }));
             }
             let title = match tab.content.pane_mut(focused) {
@@ -482,7 +484,14 @@ impl Core {
             "tabs": tabs,
             "search": state.search.as_ref().map(|bar| json!({ "query": bar.query(), "regex": bar.regex() })),
             "banner": banner,
-            "actions_menu": state.actions_menu.as_ref().map(|menu| json!({ "selected": menu.selected_label() })),
+            "actions_menu": state.actions_menu.as_ref().map(|menu| json!({
+                "kind": match menu.kind() {
+                    MenuKind::Actions => "actions",
+                    MenuKind::Shells => "shells",
+                },
+                "selected": menu.selected_label(),
+                "entries": menu.labels(),
+            })),
             "pending_close": self.pending_close.is_some(),
             "pending_paste": self.pending_paste.is_some(),
             "idle_ms": self.debug.last_output.map(|t| now.duration_since(t).as_millis() as u64),

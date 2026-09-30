@@ -15,7 +15,7 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Fullscreen, Window};
 
 use crate::actions::Bindings;
-use crate::actions_menu::{ActionsMenu, Anchor, View};
+use crate::actions_menu::{ActionsMenu, Anchor, MenuKind, View};
 use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::pane_tree::{Direction, Layout, PaneTree};
@@ -25,6 +25,7 @@ use crate::style::{UiMetrics, hairline};
 use crate::tab_bar::{TabBar, TabBarOptions};
 use crate::tab_title::{self, TitleInfo};
 use crate::tabs::Tabs;
+use crate::wsl::Distro;
 
 #[path = "window_frame.rs"]
 mod frame;
@@ -87,8 +88,10 @@ impl Reveal {
 pub struct Pane {
     pub id: PaneId,
     pub term: TermHandle,
-    /// The shell runs in WSL, so it takes Linux paths.
-    pub wsl: bool,
+    /// The WSL distribution the shell runs in, so it takes Linux paths.
+    pub wsl: Option<Distro>,
+    /// Its name in the shell menu, for the `shell` status bar item.
+    pub shell_name: String,
     /// Title set by the application (OSC 0/2).
     pub title: Option<String>,
     /// Current grid size, to skip redundant resizes.
@@ -118,11 +121,12 @@ impl CachedTitle {
 }
 
 impl Pane {
-    pub fn new(id: PaneId, term: TermHandle, wsl: bool) -> Self {
+    pub fn new(id: PaneId, term: TermHandle, shell_name: String, wsl: Option<Distro>) -> Self {
         Self {
             id,
             term,
             wsl,
+            shell_name,
             title: None,
             size: None,
             resized: None,
@@ -463,15 +467,22 @@ impl WindowState {
     /// The status bar, if shown.
     fn status_bar(&self, config: &Config, stats: &Stats, datetime: &str) -> Option<StatusBar> {
         let (top, _) = self.status_bar_bounds(config)?;
+        let shell = &self.content().focused_pane().shell_name;
         let bar = StatusBar::new(
             self.window.inner_size().width as f32,
             top,
             &config.status_bar.arranged_items(),
             stats,
             datetime,
+            shell,
             self.ui_metrics(),
         );
-        Some(bar.with_active(self.actions_menu.is_some().then_some(StatusItem::Actions)))
+        Some(bar.with_active(self.menu_kind().map(MenuKind::status_item)))
+    }
+
+    /// What the open menu lists.
+    pub fn menu_kind(&self) -> Option<MenuKind> {
+        self.actions_menu.as_ref().map(ActionsMenu::kind)
     }
 
     /// The window as the actions menu is laid out in it.
@@ -486,36 +497,85 @@ impl WindowState {
     /// Open the menu of all actions: below or above the `actions` status
     /// bar item, or, without one, at the top of the terminal area.
     pub fn open_actions_menu(&mut self, config: &Config, stats: &Stats, bindings: &Bindings) {
-        let bounds = self.status_bar_bounds(config);
-        let item = bounds.and_then(|_| {
-            self.status_bar(config, stats, &datetime(config))?
-                .item_bounds(StatusItem::Actions)
-        });
-        let anchor = match (bounds, item) {
-            (Some((top, height)), Some((x, _))) => {
-                let opens_up = config.status_bar.position == StatusBarPosition::Bottom;
-                Anchor {
-                    x,
-                    y: if opens_up { top } else { top + height },
-                    opens_up,
-                    centered: false,
-                }
-            }
-            _ => Anchor {
-                x: 0.0,
-                y: self.terminal_area(config).y,
-                opens_up: false,
-                centered: true,
-            },
+        let anchor = self
+            .status_item_anchor(config, stats, StatusItem::Actions)
+            .unwrap_or_else(|| self.centered_anchor(config));
+        self.show_menu(ActionsMenu::new(anchor, bindings));
+    }
+
+    /// Open the menu of shells `names` for a new tab: below the tab bar's
+    /// "+" with `at_new_tab`, otherwise at the `shell` status bar item, the
+    /// `actions` one or the "+", or at the top of the terminal area.
+    pub fn open_shell_menu(
+        &mut self,
+        config: &Config,
+        stats: &Stats,
+        bindings: &Bindings,
+        names: &[String],
+        at_new_tab: bool,
+    ) {
+        let anchor = if at_new_tab {
+            self.new_tab_anchor(config)
+        } else {
+            self.status_item_anchor(config, stats, StatusItem::Shell)
+                .or_else(|| self.status_item_anchor(config, stats, StatusItem::Actions))
+                .or_else(|| self.new_tab_anchor(config))
         };
-        self.actions_menu = Some(ActionsMenu::new(anchor, bindings));
+        let anchor = anchor.unwrap_or_else(|| self.centered_anchor(config));
+        self.show_menu(ActionsMenu::shells(anchor, names, bindings));
+    }
+
+    /// Below or above the status bar `item`, if it is shown.
+    fn status_item_anchor(
+        &self,
+        config: &Config,
+        stats: &Stats,
+        item: StatusItem,
+    ) -> Option<Anchor> {
+        let (top, height) = self.status_bar_bounds(config)?;
+        let (x, _) = self
+            .status_bar(config, stats, &datetime(config))?
+            .item_bounds(item)?;
+        let opens_up = config.status_bar.position == StatusBarPosition::Bottom;
+        Some(Anchor {
+            x,
+            y: if opens_up { top } else { top + height },
+            opens_up,
+            centered: false,
+        })
+    }
+
+    /// Below the tab bar's "+" button, if the tab bar is shown.
+    fn new_tab_anchor(&self, config: &Config) -> Option<Anchor> {
+        let bar = self.tab_bar(config)?;
+        Some(Anchor {
+            x: bar.new_tab_x(),
+            y: bar.height,
+            opens_up: false,
+            centered: false,
+        })
+    }
+
+    /// Centered at the top of the terminal area.
+    fn centered_anchor(&self, config: &Config) -> Anchor {
+        Anchor {
+            x: 0.0,
+            y: self.terminal_area(config).y,
+            opens_up: false,
+            centered: true,
+        }
+    }
+
+    /// Show `menu` instead of any open one.
+    fn show_menu(&mut self, menu: ActionsMenu) {
+        self.actions_menu = Some(menu);
         // Nothing under the menu reacts to the pointer.
         self.mouse.hover_link = None;
         self.mouse.hovered_bar = None;
         self.window.request_redraw();
     }
 
-    /// Close the menu of all actions, if it is open.
+    /// Close the open menu (actions or shells), if any.
     pub fn close_actions_menu(&mut self) {
         if self.actions_menu.take().is_some() {
             self.window.request_redraw();

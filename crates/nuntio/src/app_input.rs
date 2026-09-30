@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::Instant;
 
+use nuntio_config::detect;
 use nuntio_config::{OptionAsMeta, StatusItem};
 use nuntio_term::{GridPoint, SelectionKind, TermMode};
 use winit::dpi::PhysicalPosition;
@@ -14,12 +15,13 @@ use winit::window::{CursorIcon, ResizeDirection, Window};
 use super::app_panes::CloseTarget;
 use super::{CONFIRM_REPEAT, Core};
 use crate::actions::Action;
-use crate::actions_menu::Step;
+use crate::actions_menu::{MenuKind, Step};
 use crate::banner::{Banner, Severity};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
 use crate::pane_tree::Axis;
 use crate::shell_words::{PathSyntax, dropped_path};
+use crate::shells::{self, Launch};
 use crate::tab_bar::BarHit;
 use crate::update;
 use crate::window::{TabDrag, WindowState};
@@ -132,7 +134,7 @@ impl Core {
             Action::FontIncrease => self.set_font_size(state, self.font_size + 1.0),
             Action::FontDecrease => self.set_font_size(state, self.font_size - 1.0),
             Action::FontReset => self.set_font_size(state, self.config.font.size),
-            Action::NewTab => self.new_tab(state, None),
+            Action::NewTab => self.new_tab(state, self.default_launch()),
             Action::OpenSettings => self.open_settings(state),
             Action::CheckForUpdates => update::check_now(self.proxy.clone()),
             Action::CloseTab => {
@@ -154,12 +156,42 @@ impl Core {
             Action::ZoomPane => state.toggle_zoom(&self.config),
             Action::Search => state.open_search(),
             Action::ToggleFullscreen => state.toggle_fullscreen(),
-            Action::OpenActionsMenu if state.actions_menu.is_some() => state.close_actions_menu(),
+            Action::OpenActionsMenu if state.menu_kind() == Some(MenuKind::Actions) => {
+                state.close_actions_menu();
+            }
             Action::OpenActionsMenu => {
                 state.open_actions_menu(&self.config, &self.stats, &self.bindings);
             }
+            Action::OpenShellMenu if state.menu_kind() == Some(MenuKind::Shells) => {
+                state.close_actions_menu();
+            }
+            Action::OpenShellMenu => self.open_shell_menu(state, false),
+            Action::NewTabWithShell(index) => {
+                if let Some(choice) = self.shell_choices.get(index).cloned() {
+                    self.new_tab(state, Launch::Shell(choice));
+                }
+            }
         }
         state.window.request_redraw();
+    }
+
+    /// Open the menu of shells for a new tab, below the tab bar's "+" with
+    /// `at_new_tab`, otherwise at the `shell` status bar item. Looks for
+    /// installed shells each time, so new ones show up.
+    pub(super) fn open_shell_menu(&mut self, state: &mut WindowState, at_new_tab: bool) {
+        self.shell_choices = shells::choices(
+            &self.config,
+            detect::installed_shells(),
+            detect::wsl_distributions(),
+        );
+        let names: Vec<String> = self.shell_choices.iter().map(|c| c.name.clone()).collect();
+        state.open_shell_menu(
+            &self.config,
+            &self.stats,
+            &self.bindings,
+            &names,
+            at_new_tab,
+        );
     }
 
     /// Open `nuntio-config` in a new tab.
@@ -167,7 +199,7 @@ impl Core {
         match crate::pane_env::helper() {
             Some(helper) => {
                 let command = vec![helper.to_string_lossy().into_owned()];
-                self.new_tab(state, Some(command));
+                self.new_tab(state, Launch::Command(command));
             }
             None => self.notify(Banner::new(
                 Severity::Warning,
@@ -227,7 +259,7 @@ impl Core {
             state.focus_pane(id);
         }
         let pane = state.content().focused_pane();
-        let syntax = PathSyntax::of(pane.wsl, &pane.term.process_name());
+        let syntax = PathSyntax::of(pane.wsl.is_some(), &pane.term.process_name());
         state
             .term()
             .paste(&dropped_path(&path.to_string_lossy(), syntax));
@@ -312,6 +344,7 @@ impl Core {
         let Some(menu) = state.actions_menu.as_mut() else {
             return;
         };
+        let opener = menu.kind().opener();
         let mut run = None;
         match &event.logical {
             Key::Named(NamedKey::Escape) => state.close_actions_menu(),
@@ -327,8 +360,8 @@ impl Core {
             }
             _ => {
                 let latin = input::latin_key(&event.unmodified, event.physical);
-                let opens = self.lookup_binding(&event.unmodified, latin.as_ref(), mods)
-                    == Some(Action::OpenActionsMenu);
+                let opens =
+                    self.lookup_binding(&event.unmodified, latin.as_ref(), mods) == Some(opener);
                 if opens {
                     state.close_actions_menu();
                 }
@@ -422,6 +455,10 @@ impl Core {
             }
             Some(StatusItem::Actions) if left => {
                 self.run_action(state, Action::OpenActionsMenu);
+                return;
+            }
+            Some(StatusItem::Shell) if left => {
+                self.run_action(state, Action::OpenShellMenu);
                 return;
             }
             _ => {}
@@ -576,6 +613,10 @@ impl Core {
                 self.request_close_tab(state, index);
                 true
             }
+            (Button::Right, Some(BarHit::NewTab)) => {
+                self.open_shell_menu(state, true);
+                true
+            }
             _ => false,
         }
     }
@@ -591,7 +632,7 @@ impl Core {
                 });
             }
             BarHit::Close(index) => self.request_close_tab(state, index),
-            BarHit::NewTab => self.new_tab(state, None),
+            BarHit::NewTab => self.new_tab(state, self.default_launch()),
             BarHit::Empty => {
                 // Double click maximizes, like a title bar.
                 let now = Instant::now();
@@ -713,7 +754,7 @@ impl Core {
         let over_update = bar_hit == Some(BarHit::Update)
             || matches!(
                 state.status_item_at(&self.config, &self.stats, pos),
-                Some(StatusItem::Update | StatusItem::Actions)
+                Some(StatusItem::Update | StatusItem::Actions | StatusItem::Shell)
             );
         state.window.set_cursor(if over_link || over_update {
             CursorIcon::Pointer

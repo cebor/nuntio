@@ -14,7 +14,7 @@ pub use osc_cwd::ReportedDir;
 pub use palette::{Palette, rgb};
 pub use pane::{
     GridPoint, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent, TermHandle, TermOptions,
-    TermSize,
+    TermSize, default_shell_name,
 };
 pub use search::{MatchPosition, Search, SearchError};
 pub use snapshot::{

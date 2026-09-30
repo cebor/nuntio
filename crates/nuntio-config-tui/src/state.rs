@@ -13,8 +13,8 @@ use nuntio_config::toml_edit::{self, InlineTable};
 use nuntio_config::{ACTIONS, Config, ConfigDoc, KeyCombo, StatusItem, ThemeSelection, ThemeSet};
 
 use crate::args;
-use crate::detect::Found;
 use crate::widgets::{Picker, TextInput};
+use nuntio_config::detect::Found;
 
 // Key handling and the editors, apart from the state they change.
 #[path = "state_keys.rs"]

@@ -147,6 +147,10 @@ option_as_meta = "none"
 # [[keybindings]]
 # key = "Ctrl+Shift+N"
 # action = "new_tab"
+
+# [[profiles]]
+# name = "PowerShell"
+# program = "pwsh"
 ```
 
 > [!NOTE]
@@ -222,6 +226,7 @@ Each item starts with an icon:
 - `battery`: charge level, with ⚡ while plugged in; the graph shows the level over about the last hour, one bar per minute. Hidden on machines without a battery.
 - `datetime`: the local date and time.
 - `actions`: a button that opens a menu of actions (all but `select_tab_1` … `select_tab_9`), grouped by category and with their shortcuts. Click an entry to run it, or use <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>Enter</kbd>; <kbd>Esc</kbd> closes the menu. It is not in the default list; add it to `items`, or bind the `open_actions_menu` action to open the menu from the keyboard.
+- `shell`: the name of the focused pane's shell. Click it for the [shell menu](#profiles), which opens a new tab with another shell. It is not in the default list.
 - `update`: the version of a newer nuntio release; click it to open the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one and `updates.status_bar` is on.
 
 #### Springs
@@ -315,6 +320,31 @@ precmd() { printf '\e]7;file://%s%s\e\\' "$HOST" "$PWD" }
 ```
 
 The same works for PowerShell and cmd on Windows: a directory reported by OSC 7 or OSC 9;9 is used where nuntio can't read the shell's directory itself.
+
+### Profiles
+
+The shell menu opens a new tab with a shell other than `shell`. Open it by clicking the `shell` status bar item, right-clicking the tab bar's "+" button, choosing "New Tab With…" in the actions menu (or the macOS Shell menu), or with the `open_shell_menu` action (<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Alt</kbd><kbd>T</kbd>, <kbd>Cmd</kbd><kbd>Opt</kbd><kbd>T</kbd> on macOS). Splits always run `shell`.
+
+The menu lists the default shell first, then each `[[profiles]]` entry in order, then the shells found on the system: on Windows `pwsh`, `powershell`, `cmd` and `nu` if they are on `PATH`, and every WSL distribution; elsewhere the shells in `/etc/shells`. A found shell is left out if an earlier entry has the same name or runs the same shell.
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | string | Required. The name in the menu and in the `shell` status bar item; each profile needs its own. |
+| `program`, `args`, `wsl`, `wsl_user` | | As in [`shell`](#shell). |
+
+```toml
+[[profiles]]
+name = "PowerShell"
+program = "pwsh"
+args = ["-NoLogo"]
+
+[[profiles]]
+name = "Debian (root)"
+wsl = "Debian"
+wsl_user = "root"
+```
+
+With `tabs.inherit_directory`, the new tab starts in the focused pane's directory, translated between Windows and WSL (`C:\x` is `/mnt/c/x`, `/home/me` is `\\wsl.localhost\<distribution>\home\me`). From one WSL distribution to another, nothing is inherited.
 
 ## Themes
 
@@ -435,5 +465,6 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `reload_config` | Reload the config file |
 | `open_settings` | Open `nuntio-config` in a new tab |
 | `open_actions_menu` | Open the menu of actions (the `actions` status bar item opens it too) |
+| `open_shell_menu` | Open the menu of shells to start a new tab with (see [Profiles](#profiles)) |
 | `check_for_updates` | Look for a newer nuntio release now, even with `updates.check` off |
 | `none` | Unbind the key combination |

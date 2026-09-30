@@ -153,6 +153,7 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
 
     let shell = b.menu("Shell");
     b.action(&shell, "New Tab", Action::NewTab);
+    b.action(&shell, "New Tab With…", Action::OpenShellMenu);
     b.separator(&shell);
     b.action(&shell, "Split Side by Side", Action::SplitVertical);
     b.action(&shell, "Split Top and Bottom", Action::SplitHorizontal);

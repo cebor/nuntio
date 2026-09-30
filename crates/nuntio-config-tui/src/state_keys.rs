@@ -11,8 +11,8 @@ use super::{
     theme_value, value_at,
 };
 use crate::args;
-use crate::detect::Found;
 use crate::widgets::{Choice, Pick, Picker, TextInput};
+use nuntio_config::detect::Found;
 
 impl App {
     // ----- Keys ------------------------------------------------------------

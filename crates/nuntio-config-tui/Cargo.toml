@@ -17,8 +17,5 @@ unicode-width.workspace = true
 ratatui.workspace = true
 fontdb.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
-
 [lints]
 workspace = true

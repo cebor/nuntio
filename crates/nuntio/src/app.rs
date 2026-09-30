@@ -317,6 +317,9 @@ struct Core {
     next_pane_id: u64,
     /// Home directories in WSL, to start new panes in `~/…`.
     wsl_homes: crate::wsl::Homes,
+    /// The shell menu's entries, found when it opened;
+    /// `Action::NewTabWithShell` indexes them.
+    shell_choices: Vec<crate::shells::ShellChoice>,
     /// Used up by the first pane.
     startup: Startup,
     /// The last tab was closed; quit at the next opportunity.
@@ -408,6 +411,7 @@ impl Core {
             clipboard,
             next_pane_id: 0,
             wsl_homes: Default::default(),
+            shell_choices: Vec::new(),
             startup,
             exit_requested: false,
             pending_close: None,
