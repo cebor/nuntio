@@ -441,9 +441,10 @@ impl Core {
             return;
         }
         // Clicking a pane focuses it; the click then acts inside it.
-        if let Some(id) = state.pane_at(&self.config, pos) {
-            state.focus_pane(id);
-        }
+        let Some(id) = state.pane_at(&self.config, pos) else {
+            return;
+        };
+        state.focus_pane(id);
         let point = state.cell_at(&self.config, pos);
         // Application mouse mode: forward presses and matching releases.
         if state.reports_mouse(state.term().mode()) {
