@@ -466,9 +466,11 @@ impl Fonts {
             width: advance.round().max(1.0) as u32,
             height: height as u32,
             baseline: baseline as u32,
-            underline_y: ((baseline + underline_offset).round() as u32).min(height as u32 - 1),
+            underline_y: ((baseline + underline_offset).round() as u32)
+                .min((height as u32).saturating_sub(stroke as u32)),
             stroke: stroke as u32,
-            strikeout_y: (baseline - strikeout_offset).round().max(0.0) as u32,
+            strikeout_y: ((baseline - strikeout_offset).round().max(0.0) as u32)
+                .min((height as u32).saturating_sub(stroke as u32)),
         }
     }
 
