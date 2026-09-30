@@ -48,9 +48,13 @@ fn parse_args() -> Result<Option<PathBuf>, lexopt::Error> {
         match arg {
             Long("config") => config = Some(parser.value()?.into()),
             Short('h') | Long("help") => {
-                println!(
+                print!(
                     "Usage: nuntio-config [--config <path>]\n\n\
-                     Edit nuntio's config file. Changes are written right away."
+                     Edit nuntio's config file. Changes are written right away.\n\n\
+                     Options:\n  \
+                     --config <path>  Edit this file instead of the one nuntio uses\n  \
+                     -V, --version    Print the version\n  \
+                     -h, --help       Print this help\n"
                 );
                 std::process::exit(0);
             }
