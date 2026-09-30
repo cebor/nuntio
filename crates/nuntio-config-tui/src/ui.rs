@@ -44,13 +44,25 @@ pub struct View {
 }
 
 pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
+    let area = frame.area();
+    if area.height < 14 || area.width < 37 {
+        let text = Paragraph::new("Terminal too small").centered();
+        let [_, middle, _] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(area);
+        frame.render_widget(text, middle);
+        return;
+    }
     let [header, body, details, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
         Constraint::Length(7),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area);
 
     draw_header(frame, header, app);
     let [sections, rows] =
@@ -92,20 +104,14 @@ fn draw_list(frame: &mut Frame, area: Rect, items: Vec<ListItem>, selected: usiz
 
 fn draw_picker(frame: &mut Frame, app: &App, mode: &PickerMode) {
     let picker = &mode.picker;
-    let filter_line = u16::from(picker.filter.is_some());
-    // At least one line, for "No matches".
-    let height = picker.visible.len().max(1) as u16 + 2 + filter_line;
+    // A stable size while filtering, and at least one line for "No matches".
+    let height = (picker.choices.len() + usize::from(picker.filter.is_some())).max(1) as u16 + 2;
     let inner = open_popup(frame, 60, height, &picker.title);
     let list_area = match &picker.filter {
         Some(filter) => {
             let [filter_area, list_area] =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
-            let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(filter)]);
-            frame.render_widget(Paragraph::new(line), filter_area);
-            frame.set_cursor_position(Position::new(
-                filter_area.x + 2 + filter.width() as u16,
-                filter_area.y,
-            ));
+            draw_prompt(frame, filter_area, filter, filter.chars().count());
             list_area
         }
         None => inner,
@@ -266,8 +272,13 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput) {
+    draw_prompt(frame, area, &input.text, input.cursor);
+}
+
+/// `› ` and `text`, scrolled to keep the cursor (a char index) visible.
+fn draw_prompt(frame: &mut Frame, area: Rect, text: &str, cursor: usize) {
     let width = usize::from(area.width.saturating_sub(2));
-    let (text, cursor) = scrolled(&input.text, input.cursor, width);
+    let (text, cursor) = scrolled(text, cursor, width);
     let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(text)]);
     frame.render_widget(Paragraph::new(line), area);
     frame.set_cursor_position(Position::new(area.x + 2 + cursor as u16, area.y));
@@ -539,8 +550,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         ],
     };
     let editor = editor_hint(hints, &app.editor_name, area.width);
+    let hints = fit_hints(hints, editor, area.width);
     let mut spans = vec![Span::raw(" ")];
-    for &(key, what) in hints {
+    for &(key, what) in &hints {
         let what = if key == "e" { editor } else { what };
         spans.push(Span::raw(key).fg(ACCENT));
         spans.push(Span::styled(format!(" {what}  "), tone(Tone::Dim)));
@@ -548,18 +560,41 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// The text of the `e` hint: the editor's name, unless the footer doesn't
-/// fit in `width` with it and the generic `editor` is shorter.
-fn editor_hint<'a>(hints: &[(&str, &'a str)], name: &'a str, width: u16) -> &'a str {
-    // A leading space, and two spaces between hints.
-    let needed: usize = hints
+/// The columns the footer takes with `editor` as the text of the `e` hint:
+/// a leading space, and two spaces between hints.
+fn footer_width(hints: &[(&str, &str)], editor: &str) -> usize {
+    hints
         .iter()
         .map(|&(key, what)| {
-            let what = if key == "e" { name } else { what };
+            let what = if key == "e" { editor } else { what };
             key.width() + 1 + what.width() + 2
         })
         .sum::<usize>()
-        - 1;
+        .saturating_sub(1)
+}
+
+/// `hints` without the least important ones until the footer fits in
+/// `width`, so `q quit` and `/ search` stay.
+fn fit_hints<'a>(
+    hints: &[(&'a str, &'a str)],
+    editor: &str,
+    width: u16,
+) -> Vec<(&'a str, &'a str)> {
+    let mut hints = hints.to_vec();
+    while footer_width(&hints, editor) > usize::from(width) {
+        let droppable = ["R", "u", "Tab", "←→"]
+            .iter()
+            .find_map(|key| hints.iter().position(|&(k, _)| k == *key));
+        let Some(index) = droppable else { break };
+        hints.remove(index);
+    }
+    hints
+}
+
+/// The text of the `e` hint: the editor's name, unless the footer doesn't
+/// fit in `width` with it and the generic `editor` is shorter.
+fn editor_hint<'a>(hints: &[(&str, &'a str)], name: &'a str, width: u16) -> &'a str {
+    let needed = footer_width(hints, name);
     match hints.iter().find(|&&(key, _)| key == "e") {
         Some(&(_, generic)) if needed > usize::from(width) && generic.width() < name.width() => {
             generic
@@ -593,6 +628,29 @@ mod tests {
         // Short names never become the longer `editor`.
         assert_eq!(editor_hint(&hints, "vim", 10), "vim");
         assert_eq!(editor_hint(&[("q", "quit")], "vim", 1), "vim");
+    }
+
+    #[test]
+    fn footer_drops_secondary_hints_before_quit() {
+        let hints = [
+            ("↑↓", "move"),
+            ("←→", "change"),
+            ("⏎", "edit"),
+            ("d", "default"),
+            ("Tab", "sections"),
+            ("/", "search"),
+            ("e", "editor"),
+            ("u", "undo"),
+            ("R", "restore"),
+            ("q", "quit"),
+        ];
+        let fitted = fit_hints(&hints, "editor", 80);
+        assert!(fitted.contains(&("q", "quit")));
+        assert!(fitted.contains(&("/", "search")));
+        assert!(!fitted.contains(&("R", "restore")));
+        assert!(footer_width(&fitted, "editor") <= 80);
+        // Nothing to drop when it fits.
+        assert_eq!(fit_hints(&hints, "editor", 200), hints);
     }
 
     #[test]
