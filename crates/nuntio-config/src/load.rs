@@ -112,11 +112,33 @@ pub fn parse(source: &str) -> Result<Loaded, String> {
     let mut warnings = Vec::new();
     let deserializer = toml::Deserializer::parse(source).map_err(|e| describe(&e, source))?;
     let config: Config = serde_ignored::deserialize(deserializer, |path| {
-        warnings.push(format!("unknown key `{path}`"));
+        warnings.push(unknown_key(&path));
     })
     .map_err(|e: toml::de::Error| describe(&e, source))?;
     config.validate()?;
     Ok(Loaded { config, warnings })
+}
+
+/// Warning for a key that no setting uses; names the entry inside `[[tables]]`.
+fn unknown_key(path: &serde_ignored::Path) -> String {
+    use serde_ignored::Path;
+    if let Path::Map { parent, key } = path
+        && let Path::Seq { parent, index } = &**parent
+        && let Path::Map { parent, key: table } = &**parent
+        && matches!(&**parent, Path::Root)
+    {
+        return format!("unknown key `{key}` in [[{table}]] entry {}", index + 1);
+    }
+    format!("unknown key `{path}`")
+}
+
+/// The 1-based line of a byte offset in `source`.
+pub(crate) fn line_at(source: &str, offset: usize) -> usize {
+    source.as_bytes()[..offset.min(source.len())]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
+        + 1
 }
 
 /// Error message with a 1-based line number.
@@ -259,6 +281,17 @@ mod tests {
         let loaded = load(Path::new("/nonexistent/nuntio/config.toml")).unwrap();
         assert_eq!(loaded.config, Config::default());
         assert!(loaded.warnings.is_empty());
+    }
+
+    #[test]
+    fn unknown_keys_in_tables_name_the_entry() {
+        let loaded =
+            parse("[[keybindings]]\nkey = \"Ctrl+T\"\naction = \"new_tab\"\nactoin = \"x\"")
+                .unwrap();
+        assert_eq!(
+            loaded.warnings,
+            ["unknown key `actoin` in [[keybindings]] entry 1"]
+        );
     }
 
     #[test]
