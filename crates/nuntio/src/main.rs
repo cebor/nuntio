@@ -250,6 +250,7 @@ fn run() -> Result<()> {
     #[cfg(windows)]
     restrict_dll_search();
     let mut warnings = Vec::new();
+    let explicit = args.config.is_some();
     // Absolute, so panes started in another directory find it too.
     let config_path = args
         .config
@@ -267,6 +268,15 @@ fn run() -> Result<()> {
             }
             Some(location.path)
         });
+    if explicit
+        && let Some(path) = &config_path
+        && !path.exists()
+    {
+        warnings.push(format!(
+            "{} does not exist, using the defaults",
+            path.display()
+        ));
+    }
     let (config, banner) = load_config(config_path.as_deref(), warnings);
     // Started from the Finder or Dock, nuntio runs in `/`. Start the first
     // shell at home instead, like Terminal.app (`login`, which runs the
