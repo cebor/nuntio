@@ -71,13 +71,13 @@ pub struct Mods {
 pub enum KeyComboError {
     #[error("missing key")]
     MissingKey,
-    #[error("empty modifier")]
+    #[error("empty modifier (write the + key as `Plus`)")]
     EmptyModifier,
     #[error("unknown modifier `{0}`")]
     UnknownModifier(String),
     #[error("modifier `{0}` appears twice")]
     DuplicateModifier(String),
-    #[error("unknown key `{0}`")]
+    #[error("unknown key `{0}`: use one character or a name like Enter, Tab, Escape or F1 to F12")]
     UnknownKey(String),
 }
 
