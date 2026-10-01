@@ -259,15 +259,24 @@ impl TabBar {
             foreground,
         );
 
+        // A hairline between two neighbouring tabs that have no pill, in the
+        // status bar's separator color.
+        let separator = mix(bar_bg, foreground, 0.15);
+        let stroke = hairline(f64::from(self.scale));
+        let has_pill = |i: usize| labels[i].active || hovered_tab == Some(i);
+
         for (i, (slot, label)) in self.slots.iter().zip(labels).enumerate() {
-            let pill = if label.active {
-                Some(active_bg)
-            } else if hovered_tab == Some(i) {
-                Some(hover_bg)
-            } else {
-                None
-            };
-            if let Some(color) = pill {
+            if i > 0 && !has_pill(i - 1) && !has_pill(i) {
+                rects.push(rect(
+                    (slot.x - stroke / 2.0).round(),
+                    self.top,
+                    stroke,
+                    ch,
+                    separator,
+                ));
+            }
+            if has_pill(i) {
+                let color = if label.active { active_bg } else { hover_bg };
                 rects.push(self.pill(slot.x + self.gap / 2.0, slot.width - self.gap, color));
             }
 
@@ -299,7 +308,7 @@ impl TabBar {
                 }
             }
 
-            if (label.active || hovered_tab == Some(i)) && self.has_close(*slot) {
+            if has_pill(i) && self.has_close(*slot) {
                 let (cx, cy, size) = self.close_rect(*slot);
                 let close_hovered = hovered == Some(BarHit::Close(i));
                 if close_hovered {
@@ -698,5 +707,33 @@ mod tests {
         );
         assert!(highlight.radius > 0.0);
         assert_eq!(close(&texts), fg);
+    }
+
+    #[test]
+    fn separators_only_between_plain_tabs() {
+        let bar = TabBar::new(1000.0, 3, METRICS, TabBarOptions::default());
+        let labels = |active: usize| {
+            [0, 1, 2].map(|i| TabLabel {
+                title: "~".into(),
+                active: i == active,
+                activity: false,
+                bell: false,
+            })
+        };
+        let (bg, fg) = (Rgb { r: 0, g: 0, b: 0 }, WHITE);
+        let color = mix(bar_background(bg), fg, 0.15);
+        let separators = |active: usize, hovered: Option<BarHit>| {
+            let (rects, _) = bar.draw(&labels(active), hovered, false, bg, fg);
+            rects
+                .into_iter()
+                .filter(|r| r.color == color)
+                .map(|r| (r.x, r.y, r.width, r.height))
+                .collect::<Vec<_>>()
+        };
+
+        // Slots are 280px wide at x 4, 284 and 564: only tabs 1 and 2 are plain.
+        assert_eq!(separators(0, None), [(564.0, 7.0, 1.0, 20.0)]);
+        assert_eq!(separators(0, Some(BarHit::Tab(2))), []);
+        assert_eq!(separators(1, None), []);
     }
 }
