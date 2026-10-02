@@ -116,6 +116,18 @@ impl KeyCombo {
     }
 }
 
+impl crate::Keybinding {
+    /// The combination of an entry nuntio uses: its action is one of
+    /// [`ACTIONS`] and its key parses. nuntio skips every other entry
+    /// (with a warning), so such entries shadow nothing.
+    pub fn active_combo(&self) -> Option<KeyCombo> {
+        if !ACTIONS.iter().any(|a| a.value == self.action) {
+            return None;
+        }
+        KeyCombo::parse(&self.key).ok()
+    }
+}
+
 fn parse_key(key: &str) -> Result<KeyName, KeyComboError> {
     let mut chars = key.chars();
     match (chars.next(), chars.next()) {

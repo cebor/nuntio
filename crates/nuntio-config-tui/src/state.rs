@@ -767,7 +767,7 @@ impl App {
         }
         let earlier = bindings[..index]
             .iter()
-            .position(|b| KeyCombo::parse(&b.key) == Ok(combo));
+            .position(|b| b.active_combo() == Some(combo));
         earlier.map(|i| {
             format!(
                 "{combo} is also bound by entry {}; the first entry wins",
@@ -1697,6 +1697,30 @@ mod tests {
         memory.fail_writes(false);
         app.key(Key::Char('u'));
         assert_eq!(memory.text(), "scrollback = 5\n");
+    }
+
+    #[test]
+    fn skipped_bindings_dont_shadow() {
+        let (mut app, _) = app(Some(
+            "[[keybindings]]\nkey = \"Ctrl+T\"\naction = \"nwe_tab\"\n\n\
+             [[keybindings]]\nkey = \"Ctrl+T\"\naction = \"new_tab\"\n\n\
+             [[keybindings]]\nkey = \"Ctrl+T\"\naction = \"close_tab\"\n",
+        ));
+        assert!(app.binding_problem(0).unwrap().contains("unknown action"));
+        assert_eq!(app.binding_problem(1), None);
+        assert!(app.binding_problem(2).unwrap().contains("entry 2"));
+        app.section = Section::ALL
+            .iter()
+            .position(|s| *s == Section::Keybindings)
+            .unwrap();
+        app.key(Key::Char('a'));
+        type_text(&mut app, "ctrl+t");
+        let Mode::Input(InputMode { note, .. }) = &app.mode else {
+            panic!("no input");
+        };
+        let (tone, note) = note.as_ref().unwrap();
+        assert_eq!(*tone, Tone::Warn);
+        assert!(note.contains("`new_tab`"), "{note}");
     }
 
     #[test]

@@ -476,6 +476,31 @@ mod tests {
     }
 
     #[test]
+    fn active_combo_matches_from_config() {
+        for (key, action, expected) in [
+            ("Ctrl+T", "new_tab", true),
+            ("Ctrl+T", "none", true),
+            ("Ctrl+T", "nwe_tab", false),
+            ("Ctrl+Nope", "new_tab", false),
+            ("", "new_tab", false),
+            ("Ctrl+T", "", false),
+        ] {
+            let entry = nuntio_config::Keybinding {
+                key: key.into(),
+                action: action.into(),
+            };
+            assert_eq!(
+                Bindings::from_config(std::slice::from_ref(&entry))
+                    .1
+                    .is_empty(),
+                entry.active_combo().is_some(),
+                "{key:?} {action:?}"
+            );
+            assert_eq!(entry.active_combo().is_some(), expected);
+        }
+    }
+
+    #[test]
     fn shortcuts_follow_the_bindings() {
         // The platform's default of new_tab, which the config takes over.
         let new_tab = if cfg!(target_os = "macos") {

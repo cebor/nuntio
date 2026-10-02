@@ -593,7 +593,7 @@ impl App {
                         .keybindings()
                         .iter()
                         .enumerate()
-                        .find(|(i, b)| Some(*i) != *index && KeyCombo::parse(&b.key) == Ok(combo))
+                        .find(|(i, b)| Some(*i) != *index && b.active_combo() == Some(combo))
                         .map(|(_, b)| {
                             let text = format!("{combo} is already bound to `{}`", b.action);
                             (Tone::Warn, text)
