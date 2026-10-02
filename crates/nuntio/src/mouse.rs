@@ -191,6 +191,23 @@ mod tests {
     }
 
     #[test]
+    fn utf8_encoding_switches_to_two_bytes_and_ends_at_2015() {
+        let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::UTF8_MOUSE;
+        let left = Some(Button::Left);
+        let at = |column| encode_report(left, MouseAction::Press, NONE, column, 0, mode);
+        // x = column + 1; the byte is 32 + x, y = 1 -> '!'.
+        assert_eq!(at(94).unwrap(), [0x1b, b'[', b'M', 32, 0x7f, 33]);
+        assert_eq!(at(95).unwrap(), [0x1b, b'[', b'M', 32, 0xC2, 0x80, 33]);
+        assert_eq!(at(2014).unwrap(), [0x1b, b'[', b'M', 32, 0xDF, 0xBF, 33]);
+        assert_eq!(at(2015), None);
+        // The line is limited the same way.
+        assert_eq!(
+            encode_report(left, MouseAction::Press, NONE, 0, 2015, mode),
+            None
+        );
+    }
+
+    #[test]
     fn sgr_press_and_release() {
         let mode = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
         let left = Some(Button::Left);
