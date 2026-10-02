@@ -671,51 +671,46 @@ impl Core {
 
     /// Show what an update check found.
     fn update_checked(&mut self, state: Option<&mut WindowState>, checked: update::Checked) {
-        // Late answers of a check that was just turned off.
-        if !checked.manual && self.update_checker.is_none() {
-            return;
-        }
-        // Without the banner indicator, only a manual check speaks up.
-        let show_banner = checked.manual || self.config.updates.banner;
-        let release = match checked.result {
-            Ok(release) => release,
-            Err(err) if show_banner => {
-                let banner = Banner::new(Severity::Warning, "Update check", vec![err]);
-                if checked.manual {
-                    self.replace_banner(banner);
-                } else {
-                    self.notify(banner);
+        let outcome = update::decide(
+            checked,
+            self.update_checker.is_some(),
+            self.config.updates.banner,
+            Build::current(),
+        );
+        match outcome {
+            update::Outcome::Ignore => {}
+            update::Outcome::Silent { error } => tracing::warn!("update check: {error}"),
+            update::Outcome::Failed { error, manual } => {
+                let banner = Banner::new(Severity::Warning, "Update check", vec![error]);
+                self.show_update_banner(banner, manual);
+            }
+            update::Outcome::Found {
+                update,
+                notice,
+                manual,
+            } => {
+                // A repeated answer replaces the banner instead of adding to it.
+                self.dismiss_banner(update::BANNER);
+                if let Some(update::Notice { message, url }) = notice {
+                    let banner = Banner::new(Severity::Info, update::BANNER, vec![message]);
+                    let banner = banner.map(|b| match url {
+                        Some(url) => b.with_url(url),
+                        None => b,
+                    });
+                    self.show_update_banner(banner, manual);
                 }
-                return;
-            }
-            Err(err) => {
-                tracing::warn!("update check: {err}");
-                return;
-            }
-        };
-        let update = Update::new(&release, Build::current());
-        // A repeated answer replaces the banner instead of adding to it.
-        self.dismiss_banner(update::BANNER);
-        let message = match &update {
-            Some(update) if checked.manual || (show_banner && !checked.dismissed) => {
-                Some((update.message(), Some(update.url.clone())))
-            }
-            None if checked.manual => Some((update::up_to_date(), None)),
-            _ => None,
-        };
-        if let Some((message, url)) = message {
-            let banner = Banner::new(Severity::Info, update::BANNER, vec![message]);
-            let banner = banner.map(|b| match url {
-                Some(url) => b.with_url(url),
-                None => b,
-            });
-            if checked.manual {
-                self.replace_banner(banner);
-            } else {
-                self.notify(banner);
+                self.set_update(state, update);
             }
         }
-        self.set_update(state, update);
+    }
+
+    /// A manual check's banner replaces the current one; a daily one is queued.
+    fn show_update_banner(&mut self, banner: Option<Banner>, manual: bool) {
+        if manual {
+            self.replace_banner(banner);
+        } else {
+            self.notify(banner);
+        }
     }
 
     fn set_update(&mut self, state: Option<&mut WindowState>, update: Option<Update>) {

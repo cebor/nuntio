@@ -114,11 +114,6 @@ pub struct Update {
 }
 
 impl Update {
-    /// `release`, if it is newer than this binary.
-    pub fn new(release: &Release, build: Build) -> Option<Self> {
-        Self::against(release, CURRENT, build)
-    }
-
     fn against(release: &Release, current: &str, build: Build) -> Option<Self> {
         let latest = Version::parse(&release.tag)?;
         let current = Version::parse(current)?;
@@ -127,10 +122,6 @@ impl Update {
             url: release.page_url(),
             build,
         })
-    }
-
-    pub fn message(&self) -> String {
-        Self::message_for(&self.version, CURRENT, self.build)
     }
 
     fn message_for(version: &str, current: &str, build: Build) -> String {
@@ -158,6 +149,81 @@ pub struct Checked {
     pub manual: bool,
     /// The user closed the banner for this release before.
     pub dismissed: bool,
+}
+
+/// What the main thread does with a check's answer.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// A late answer of the daily check that was just turned off.
+    Ignore,
+    /// A failed daily check without the banner indicator: only logged.
+    Silent { error: String },
+    /// A failed check: a warning banner (replacing the current banner if `manual`).
+    Failed { error: String, manual: bool },
+    /// A release was found: show `notice` (if any) and remember `update`
+    /// (badge, status bar item). `manual` banners replace the current one.
+    Found {
+        update: Option<Update>,
+        notice: Option<Notice>,
+        manual: bool,
+    },
+}
+
+/// The text of an update banner.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub message: String,
+    pub url: Option<String>,
+}
+
+pub fn decide(
+    checked: Checked,
+    checker_running: bool,
+    banner_enabled: bool,
+    build: Build,
+) -> Outcome {
+    decide_against(checked, checker_running, banner_enabled, build, CURRENT)
+}
+
+fn decide_against(
+    checked: Checked,
+    checker_running: bool,
+    banner_enabled: bool,
+    build: Build,
+    current: &str,
+) -> Outcome {
+    if !checked.manual && !checker_running {
+        return Outcome::Ignore;
+    }
+    // Without the banner indicator, only a manual check speaks up.
+    let show_banner = checked.manual || banner_enabled;
+    let release = match checked.result {
+        Ok(release) => release,
+        Err(error) if show_banner => {
+            return Outcome::Failed {
+                error,
+                manual: checked.manual,
+            };
+        }
+        Err(error) => return Outcome::Silent { error },
+    };
+    let update = Update::against(&release, current, build);
+    let notice = match &update {
+        Some(u) if checked.manual || (show_banner && !checked.dismissed) => Some(Notice {
+            message: Update::message_for(&u.version, current, u.build),
+            url: Some(u.url.clone()),
+        }),
+        None if checked.manual => Some(Notice {
+            message: up_to_date(),
+            url: None,
+        }),
+        _ => None,
+    };
+    Outcome::Found {
+        update,
+        notice,
+        manual: checked.manual,
+    }
 }
 
 /// What is kept between runs, in the cache directory.
@@ -561,5 +627,140 @@ mod tests {
             ..State::default()
         };
         assert_eq!(state.wait(1_000 + INTERVAL.as_secs() + 5), Duration::ZERO);
+    }
+
+    fn answer(result: Result<Release, String>, manual: bool, dismissed: bool) -> Checked {
+        Checked {
+            result,
+            manual,
+            dismissed,
+        }
+    }
+
+    const RUNNING: bool = true;
+
+    #[test]
+    fn late_daily_answers_are_ignored_but_manual_ones_answer() {
+        let found = || answer(Ok(release("v0.1.6")), false, false);
+        assert_eq!(
+            decide_against(found(), !RUNNING, true, Build::Release, "0.1.5"),
+            Outcome::Ignore
+        );
+        let manual = answer(Ok(release("v0.1.5")), true, false);
+        let outcome = decide_against(manual, !RUNNING, false, Build::Release, "0.1.5");
+        assert!(matches!(
+            outcome,
+            Outcome::Found {
+                notice: Some(Notice { url: None, .. }),
+                update: None,
+                manual: true
+            }
+        ));
+    }
+
+    #[test]
+    fn a_dismissed_release_never_comes_back_by_itself() {
+        let daily = decide_against(
+            answer(Ok(release("v0.1.6")), false, true),
+            RUNNING,
+            true,
+            Build::Release,
+            "0.1.5",
+        );
+        // Still known (badge, status item), but no banner.
+        assert!(matches!(
+            daily,
+            Outcome::Found {
+                update: Some(_),
+                notice: None,
+                manual: false
+            }
+        ));
+        // A manual check shows it anyway.
+        let manual = decide_against(
+            answer(Ok(release("v0.1.6")), true, true),
+            RUNNING,
+            false,
+            Build::Release,
+            "0.1.5",
+        );
+        assert!(matches!(
+            manual,
+            Outcome::Found {
+                notice: Some(Notice { url: Some(_), .. }),
+                manual: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_daily_banner_follows_the_banner_setting_and_newness() {
+        let daily = |tag: &str, banner| {
+            decide_against(
+                answer(Ok(release(tag)), false, false),
+                RUNNING,
+                banner,
+                Build::Release,
+                "0.1.5",
+            )
+        };
+        assert!(matches!(
+            daily("v0.1.6", true),
+            Outcome::Found {
+                update: Some(_),
+                notice: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            daily("v0.1.6", false),
+            Outcome::Found {
+                update: Some(_),
+                notice: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            daily("v0.1.5", true),
+            Outcome::Found {
+                update: None,
+                notice: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn errors_are_quiet_without_the_banner_indicator() {
+        let fail = |manual, banner| {
+            decide_against(
+                answer(Err("offline".into()), manual, false),
+                RUNNING,
+                banner,
+                Build::Release,
+                "0.1.5",
+            )
+        };
+        assert_eq!(
+            fail(false, false),
+            Outcome::Silent {
+                error: "offline".into()
+            }
+        );
+        assert_eq!(
+            fail(false, true),
+            Outcome::Failed {
+                error: "offline".into(),
+                manual: false
+            }
+        );
+        assert_eq!(
+            fail(true, false),
+            Outcome::Failed {
+                error: "offline".into(),
+                manual: true
+            }
+        );
     }
 }
