@@ -153,10 +153,15 @@ pub(crate) fn printable<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
         .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
 }
 
-/// Windows reports AltGr as Ctrl+Alt: AltGr+Q on a German layout must type
-/// "@", not Ctrl+Meta+Q. A real Ctrl+Alt combination yields no other
-/// printable text than the key itself.
+/// Windows treats Ctrl+Alt as AltGr (and reports a physical AltGr that way
+/// when winit can't tell): Ctrl+Alt+Q on a German layout must type "@", not
+/// Ctrl+Meta+Q. A real Ctrl+Alt combination yields no other printable text
+/// than the key itself. Elsewhere AltGr is never reported as Ctrl+Alt, so a
+/// Ctrl+Alt+Shift+2 stays a shortcut.
 pub(crate) fn altgr_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
+    if !cfg!(windows) {
+        return None;
+    }
     let text = printable(input).filter(|_| input.ctrl && input.meta)?;
     let same_key = matches!(input.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text));
     (!same_key).then_some(text)
@@ -563,6 +568,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn altgr_types_its_character() {
         let ctrl_alt = Mods {
             ctrl: true,
@@ -586,6 +592,39 @@ mod tests {
         assert_eq!(key("a", "a", Some("\u{1}")).unwrap(), b"\x1b\x01");
         assert_eq!(key("a", "a", Some("a")).unwrap(), b"\x1b\x01");
         assert_eq!(key("a", "a", None).unwrap(), b"\x1b\x01");
+        let all = Mods {
+            shift: true,
+            ctrl: true,
+            meta: true,
+        };
+        let shifted = encode_with(
+            ch("@"),
+            ch("2"),
+            Some("@"),
+            KeyLocation::Standard,
+            all,
+            TermMode::empty(),
+        );
+        assert_eq!(shifted.unwrap(), b"@");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ctrl_alt_symbols_are_not_altgr_outside_windows() {
+        let all = Mods {
+            shift: true,
+            ctrl: true,
+            meta: true,
+        };
+        let out = encode_with(
+            ch("@"),
+            ch("2"),
+            Some("@"),
+            KeyLocation::Standard,
+            all,
+            TermMode::empty(),
+        );
+        assert_eq!(out.unwrap(), b"\x1b\x00");
     }
 
     #[test]
@@ -667,9 +706,10 @@ mod tests {
             Some("@")
         );
         // AltGr+Q on Windows.
+        let altgr = if cfg!(windows) { Some("@") } else { None };
         assert_eq!(
             field("@", "q", Some("@"), ctrl_alt, false).as_deref(),
-            Some("@")
+            altgr
         );
         // Shortcuts and control characters type nothing.
         assert_eq!(field("w", "w", Some("\u{17}"), CTRL, false), None);

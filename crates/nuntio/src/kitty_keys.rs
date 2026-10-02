@@ -649,6 +649,20 @@ mod tests {
         assert_eq!(dead().sends(ALL_KEYS | TEXT), "\x1b[94u");
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn ctrl_alt_is_not_altgr_outside_windows() {
+        let at = || {
+            let mut key = ch("q").ctrl().meta();
+            key.key = Key::Character("@".into());
+            key.text = Some("@");
+            key
+        };
+        assert_eq!(at().sends(DISAMBIGUATE), "\x1b[113;7u");
+        assert_eq!(at().sends(ALL_KEYS | TEXT), "\x1b[113;7u");
+    }
+
+    #[cfg(windows)]
     #[test]
     fn altgr_types_text() {
         // AltGr+Q on a German layout, reported as Ctrl+Alt on Windows.
