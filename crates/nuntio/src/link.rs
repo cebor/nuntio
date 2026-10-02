@@ -3,14 +3,13 @@
 //! doesn't tell where a click goes; and a `file://` link to a program
 //! would run it on macOS and Windows.
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{UiMetrics, framed_box, hairline, truncate};
+use crate::style::{UiMetrics, framed_box, hairline, truncate, truncate_start};
 
 /// Distance from the pane's bottom corner, in logical pixels.
 const MARGIN: f64 = 6.0;
@@ -272,18 +271,30 @@ fn hint_bounds(columns: usize, pane: Rect, pointer: (f32, f32), metrics: UiMetri
     }
 }
 
-/// `url` without the userinfo of its authority (`user@`), which can make
-/// it look like it leads to another host.
-fn without_userinfo(url: &str) -> Cow<'_, str> {
+/// `url` up to the end of its authority, without userinfo (`user@`, which can fake a host),
+/// and the rest. The authority also ends at `\`, where browsers end it for http(s).
+fn split_host(url: &str) -> (String, &str) {
     let Some(scheme_end) = url.find("://").map(|i| i + 3) else {
-        return Cow::Borrowed(url);
+        return (String::new(), url);
     };
     let rest = &url[scheme_end..];
-    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
-    match authority.rfind('@') {
-        Some(at) => Cow::Owned(format!("{}{}", &url[..scheme_end], &rest[at + 1..])),
-        None => Cow::Borrowed(url),
+    let end = rest.find(['/', '?', '#', '\\']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    (format!("{}{host}", &url[..scheme_end]), &rest[end..])
+}
+
+/// The hint text in `cells` columns: the host is never cut, only the rest is; a host too wide
+/// shows its end (the registrable domain).
+fn hint_text(url: &str, cells: usize) -> String {
+    let (start, rest) = split_host(url);
+    let used = start.width();
+    if used > cells {
+        return truncate_start(&start, cells);
     }
+    format!("{start}{}", truncate(rest, cells - used))
 }
 
 /// Draw where the link `url` leads, in `pane`, in the small UI font.
@@ -299,9 +310,7 @@ pub fn draw_hint(
     let margin = metrics.logical(MARGIN);
     let fits =
         ((pane.width - 2.0 * (margin + padding)) / metrics.small.width as f32).max(0.0) as usize;
-    // The start names the scheme and host (userinfo dropped, it can fake a
-    // host); cut the end.
-    let text = truncate(&without_userinfo(url), fits);
+    let text = hint_text(url, fits);
     let bounds = hint_bounds(text.width(), pane, pointer, metrics);
     let rects = framed_box(bounds, hairline(metrics.scale), background, foreground);
     let texts = vec![UiText::new(bounds.x + padding, bounds.y + padding, text, foreground).small()];
@@ -414,12 +423,35 @@ mod tests {
     #[test]
     fn listed_extensions_are_refused() {
         for ext in [
-            "py", "pyw", "pyz", "sh", "rdp", "jnlp", "wsb", "ws", "wsc", "sct", "msu", "mst",
-            "ps1xml", "psc1", "theme", "themepack", "xbap", "vsto", "gadget",
+            "py",
+            "pyw",
+            "pyz",
+            "sh",
+            "rdp",
+            "jnlp",
+            "wsb",
+            "ws",
+            "wsc",
+            "sct",
+            "msu",
+            "mst",
+            "ps1xml",
+            "psc1",
+            "theme",
+            "themepack",
+            "xbap",
+            "vsto",
+            "gadget",
         ] {
-            assert!(check(&format!("file:///nonexistent/x.{ext}")).is_err(), "{ext}");
+            assert!(
+                check(&format!("file:///nonexistent/x.{ext}")).is_err(),
+                "{ext}"
+            );
             let upper = ext.to_uppercase();
-            assert!(check(&format!("file:///nonexistent/X.{upper}")).is_err(), "{upper}");
+            assert!(
+                check(&format!("file:///nonexistent/X.{upper}")).is_err(),
+                "{upper}"
+            );
         }
     }
 
@@ -467,14 +499,24 @@ mod tests {
     }
 
     #[test]
-    fn hint_hides_userinfo() {
+    fn hint_shows_the_real_host() {
         assert_eq!(
-            without_userinfo("https://github.com.x@evil.example/p"),
+            hint_text("https://github.com.x@evil.example/p", 100),
             "https://evil.example/p"
         );
         assert_eq!(
-            without_userinfo("https://a.example/x@y"),
+            hint_text("https://a.example/x@y", 100),
             "https://a.example/x@y"
+        );
+        // Browsers end the authority of http(s) at a backslash.
+        assert_eq!(
+            hint_text("https://evil.example\\@bank.example/login", 100),
+            "https://evil.example\\@bank.example/login"
+        );
+        assert_eq!(hint_text("https://a@b\\@c/", 100), "https://b\\@c/");
+        assert_eq!(
+            hint_text("mailto:me@example.com", 100),
+            "mailto:me@example.com"
         );
     }
 
@@ -491,19 +533,30 @@ mod tests {
 
     #[test]
     fn long_urls_are_cut_at_the_end() {
-        let narrow = Rect {
-            width: 120.0,
-            ..PANE
-        };
         let url = "https://example.com/a/very/long/path";
-        let (_, texts) = draw_hint(
-            url,
-            narrow,
-            (0.0, 0.0),
-            METRICS,
-            Rgb::default(),
-            Rgb::default(),
+        let hint = |width| {
+            let pane = Rect { width, ..PANE };
+            let (_, texts) = draw_hint(
+                url,
+                pane,
+                (0.0, 0.0),
+                METRICS,
+                Rgb::default(),
+                Rgb::default(),
+            );
+            texts[0].text.clone()
+        };
+        // The host is kept whole, the rest is cut.
+        assert_eq!(hint(300.0), "https://example.com/a/very/…");
+        // A host too wide shows its end.
+        assert_eq!(hint(120.0), "…ample.com");
+    }
+
+    #[test]
+    fn long_hosts_keep_their_end() {
+        assert_eq!(
+            hint_text("https://accounts.google.com.evil.io/x", 10),
+            "…m.evil.io"
         );
-        assert_eq!(texts[0].text, "https://e…");
     }
 }

@@ -83,6 +83,29 @@ pub fn truncate(text: &str, cells: usize) -> String {
     out
 }
 
+/// Keep the last `cells` columns of `text`, starting with an ellipsis if cut.
+pub fn truncate_start(text: &str, cells: usize) -> String {
+    if text.width() <= cells {
+        return text.to_owned();
+    }
+    if cells == 0 {
+        return String::new();
+    }
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for c in text.chars().rev() {
+        let w = c.width().unwrap_or(0);
+        if used + w > cells - 1 {
+            break;
+        }
+        used += w;
+        tail.push(c);
+    }
+    let mut out = String::from('…');
+    out.extend(tail.iter().rev());
+    out
+}
+
 /// Metrics for layout tests: 10×20 pixel cells, in both fonts, at scale 1.
 #[cfg(test)]
 pub mod test_metrics {
