@@ -880,6 +880,8 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use nuntio_config::schema::setting_at;
+
     use super::*;
 
     #[derive(Clone, Default)]
@@ -946,7 +948,7 @@ mod tests {
     }
 
     fn go_to(app: &mut App, path: &str) {
-        let setting = SETTINGS.iter().find(|s| s.path == path).unwrap();
+        let setting = setting_at(path).unwrap();
         app.section = Section::ALL
             .iter()
             .position(|s| *s == setting.section)
@@ -1051,10 +1053,7 @@ mod tests {
         // The item is placed under Status bar independently.
         go_to(&mut app, "status_bar.items");
         app.key(Key::Enter);
-        let setting = SETTINGS
-            .iter()
-            .find(|s| s.path == "status_bar.items")
-            .unwrap();
+        let setting = setting_at("status_bar.items").unwrap();
         let update = app
             .item_entries(setting)
             .iter()
@@ -1401,10 +1400,7 @@ mod tests {
         let (mut app, memory) = app(Some("[status_bar]\nitems = [\"cpu\", \"datetime\"]\n"));
         go_to(&mut app, "status_bar.items");
         app.key(Key::Enter);
-        let setting = SETTINGS
-            .iter()
-            .find(|s| s.path == "status_bar.items")
-            .unwrap();
+        let setting = setting_at("status_bar.items").unwrap();
         let entries = |app: &App| app.item_entries(setting);
         let spring = |implicit| Entry::Spring { implicit };
         let item = |value, on| Entry::Item { value, on };
@@ -1621,10 +1617,7 @@ mod tests {
         assert_eq!(
             app.current_row(),
             Some(Row::Setting(
-                SETTINGS
-                    .iter()
-                    .find(|s| s.path == "status_bar.datetime_format")
-                    .unwrap()
+                setting_at("status_bar.datetime_format").unwrap()
             ))
         );
     }

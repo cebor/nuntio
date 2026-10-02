@@ -133,10 +133,6 @@ impl Shell {
         }
         ("wsl.exe".to_owned(), args)
     }
-
-    pub fn is_wsl(&self) -> bool {
-        self.wsl.is_some()
-    }
 }
 
 /// A shell the shell menu offers for new tabs, besides `shell`.

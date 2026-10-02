@@ -142,12 +142,6 @@ pub struct Setting {
     pub platform: Option<Platform>,
 }
 
-impl Setting {
-    pub fn keys(&self) -> impl Iterator<Item = &'static str> {
-        self.path.split('.')
-    }
-}
-
 pub static DECORATIONS: &[Variant] = &[
     variant(
         "custom",
