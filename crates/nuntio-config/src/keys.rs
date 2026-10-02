@@ -181,7 +181,14 @@ impl fmt::Display for KeyCombo {
         match self.key {
             KeyName::Char('+') => f.write_str("Plus"),
             KeyName::Char('-') => f.write_str("Minus"),
-            KeyName::Char(c) => write!(f, "{}", c.to_uppercase()),
+            KeyName::Char(c) => {
+                // Only a single-character uppercase form parses back (`ß` -> `SS` doesn't).
+                let mut upper = c.to_uppercase();
+                match (upper.next(), upper.next()) {
+                    (Some(u), None) => write!(f, "{u}"),
+                    _ => write!(f, "{c}"),
+                }
+            }
             KeyName::Named(named) => f.write_str(&named.name()),
         }
     }
@@ -309,6 +316,8 @@ mod tests {
         assert_eq!(combo("ctrl+plus").to_string(), "Ctrl+Plus");
         assert_eq!(combo("f12").to_string(), "F12");
         assert_eq!(combo(&combo("Ctrl+Alt+,").to_string()), combo("Ctrl+Alt+,"));
+        assert_eq!(combo("Ctrl+ß").to_string(), "Ctrl+ß");
+        assert_eq!(combo(&combo("Ctrl+ß").to_string()), combo("Ctrl+ß"));
     }
 
     #[test]
