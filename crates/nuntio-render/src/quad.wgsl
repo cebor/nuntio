@@ -69,14 +69,13 @@ fn rounded_box(p: vec2<f32>, half: vec2<f32>, corner_radius: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let coverage = textureSampleLevel(mask_atlas, atlas_sampler, in.uv, 0.0).r;
-    let color = textureSampleLevel(color_atlas, atlas_sampler, in.uv, 0.0);
     switch in.kind {
         case KIND_MASK: {
+            let coverage = textureSampleLevel(mask_atlas, atlas_sampler, in.uv, 0.0).r;
             return vec4<f32>(in.color.rgb, in.color.a * coverage);
         }
         case KIND_COLOR: {
-            return color;
+            return textureSampleLevel(color_atlas, atlas_sampler, in.uv, 0.0);
         }
         case KIND_ROUNDED: {
             let alpha = rounded_box(in.local, in.shape.xy, in.shape.z);
