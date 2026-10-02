@@ -64,10 +64,18 @@ fn choose_config(
 }
 
 /// Directory with user themes for the config at `config_path`: `themes/`
-/// next to it, except for `~/.nuntio.toml`, whose themes stay in
+/// next to it, except for `~/.nuntio.toml` itself, whose themes stay in
 /// `<config dir>/themes` rather than cluttering the home directory.
 pub fn themes_dir(config_path: &Path) -> Option<PathBuf> {
-    if config_path.file_name() == Some(HOME_CONFIG.as_ref()) {
+    themes_dir_in(config_path, dirs::home_dir().as_deref(), config_dir)
+}
+
+fn themes_dir_in(
+    config_path: &Path,
+    home: Option<&Path>,
+    config_dir: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    if config_path.file_name() == Some(HOME_CONFIG.as_ref()) && config_path.parent() == home {
         return config_dir().map(|dir| dir.join("themes"));
     }
     config_path.parent().map(|dir| dir.join("themes"))
@@ -456,9 +464,19 @@ mod tests {
             themes_dir(Path::new("/etc/nuntio/custom.toml")).unwrap(),
             Path::new("/etc/nuntio/themes")
         );
+        let home = Some(Path::new("/home/u"));
+        let cfg = || Some(PathBuf::from("/home/u/.config/nuntio"));
         assert_eq!(
-            themes_dir(Path::new("/home/u/.nuntio.toml")),
-            config_dir().map(|dir| dir.join("themes"))
+            themes_dir_in(Path::new("/home/u/.nuntio.toml"), home, cfg),
+            Some("/home/u/.config/nuntio/themes".into())
+        );
+        assert_eq!(
+            themes_dir_in(Path::new("/srv/proj/.nuntio.toml"), home, cfg),
+            Some("/srv/proj/themes".into())
+        );
+        assert_eq!(
+            themes_dir_in(Path::new("/home/u/.nuntio.toml"), None, cfg),
+            Some("/home/u/themes".into())
         );
     }
 
