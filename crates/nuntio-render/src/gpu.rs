@@ -172,12 +172,18 @@ impl GpuContext {
         Err(failure.unwrap_or(GpuError::UnsupportedSurface))
     }
 
-    fn configure(&mut self) {
+    /// Configure the surface with `self.config`. `false` if it was refused;
+    /// the surface then keeps its previous configuration.
+    fn configure(&mut self) -> bool {
         let Some(surface) = &self.surface else {
-            return;
+            return true;
         };
-        surface.configure(&self.device, &self.config);
+        if let Err(err) = configure_checked(surface, &self.device, &self.config) {
+            tracing::error!("failed to configure the surface: {err}");
+            return false;
+        }
         self.configured();
+        true
     }
 
     /// The surface was (re)configured.
@@ -286,9 +292,14 @@ impl GpuContext {
         if width == 0 || height == 0 {
             return;
         }
-        self.config.width = width;
-        self.config.height = height;
-        self.configure();
+        // The surface can't be larger than the largest texture.
+        let max = self.device.limits().max_texture_dimension_2d;
+        let previous = (self.config.width, self.config.height);
+        self.config.width = width.min(max);
+        self.config.height = height.min(max);
+        if !self.configure() {
+            (self.config.width, self.config.height) = previous;
+        }
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -316,7 +327,7 @@ impl GpuContext {
     /// Get the next surface texture, or the reason to skip this frame.
     pub(crate) fn acquire(&mut self) -> Result<wgpu::SurfaceTexture, FrameStatus> {
         if std::mem::take(&mut self.reconfigure) {
-            self.configure();
+            let _ = self.configure();
         }
         let Some(surface) = &self.surface else {
             return Err(FrameStatus::Lost);
@@ -329,7 +340,7 @@ impl GpuContext {
                 Ok(frame)
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                self.configure();
+                let _ = self.configure();
                 Err(FrameStatus::Skipped)
             }
             wgpu::CurrentSurfaceTexture::Lost => Err(FrameStatus::Lost),
