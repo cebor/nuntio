@@ -970,13 +970,34 @@ fn is_local(path: &str) -> bool {
 /// Paste payload: with bracketed paste the text is wrapped in markers, with
 /// every ESC removed so no end marker can be smuggled in (removing only
 /// `ESC [201~` once would turn `ESC [20ESC [201~1~` into a new one); without
-/// it, newlines become carriage returns like a typed Enter.
+/// it, newlines become carriage returns like a typed Enter and C0 controls
+/// other than Tab and Enter (and DEL) are dropped, as xterm does by default.
 fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         let body = text.replace('\x1b', "");
         [b"\x1b[200~", body.as_bytes(), b"\x1b[201~"].concat()
     } else {
-        text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+        let mut out = Vec::with_capacity(text.len());
+        let mut after_cr = false;
+        for c in text.chars() {
+            match c {
+                '\r' => out.push(b'\r'),
+                // CRLF is one CR, a lone LF is a CR.
+                '\n' => {
+                    if !after_cr {
+                        out.push(b'\r');
+                    }
+                }
+                '\t' => out.push(b'\t'),
+                c if c.is_ascii_control() => {}
+                c => {
+                    let mut buf = [0; 4];
+                    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                }
+            }
+            after_cr = c == '\r';
+        }
+        out
     }
 }
 
@@ -1075,6 +1096,16 @@ mod tests {
     }
 
     #[test]
+    fn paste_without_brackets_drops_controls() {
+        assert_eq!(
+            encode_paste("a\x01b\x05c\x0f\x1b[Ad\x7fe\tf", false),
+            b"abc[Ade\tf"
+        );
+        assert_eq!(encode_paste("x\r\ry\n\nz", false), b"x\r\ry\r\rz");
+        assert_eq!(encode_paste("ü\u{7f}", false), "ü".as_bytes());
+    }
+
+    #[test]
     fn bracketed_paste_cannot_be_escaped() {
         assert_eq!(
             encode_paste("x\x1b[201~rm -rf ~\n", true),
@@ -1085,6 +1116,8 @@ mod tests {
             encode_paste("\x1b[20\x1b[201~1~echo pwned\n", true),
             b"\x1b[200~[20[201~1~echo pwned\n\x1b[201~"
         );
+        // Other C0 controls are data to a program that asked for brackets.
+        assert_eq!(encode_paste("a\x01b", true), b"\x1b[200~a\x01b\x1b[201~");
     }
 
     #[test]
