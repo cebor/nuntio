@@ -25,7 +25,7 @@ use crate::input::KeyPress;
 use crate::status_bar::Stats;
 use crate::sysmon::{SystemMonitor, is_sampled};
 use crate::update::{self, Build, Checker, Update};
-use crate::window::{Chrome, DEFAULT_TITLE, WindowState};
+use crate::window::{self, Chrome, DEFAULT_TITLE, WindowState};
 
 // Child modules, so that their handlers can reach the app's state.
 #[path = "app_input.rs"]
@@ -1184,18 +1184,24 @@ impl Core {
                     }
                 }
             }
-            TermEvent::Title(title) => set_pane_title(state, index, pane, Some(title)),
-            TermEvent::ResetTitle => set_pane_title(state, index, pane, None),
+            TermEvent::Title(title) => {
+                set_pane_title(state, &self.config, index, pane, Some(title));
+            }
+            TermEvent::ResetTitle => set_pane_title(state, &self.config, index, pane, None),
             TermEvent::Bell => {
-                if !active && let Some(tab) = state.tabs.get_mut(index) {
+                if !active
+                    && let Some(tab) = state.tabs.get_mut(index)
+                    && !tab.bell
+                {
                     tab.bell = true;
+                    // The dot in the tab label is the only thing a bell draws.
+                    state.window.request_redraw();
                 }
                 if !active || !state.focused {
                     state.window.request_user_attention(Some(
                         winit::window::UserAttentionType::Informational,
                     ));
                 }
-                state.window.request_redraw();
             }
             TermEvent::Exit => self.close_pane(state, pane),
             TermEvent::ClipboardStore(text) => self.set_clipboard(text),
@@ -1311,14 +1317,26 @@ impl Core {
 }
 
 /// Set the application's title of `pane` in the tab at `index`; `None`
-/// resets it.
-fn set_pane_title(state: &mut WindowState, index: usize, pane: PaneId, title: Option<String>) {
-    if let Some(tab) = state.tabs.get_mut(index)
-        && let Some(pane) = tab.content.pane_mut(pane)
-    {
-        pane.set_title(title);
+/// resets it. Redraws only if the title is on screen.
+fn set_pane_title(
+    state: &mut WindowState,
+    config: &Config,
+    index: usize,
+    pane: PaneId,
+    title: Option<String>,
+) {
+    let bar_visible = state.bar_visible(config);
+    let active = state.tabs.active_index();
+    let Some(tab) = state.tabs.get_mut(index) else {
+        return;
+    };
+    let focused = tab.content.focused;
+    let Some(p) = tab.content.pane_mut(pane) else {
+        return;
+    };
+    if p.set_title(title) && window::title_shown(index, active, pane, focused, bar_visible) {
+        state.window.request_redraw();
     }
-    state.window.request_redraw();
 }
 
 impl ApplicationHandler<UserEvent> for App {

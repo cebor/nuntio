@@ -125,6 +125,19 @@ impl CachedTitle {
     }
 }
 
+/// Whether a new title of `pane` in tab `index` is on screen: tabs show
+/// their focused pane's title, and without a tab bar only the active tab's
+/// title (the window title) is used.
+pub fn title_shown(
+    index: usize,
+    active: usize,
+    pane: PaneId,
+    focused: PaneId,
+    bar_visible: bool,
+) -> bool {
+    pane == focused && (bar_visible || index == active)
+}
+
 impl Pane {
     pub fn new(
         id: PaneId,
@@ -146,10 +159,15 @@ impl Pane {
         }
     }
 
-    /// Set the application's title (OSC 0/2); `None` resets it.
-    pub fn set_title(&mut self, title: Option<String>) {
+    /// Set the application's title (OSC 0/2); `None` resets it. Returns
+    /// whether it changed.
+    pub fn set_title(&mut self, title: Option<String>) -> bool {
+        if self.title == title {
+            return false;
+        }
         self.title = title;
         self.title_cache = None;
+        true
     }
 
     /// The tab title, and when it expires if it came from the cache (it
@@ -437,7 +455,7 @@ impl WindowState {
         }
     }
 
-    fn bar_visible(&self, config: &Config) -> bool {
+    pub fn bar_visible(&self, config: &Config) -> bool {
         self.tabs.len() > 1 || !config.tabs.hide_when_single || self.chrome != Chrome::System
     }
 
@@ -993,6 +1011,15 @@ mod tests {
     use crate::style::test_metrics::*;
 
     use super::*;
+
+    #[test]
+    fn titles_matter_for_the_focused_pane_of_a_visible_tab() {
+        let (a, b) = (PaneId(1), PaneId(2));
+        assert!(title_shown(0, 0, a, a, false)); // active tab, no bar: window title
+        assert!(!title_shown(1, 0, a, a, false)); // background tab, no bar
+        assert!(title_shown(1, 0, a, a, true)); // background tab, bar shown
+        assert!(!title_shown(0, 0, b, a, true)); // unfocused pane
+    }
 
     #[test]
     fn reveal_waits_for_output_to_pause_but_not_forever() {
