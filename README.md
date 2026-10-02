@@ -179,7 +179,7 @@ In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>
 | [`crates/nuntio-render`](crates/nuntio-render) | wgpu renderer: instanced quads for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases) and UI; procedural box drawing |
 | [`crates/nuntio-config`](crates/nuntio-config) | Config schema, loading and validation, editing in place, themes (built-in TOML and `.itermcolors`), file watcher |
 | [`crates/nuntio-config-tui`](crates/nuntio-config-tui) | The `nuntio-config` editor: a ratatui terminal UI built on the schema |
-| [`xtask`](xtask) | Icons, packaging, changelog |
+| [`xtask`](xtask) | Icons, packaging, changelog, the website build (`site`) and the debug driver (`drive`) |
 
 PTY threads send events through the winit event loop proxy. The main thread takes a snapshot of each visible pane, holding the terminal lock only for the copy, and hands one frame to the renderer. It redraws only when something changed.
 

@@ -42,7 +42,7 @@ For changes to rendering or terminal emulation, please also check the affected c
 | `crates/nuntio-config-tui` | The `nuntio-config` terminal UI |
 | `crates/nuntio-render` | wgpu renderer |
 | `crates/nuntio-term` | Wrapper around `alacritty_terminal` and the PTY |
-| `xtask` | Icons, packaging, changelog, website |
+| `xtask` | Icons, packaging, changelog, website, debug driver (`drive`) |
 
 Conventions:
 - Errors: `thiserror` in library crates, `anyhow` in the binary.
@@ -123,7 +123,7 @@ cargo xtask icons     # regenerate assets/icons/ after editing assets/icon.svg
 
 - Linux: `.tar.gz`, plus `.deb` if [`cargo-deb`](https://github.com/kornelski/cargo-deb) is installed and an AppImage if `appimagetool` is on the `PATH` (or `$APPIMAGETOOL` points to it).
 - macOS: a universal `.app` (Intel + Apple Silicon) in a `.dmg`; needs both Rust targets (`rustup target add x86_64-apple-darwin aarch64-apple-darwin`).
-- Windows: a `.zip` with `nuntio.exe`.
+- Windows: a `.zip` with `nuntio.exe` and `nuntio-config.exe`, plus an Inno Setup installer (`.exe`) if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed (`winget install JRSoftware.InnoSetup`).
 
 `cargo xtask package` also needs [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) (`cargo install cargo-about --locked --features cli`); it writes `THIRD-PARTY-LICENSES.html` into every package.
 

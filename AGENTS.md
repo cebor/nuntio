@@ -45,7 +45,7 @@ Always test headless, the default: nothing shows up on the user's desktop. Use `
 | `crates/nuntio-render` | wgpu renderer: one instanced-quad pipeline for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases) and UI; box-drawing characters are drawn procedurally |
 | `crates/nuntio-config` | Config types, `schema.rs` (every setting with kind, allowed values, help; tests keep it in sync with `Config` and `docs/config.md`), loading/validation, `edit.rs` (toml_edit, keeps comments), key-combo syntax and action names (`keys.rs`), themes, file watcher |
 | `crates/nuntio-config-tui` | The `nuntio-config` TUI (ratatui). Logic in `state.rs` behind a `Store` trait, tested without a terminal; `ui.rs` only draws. Every valid change is written at once, and hot reload is the preview |
-| `xtask` | Icons, packaging, changelog |
+| `xtask` | Icons, packaging, changelog, website build (`site`), debug driver (`drive`) |
 | `site` | Zola website on GitHub Pages (`pages.yml`, also run by `release.yml`). The download section reads the latest release from the GitHub API at build time; `docs/config.md` is copied in by `cargo xtask site`. Zola 0.23 uses Tera 2: components instead of macros |
 
 Data flow: PTY threads send `UserEvent::Term(PaneId, TermEvent)` via the winit proxy. The main thread takes a `Snapshot` per visible pane (the term lock is only held for the copy) and hands a `Frame` (panes + `UiRect`s + `UiText`s) to the renderer. It only redraws on damage: idle CPU must stay at ~0 (`ControlFlow::Wait`; cursor blinking uses `WaitUntil`).
