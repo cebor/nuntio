@@ -1255,8 +1255,18 @@ impl Core {
                 state.modifiers = mods;
                 state.update_hover_link(&self.config);
             }
-            WindowEvent::KeyboardInput { event, .. } => {
-                self.keyboard_input(state, &KeyPress::from(&event));
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
+                // Keys still held when the window gains focus arrive as
+                // synthetic presses (X11, Windows): they were pressed
+                // elsewhere, e.g. Enter in a launcher. Synthetic releases
+                // (focus lost) still go through to clear state.
+                if !(is_synthetic && event.state == ElementState::Pressed) {
+                    self.keyboard_input(state, &KeyPress::from(&event));
+                }
             }
             WindowEvent::Ime(Ime::Preedit(text, _)) => {
                 state.preedit = (!text.is_empty()).then_some(text);
