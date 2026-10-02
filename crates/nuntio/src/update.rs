@@ -290,6 +290,28 @@ fn fetch(etag: Option<&str>) -> Result<Fetched> {
     }
 }
 
+/// What the check thread tells the main thread: a fresh answer, else the
+/// cached release if it wasn't reported yet (offline start, or another
+/// instance found a newer one).
+fn to_report(
+    fresh: Option<Release>,
+    cached: Option<&Release>,
+    reported: Option<&Release>,
+) -> Option<Release> {
+    fresh.or_else(|| cached.filter(|c| Some(*c) != reported).cloned())
+}
+
+/// How long the thread sleeps after looking at the clock: at most `RETRY`,
+/// since the monotonic timeout doesn't count time in suspend, and a full
+/// `RETRY` after a check (which failed or has just succeeded).
+fn sleep_after(wait: Duration) -> Duration {
+    if wait.is_zero() {
+        RETRY
+    } else {
+        wait.min(RETRY)
+    }
+}
+
 /// The daily check; it stops when this is dropped.
 pub struct Checker {
     _stop: mpsc::Sender<()>,
@@ -297,42 +319,47 @@ pub struct Checker {
 
 impl Checker {
     /// Check now if the last check is a day old (else report the cached
-    /// release), then once a day.
+    /// release), then once a day, by the wall clock (checked at least hourly).
     pub fn start(proxy: EventLoopProxy<UserEvent>) -> Self {
         let (stop, stopped) = mpsc::channel();
         let spawned = thread::Builder::new()
             .name("update-check".into())
             .spawn(move || {
+                // The release the main thread was last told about.
+                let mut reported: Option<Release> = None;
                 loop {
                     let mut state = State::load();
                     let now = now();
                     let wait = state.wait(now);
-                    let (release, next) = if wait.is_zero() {
+                    let fresh = if wait.is_zero() {
                         match state.refresh(now) {
                             Ok(release) => {
                                 state.save();
-                                (Some(release), INTERVAL)
+                                Some(release)
                             }
                             Err(err) => {
                                 tracing::warn!("update check failed: {err:#}");
-                                (None, RETRY)
+                                None
                             }
                         }
                     } else {
-                        (state.latest.clone(), wait)
+                        None
                     };
-                    if let Some(release) = release {
+                    if let Some(release) =
+                        to_report(fresh, state.latest.as_ref(), reported.as_ref())
+                    {
                         tracing::debug!(tag = release.tag, "latest release");
                         let checked = Checked {
                             dismissed: state.is_dismissed(&release),
-                            result: Ok(release),
+                            result: Ok(release.clone()),
                             manual: false,
                         };
                         if proxy.send_event(UserEvent::Update(checked)).is_err() {
                             return;
                         }
+                        reported = Some(release);
                     }
-                    match stopped.recv_timeout(next) {
+                    match stopped.recv_timeout(sleep_after(wait)) {
                         Err(RecvTimeoutError::Timeout) => {}
                         _ => break,
                     }
@@ -501,5 +528,38 @@ mod tests {
         assert!(!state.is_dismissed(&release("v0.1.7")));
         assert!(!State::default().is_dismissed(&release("v0.1.7")));
         assert_eq!(toml::from_str::<State>("").unwrap(), State::default());
+    }
+
+    #[test]
+    fn reports_the_cached_release_once() {
+        let (v1, v2) = (release("v0.1.6"), release("v0.1.7"));
+        // A due check that fresh-succeeds always reports.
+        assert_eq!(
+            to_report(Some(v2.clone()), Some(&v1), Some(&v1)),
+            Some(v2.clone())
+        );
+        // Offline start with a cached newer release: report it.
+        assert_eq!(to_report(None, Some(&v1), None), Some(v1.clone()));
+        // The hourly wake-ups don't repeat it.
+        assert_eq!(to_report(None, Some(&v1), Some(&v1)), None);
+        // Another instance cached a newer one.
+        assert_eq!(to_report(None, Some(&v2), Some(&v1)), Some(v2));
+        assert_eq!(to_report(None, None, None), None);
+    }
+
+    #[test]
+    fn the_check_thread_wakes_at_least_hourly() {
+        let minutes = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(sleep_after(Duration::ZERO), RETRY); // due: retry in an hour
+        assert_eq!(sleep_after(INTERVAL), RETRY);
+        assert_eq!(sleep_after(minutes(10)), minutes(10));
+        assert_eq!(sleep_after(RETRY), RETRY);
+        // The wall clock decides when a check is due, whatever the sleeps add up to.
+        let state = State {
+            last_check: 1_000,
+            latest: Some(release("v0.1.6")),
+            ..State::default()
+        };
+        assert_eq!(state.wait(1_000 + INTERVAL.as_secs() + 5), Duration::ZERO);
     }
 }
