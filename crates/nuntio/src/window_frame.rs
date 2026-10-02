@@ -107,7 +107,11 @@ impl WindowState {
             popup_texts: &overlay.popup_texts,
             corner_radius,
         };
-        Some(draw(&mut self.renderer, &frame))
+        let result = draw(&mut self.renderer, &frame);
+        // The buffers go back for the next frame.
+        self.shot_pool
+            .extend(shots.into_iter().map(|shot| shot.snapshot));
+        Some(result)
     }
 
     /// Snapshots of the active tab's visible panes, with search matches,
@@ -121,10 +125,11 @@ impl WindowState {
             };
             let focused = id == focused_id;
             let search = self.search.as_mut().and_then(|bar| bar.search_mut());
-            let mut snapshot = match search {
-                Some(search) if focused => pane.term.search_snapshot(search),
-                _ => pane.term.snapshot(),
-            };
+            let mut snapshot = self.shot_pool.pop().unwrap_or_default();
+            match search {
+                Some(search) if focused => pane.term.search_snapshot_into(search, &mut snapshot),
+                _ => pane.term.snapshot_into(&mut snapshot),
+            }
             if let Some((link_pane, link)) = &self.mouse.hover_link
                 && *link_pane == id
             {

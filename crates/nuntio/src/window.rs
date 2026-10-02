@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use nuntio_config::{Config, StatusBarPosition, StatusItem, TabTitle};
 use nuntio_render::{CellMetrics, Rect, Renderer, UiRect, UiText};
-use nuntio_term::{Rgb, TermHandle, TermMode, TermSize};
+use nuntio_term::{Rgb, Snapshot, TermHandle, TermMode, TermSize};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
 use winit::keyboard::PhysicalKey;
@@ -280,6 +280,9 @@ impl Chrome {
 }
 
 pub struct WindowState {
+    /// Cell buffers of the last frame's snapshots, reused so a frame doesn't
+    /// allocate them again.
+    shot_pool: Vec<Snapshot>,
     pub window: Arc<Window>,
     pub renderer: Renderer,
     pub tabs: Tabs<TabContent>,
@@ -325,6 +328,7 @@ impl WindowState {
         transparent: bool,
     ) -> Self {
         Self {
+            shot_pool: Vec::new(),
             window,
             renderer,
             tabs: Tabs::new(TabContent::new(first)),

@@ -584,6 +584,13 @@ impl TermHandle {
 
     /// Copy the visible screen for rendering.
     pub fn snapshot(&self) -> Snapshot {
+        let mut snapshot = Snapshot::default();
+        self.snapshot_into(&mut snapshot);
+        snapshot
+    }
+
+    /// Like [`snapshot`](Self::snapshot), into `out` and its cell buffer.
+    pub fn snapshot_into(&self, out: &mut Snapshot) {
         self.listener
             .inner
             .wakeup_pending
@@ -595,7 +602,7 @@ impl TermHandle {
             .palette
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        Snapshot::capture(&term, &palette, &[], None)
+        out.refresh(&term, &palette, &[], None);
     }
 
     /// Answer the color queries programs sent (see
@@ -633,6 +640,14 @@ impl TermHandle {
     /// Like [`snapshot`](Self::snapshot), with the matches of `search`
     /// highlighted.
     pub fn search_snapshot(&self, search: &mut Search) -> Snapshot {
+        let mut snapshot = Snapshot::default();
+        self.search_snapshot_into(search, &mut snapshot);
+        snapshot
+    }
+
+    /// Like [`search_snapshot`](Self::search_snapshot), into `out` and its
+    /// cell buffer.
+    pub fn search_snapshot_into(&self, search: &mut Search, out: &mut Snapshot) {
         self.listener
             .inner
             .wakeup_pending
@@ -645,7 +660,7 @@ impl TermHandle {
             .palette
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        Snapshot::capture(&term, &palette, &matches, search.current_in(&term))
+        out.refresh(&term, &palette, &matches, search.current_in(&term));
     }
 
     /// Select the next match upwards (older output) or downwards and scroll

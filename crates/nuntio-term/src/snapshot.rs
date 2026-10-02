@@ -108,14 +108,16 @@ impl Snapshot {
         &self.cells[line * self.columns + column]
     }
 
-    /// Copy the visible screen. `matches` are highlighted as search
-    /// results, `current` as the selected one.
-    pub(crate) fn capture<T: EventListener>(
+    /// Overwrite `self` with the visible screen, reusing the cell buffer.
+    /// `matches` are highlighted as search results, `current` as the
+    /// selected one.
+    pub(crate) fn refresh<T: EventListener>(
+        &mut self,
         term: &Term<T>,
         palette: &Palette,
         matches: &[Match],
         current: Option<&Match>,
-    ) -> Self {
+    ) {
         let content = term.renderable_content();
         let overrides = content.colors;
         let columns = term.columns();
@@ -131,7 +133,8 @@ impl Snapshot {
             style: CellStyle::default(),
             underline_color: None,
         };
-        let mut cells = vec![blank; columns * lines];
+        self.cells.clear();
+        self.cells.resize(columns * lines, blank);
         let offset = content.display_offset as i32;
         let selection = content.selection;
         // Matches are in grid order and don't overlap, like the cells below,
@@ -174,7 +177,7 @@ impl Snapshot {
                 || flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
             let spacer = flags.contains(Flags::WIDE_CHAR_SPACER);
 
-            cells[line as usize * columns + indexed.point.column.0] = SnapshotCell {
+            self.cells[line as usize * columns + indexed.point.column.0] = SnapshotCell {
                 c: if hidden { ' ' } else { cell.c },
                 zerowidth: if hidden {
                     None
@@ -222,19 +225,16 @@ impl Snapshot {
                     line,
                     style,
                     color: palette.resolve(Color::Named(NamedColor::Cursor), overrides),
-                    wide: cells[line * columns + column].style.wide,
+                    wide: self.cells[line * columns + column].style.wide,
                     blinking: term.cursor_style().blinking,
                 }
             });
 
-        Self {
-            columns,
-            lines,
-            cells,
-            cursor,
-            background,
-            foreground,
-        }
+        self.columns = columns;
+        self.lines = lines;
+        self.cursor = cursor;
+        self.background = background;
+        self.foreground = foreground;
     }
 }
 
@@ -265,7 +265,9 @@ mod tests {
         let mut term = Term::new(Config::default(), &size, VoidListener);
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, input.as_bytes());
-        Snapshot::capture(&term, &Palette::default(), &[], None)
+        let mut snapshot = Snapshot::default();
+        snapshot.refresh(&term, &Palette::default(), &[], None);
+        snapshot
     }
 
     #[test]
@@ -288,5 +290,34 @@ mod tests {
         let red = Rgb { r: 255, g: 0, b: 0 };
         assert_eq!(s.cell(0, 0).underline_color, Some(red));
         assert_eq!(s.cell(1, 0).underline_color, None);
+    }
+
+    #[test]
+    fn refresh_reuses_the_buffer() {
+        let size = |columns, lines| crate::TermSize {
+            columns,
+            lines,
+            cell_width: 1,
+            cell_height: 1,
+        };
+        let big = size(10, 2);
+        let mut term = Term::new(Config::default(), &big, VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"hello");
+        let mut s = Snapshot::default();
+        s.refresh(&term, &Palette::default(), &[], None);
+        let (ptr, capacity) = (s.cells.as_ptr(), s.cells.capacity());
+        assert_eq!(s.cell(0, 0).c, 'h');
+
+        parser.advance(&mut term, b"\r\nworld");
+        s.refresh(&term, &Palette::default(), &[], None);
+        assert_eq!((s.cells.as_ptr(), s.cells.capacity()), (ptr, capacity));
+        assert_eq!(s.cell(0, 1).c, 'w');
+
+        let small = size(5, 1);
+        let term = Term::new(Config::default(), &small, VoidListener);
+        s.refresh(&term, &Palette::default(), &[], None);
+        assert_eq!(s.columns * s.lines, s.cells.len());
+        assert_eq!(s.cells.len(), 5);
     }
 }
