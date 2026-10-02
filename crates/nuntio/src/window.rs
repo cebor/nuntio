@@ -20,6 +20,7 @@ use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::pane_tree::{Direction, Layout, PaneTree};
 use crate::search_bar::SearchBar;
+use crate::shells::ShellChoice;
 use crate::status_bar::{Stats, StatusBar};
 use crate::style::{UiMetrics, hairline};
 use crate::tab_bar::{TabBar, TabBarOptions};
@@ -92,6 +93,10 @@ pub struct Pane {
     pub wsl: Option<Distro>,
     /// Its name in the shell menu, for the `shell` status bar item.
     pub shell_name: String,
+    /// The shell it runs when that isn't the configured one (chosen in the
+    /// shell menu, or the fallback after the configured one failed); splits
+    /// run it too. `None`: the configured shell, the settings tab or a command.
+    pub shell: Option<ShellChoice>,
     /// Title set by the application (OSC 0/2).
     pub title: Option<String>,
     /// Current grid size, to skip redundant resizes.
@@ -121,12 +126,19 @@ impl CachedTitle {
 }
 
 impl Pane {
-    pub fn new(id: PaneId, term: TermHandle, shell_name: String, wsl: Option<Distro>) -> Self {
+    pub fn new(
+        id: PaneId,
+        term: TermHandle,
+        shell_name: String,
+        wsl: Option<Distro>,
+        shell: Option<ShellChoice>,
+    ) -> Self {
         Self {
             id,
             term,
             wsl,
             shell_name,
+            shell,
             title: None,
             size: None,
             resized: None,

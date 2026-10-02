@@ -90,6 +90,12 @@ impl Core {
         let distro = launch.distro();
         let login_shell = matches!(launch, Launch::Shell(_));
         let name = launch.name();
+        let own_shell = match &launch {
+            Launch::Shell(choice) if *choice != shells::default_choice(&self.config) => {
+                Some(choice.clone())
+            }
+            _ => None,
+        };
         let shell = match launch {
             Launch::Command(mut argv) => Some(Shell {
                 program: argv.remove(0),
@@ -124,7 +130,7 @@ impl Core {
         let term = TermHandle::spawn(options, size, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));
         })?;
-        Ok(Pane::new(id, term, name, distro))
+        Ok(Pane::new(id, term, name, distro, own_shell))
     }
 
     /// The first pane, as the command line asks for it.
@@ -297,10 +303,15 @@ impl Core {
         state.window.request_redraw();
     }
 
-    /// Split the focused pane; the new pane runs the default shell in the
-    /// same directory.
+    /// Split the focused pane; the new pane runs the focused pane's shell in
+    /// the same directory.
     pub(super) fn split(&mut self, state: &mut WindowState, axis: Axis) {
-        let launch = self.default_launch();
+        let launch = state
+            .content()
+            .focused_pane()
+            .shell
+            .clone()
+            .map_or_else(|| self.default_launch(), Launch::Shell);
         let Some(pane) = self.spawn_for_focused(state, launch, true) else {
             return;
         };
