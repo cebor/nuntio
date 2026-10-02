@@ -480,4 +480,66 @@ mod tests {
         assert!(retargeted.is_ok(), "retargeted symlink not noticed");
         assert!(changed.is_ok(), "change in the new target not noticed");
     }
+
+    #[test]
+    fn notices_a_themes_directory_created_later() {
+        let base = std::env::temp_dir().join(format!("nuntio-watch-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        let themes = base.join("themes");
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&path, Some(&themes), move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        std::fs::create_dir_all(&themes).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(themes.join("x.toml"), "").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(changed.is_ok(), "theme in a new directory not noticed");
+    }
+
+    #[test]
+    // Windows keeps a watched directory until the watch ends, so the test
+    // can't delete and recreate it.
+    #[cfg(unix)]
+    fn notices_a_themes_directory_deleted_and_created_again() {
+        let base =
+            std::env::temp_dir().join(format!("nuntio-watch-themes-again-{}", std::process::id()));
+        let themes = base.join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        let path = base.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        std::fs::write(themes.join("x.toml"), "").unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&path, Some(&themes), move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        std::fs::remove_dir_all(&themes).unwrap();
+        let deleted = rx.recv_timeout(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::create_dir_all(&themes).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(themes.join("x.toml"), "").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(
+            deleted.is_ok(),
+            "deleting the themes directory not reported"
+        );
+        assert!(
+            changed.is_ok(),
+            "theme in a recreated directory not noticed"
+        );
+    }
 }
