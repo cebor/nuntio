@@ -119,13 +119,17 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
         return Some(text.as_bytes().to_vec());
     }
 
-    // Ctrl+С on a Cyrillic layout is Ctrl+C.
-    let latin = latin_key(input.unmodified, input.physical).filter(|_| input.ctrl);
-    if input.ctrl
-        && let Key::Character(s) = latin.as_ref().unwrap_or(input.unmodified)
-        && let Some(byte) = control_byte(s)
-    {
-        return Some(with_meta(vec![byte], input.meta));
+    // Ctrl+С on a Cyrillic layout is Ctrl+C. Without Shift the typed
+    // character comes first: it includes AltGr (and Option), so Ctrl+AltGr+8
+    // is Ctrl+[ on a German layout, not Ctrl+8. With Shift the base key
+    // decides (Ctrl+Shift+/ stays 0x1f).
+    if input.ctrl {
+        let latin = latin_key(input.unmodified, input.physical);
+        let base = latin.as_ref().unwrap_or(input.unmodified);
+        let typed = (!input.shift).then_some(input.key);
+        if let Some(byte) = typed.into_iter().chain([base]).find_map(key_control_byte) {
+            return Some(with_meta(vec![byte], input.meta));
+        }
     }
 
     if input.meta {
@@ -156,6 +160,13 @@ pub(crate) fn altgr_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
     let text = printable(input).filter(|_| input.ctrl && input.meta)?;
     let same_key = matches!(input.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text));
     (!same_key).then_some(text)
+}
+
+fn key_control_byte(key: &Key) -> Option<u8> {
+    match key {
+        Key::Character(s) => control_byte(s),
+        _ => None,
+    }
 }
 
 /// The text a key types into one of nuntio's own input fields (the find
@@ -575,6 +586,33 @@ mod tests {
         assert_eq!(key("a", "a", Some("\u{1}")).unwrap(), b"\x1b\x01");
         assert_eq!(key("a", "a", Some("a")).unwrap(), b"\x1b\x01");
         assert_eq!(key("a", "a", None).unwrap(), b"\x1b\x01");
+    }
+
+    #[test]
+    fn ctrl_uses_the_typed_character_unless_shift_is_held() {
+        let ctrl_shift = Mods {
+            shift: true,
+            ctrl: true,
+            meta: false,
+        };
+        let key = |c: &str, unmodified: &str, mods| {
+            encode_with(
+                ch(c),
+                ch(unmodified),
+                Some(c),
+                KeyLocation::Standard,
+                mods,
+                TermMode::empty(),
+            )
+        };
+        // German Linux: Ctrl+AltGr+8/9/ß are Ctrl+[ / ] / \ (AltGr isn't Alt there).
+        assert_eq!(key("[", "8", CTRL), Some(vec![0x1b]));
+        assert_eq!(key("]", "9", CTRL), Some(vec![0x1d]));
+        assert_eq!(key("\\", "ß", CTRL), Some(vec![0x1c]));
+        // With Shift the base key decides, as before.
+        assert_eq!(key("?", "/", ctrl_shift), Some(vec![0x1f]));
+        assert_eq!(key("@", "2", ctrl_shift), Some(vec![0x00]));
+        assert_eq!(key("A", "a", ctrl_shift), Some(vec![0x01]));
     }
 
     #[test]
