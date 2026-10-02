@@ -104,24 +104,29 @@ const PROGRAM_EXTENSIONS: &[&str] = &[
     "sh",
 ];
 
+const PROGRAM: &str = "it could run a program";
+
 /// Why a link must not be opened, if it mustn't.
 pub fn check(url: &str) -> Result<(), String> {
-    let Some(path) = file_path(url, &local_host())? else {
+    let Some(path) = file_path(url, &local_host(), Drives::current())? else {
         return Ok(());
     };
+    // By name first: a missing file with a program extension is refused too.
+    if has_program_extension(&path) {
+        return Err(PROGRAM.into());
+    }
     // What the path really names: `Evil.app/Contents/..` or a symlink can
     // hide a program.
     let path = match std::fs::canonicalize(&path) {
         Ok(path) => path,
         // A missing file can't run; the opener reports it.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => path,
+        Err(err) => return Err(format!("it can't be checked ({err})")),
     };
-    let Ok(metadata) = std::fs::metadata(&path) else {
-        return Ok(());
-    };
+    let metadata =
+        std::fs::metadata(&path).map_err(|err| format!("it can't be checked ({err})"))?;
     if is_program(&path, &metadata) {
-        return Err("it could run a program".into());
+        return Err(PROGRAM.into());
     }
     Ok(())
 }
@@ -130,10 +135,30 @@ fn local_host() -> String {
     gethostname::gethostname().to_string_lossy().into_owned()
 }
 
+/// What `/C:/…` in a `file://` URL means here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drives {
+    Windows,
+    Wsl,
+    Unsupported,
+}
+
+impl Drives {
+    fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else if crate::wsl::running_in_wsl() {
+            Self::Wsl
+        } else {
+            Self::Unsupported
+        }
+    }
+}
+
 /// The local path of a `file://` URL, `None` for other schemes. Hosts
 /// other than this machine are refused: on Windows they are network
 /// shares.
-fn file_path(url: &str, local_host: &str) -> Result<Option<PathBuf>, String> {
+fn file_path(url: &str, local_host: &str, drives: Drives) -> Result<Option<PathBuf>, String> {
     let scheme = "file://";
     let is_file = url
         .get(..scheme.len())
@@ -155,28 +180,40 @@ fn file_path(url: &str, local_host: &str) -> Result<Option<PathBuf>, String> {
     let path = percent_encoding::percent_decode_str(path)
         .decode_utf8()
         .map_err(|_| "its path is not valid UTF-8".to_owned())?;
-    // `file:///C:/Users` is `C:/Users` on Windows.
-    let path = match path.strip_prefix('/') {
-        Some(rest) if cfg!(windows) && rest.get(1..2) == Some(":") => rest,
-        _ => &path,
-    };
+    if path.contains('\0') {
+        return Err("its path contains a NUL character".into());
+    }
+    // `file:///C:/Users` is a drive: what it means depends on the system.
+    let rest = path.strip_prefix('/').unwrap_or(&path);
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && matches!(bytes[1], b':' | b'|') {
+        // `C:foo` is relative to the current directory on that drive.
+        if bytes.len() > 2 && !matches!(bytes[2], b'/' | b'\\') {
+            return Err("it names a Windows drive".into());
+        }
+        let mapped = match drives {
+            Drives::Windows => format!("{}:{}", &rest[..1], &rest[2..]),
+            Drives::Wsl => format!(
+                "/mnt/{}{}",
+                rest[..1].to_ascii_lowercase(),
+                rest[2..].replace('\\', "/")
+            ),
+            Drives::Unsupported => return Err("it names a Windows drive".into()),
+        };
+        return Ok(Some(PathBuf::from(mapped)));
+    }
     // `file:////evil/share` names no host, yet Windows reads `//evil/share`
     // as a network share (and `\\?\…` as a device path).
     if path.starts_with(['/', '\\']) && path[1..].starts_with(['/', '\\']) {
         return Err("it points to another computer".into());
     }
-    Ok(Some(PathBuf::from(path)))
+    Ok(Some(PathBuf::from(&*path)))
 }
 
 /// Opening it would start something: a known program type (including
 /// macOS app bundles, which are directories) or an executable file.
 fn is_program(path: &Path, metadata: &std::fs::Metadata) -> bool {
-    let name = path.file_name().map(|n| n.to_string_lossy());
-    let extension = name.as_deref().and_then(program_extension).unwrap_or("");
-    if PROGRAM_EXTENSIONS
-        .iter()
-        .any(|p| p.eq_ignore_ascii_case(extension))
-    {
+    if has_program_extension(path) {
         return true;
     }
     #[cfg(unix)]
@@ -189,6 +226,15 @@ fn is_program(path: &Path, metadata: &std::fs::Metadata) -> bool {
     #[cfg(not(unix))]
     let _ = metadata;
     false
+}
+
+/// Whether the name of `path` ends in a program extension.
+fn has_program_extension(path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy());
+    let extension = name.as_deref().and_then(program_extension).unwrap_or("");
+    PROGRAM_EXTENSIONS
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(extension))
 }
 
 /// The extension of the file Windows opens for `name`: it drops trailing
@@ -276,7 +322,7 @@ mod tests {
 
     #[test]
     fn file_urls_become_local_paths() {
-        let path = |url| file_path(url, "box").unwrap();
+        let path = |url| file_path(url, "box", Drives::Unsupported).unwrap();
         assert_eq!(path("https://example.com"), None);
         assert_eq!(path("mailto:me@example.com"), None);
         assert_eq!(path("file:///tmp/a%20b"), Some(PathBuf::from("/tmp/a b")));
@@ -287,20 +333,18 @@ mod tests {
         // `ls --hyperlink` names the host.
         assert_eq!(path("file://box/etc"), Some(PathBuf::from("/etc")));
         assert_eq!(path("file://localhost/etc"), Some(PathBuf::from("/etc")));
-        if cfg!(windows) {
-            assert_eq!(path("file:///C:/x"), Some(PathBuf::from("C:/x")));
-        }
     }
 
     #[test]
     fn other_hosts_are_refused() {
-        let err = file_path("file://evil.example/share/x.exe", "box").unwrap_err();
+        let path = |url| file_path(url, "box", Drives::Unsupported);
+        let err = path("file://evil.example/share/x.exe").unwrap_err();
         assert!(err.contains("evil.example"), "{err}");
-        assert!(file_path("file:///%FF", "box").is_err());
+        assert!(path("file:///%FF").is_err());
         // No host, but a network share on Windows.
-        assert!(file_path("file:////evil/share/x.txt", "box").is_err());
-        assert!(file_path("file:///%5C%5Cevil%5Cshare%5Cx", "box").is_err());
-        assert!(file_path("file:///%5C%5C?%5CUNC%5Cevil%5Cx", "box").is_err());
+        assert!(path("file:////evil/share/x.txt").is_err());
+        assert!(path("file:///%5C%5Cevil%5Cshare%5Cx").is_err());
+        assert!(path("file:///%5C%5C?%5CUNC%5Cevil%5Cx").is_err());
     }
 
     #[test]
@@ -333,6 +377,7 @@ mod tests {
             check(&format!("{}#x", url(&dir.join("Evil.app")))),
             check(&format!("{}?x", url(&exe))),
             check(&url(&dir.join("Evil.app").join("Contents").join(".."))),
+            check(&url(&dir.join("missing.txt"))),
         ];
         #[cfg(unix)]
         let symlink = {
@@ -354,15 +399,71 @@ mod tests {
         assert!(results[1].is_ok(), "text file");
         assert!(results[2].is_err(), "exe");
         assert!(results[3].is_err(), "app bundle");
-        assert!(results[4].is_ok(), "missing file");
+        assert!(results[4].is_err(), "missing exe");
         assert!(results[5].is_err(), "app bundle with a fragment");
         assert!(results[6].is_err(), "exe with a query");
         assert!(results[7].is_err(), "app bundle behind `..`");
+        assert!(results[8].is_ok(), "missing text file");
         #[cfg(unix)]
         assert!(script.is_err(), "executable");
         #[cfg(unix)]
         assert!(symlink.is_err(), "symlink to an app bundle");
         assert!(check("https://example.com/x.exe").is_ok());
+    }
+
+    #[test]
+    fn listed_extensions_are_refused() {
+        for ext in [
+            "py", "pyw", "pyz", "sh", "rdp", "jnlp", "wsb", "ws", "wsc", "sct", "msu", "mst",
+            "ps1xml", "psc1", "theme", "themepack", "xbap", "vsto", "gadget",
+        ] {
+            assert!(check(&format!("file:///nonexistent/x.{ext}")).is_err(), "{ext}");
+            let upper = ext.to_uppercase();
+            assert!(check(&format!("file:///nonexistent/X.{upper}")).is_err(), "{upper}");
+        }
+    }
+
+    #[test]
+    fn drive_letters_depend_on_the_system() {
+        use Drives::*;
+        let p = |u, d| file_path(u, "box", d);
+        let some = |s: &str| Ok(Some(PathBuf::from(s)));
+        assert_eq!(p("file:///C:/x", Windows), some("C:/x"));
+        assert_eq!(p("file:///C%7C/x", Windows), some("C:/x"));
+        assert_eq!(p("file:///C|/x", Windows), some("C:/x"));
+        assert_eq!(p("file:///C:/x.bat", Wsl), some("/mnt/c/x.bat"));
+        assert_eq!(p("file:///D:%5Cx", Wsl), some("/mnt/d/x"));
+        assert!(p("file:///C:/x.bat", Unsupported).is_err());
+        assert!(p("file:///C|/x", Unsupported).is_err());
+        assert!(p("file:///C:x", Wsl).is_err());
+        assert_eq!(p("file:///C", Unsupported), some("/C"));
+        assert_eq!(p("file:///tmp/x", Unsupported), some("/tmp/x"));
+    }
+
+    #[test]
+    fn nul_is_refused() {
+        assert!(file_path("file:///tmp/a%00.txt", "box", Drives::Unsupported).is_err());
+        assert!(check("file:///tmp/x%00.exe").is_err());
+    }
+
+    #[test]
+    fn missing_programs_are_refused_and_missing_files_are_not() {
+        assert!(check("file:///nonexistent-dir/setup.exe").is_err());
+        assert!(check("file:///nonexistent-dir/setup.exe::$DATA").is_err());
+        assert!(check("file:///nonexistent-dir/notes.txt").is_ok());
+        assert!(check("file:///C:/Windows/System32/calc.exe").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unresolvable_paths_are_refused() {
+        let dir = std::env::temp_dir().join(format!("nuntio-link-enotdir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "").unwrap();
+        let result = check(&format!("file://{}/x.txt", file.display()));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_err());
     }
 
     #[test]

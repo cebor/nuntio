@@ -7,6 +7,23 @@ use nuntio_term::ReportedDir;
 
 use crate::tab_title::strip_user_host;
 
+/// Whether this is a Linux build running inside WSL, where the opener hands
+/// `file:///C:/…` to Windows. Same test as the `open` crate's: `WSL_DISTRO_NAME` or a
+/// Microsoft kernel.
+pub fn running_in_wsl() -> bool {
+    static WSL: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        cfg!(target_os = "linux")
+            && (std::env::var_os("WSL_DISTRO_NAME").is_some()
+                || ["/proc/sys/kernel/osrelease", "/proc/version"]
+                    .iter()
+                    .any(|p| {
+                        std::fs::read_to_string(p)
+                            .is_ok_and(|s| s.to_lowercase().contains("microsoft"))
+                    }))
+    });
+    *WSL
+}
+
 /// Where WSL sees a Windows path: `C:\x` is `/mnt/c/x`, and a file in a
 /// distribution (`\\wsl.localhost\Ubuntu\home\x`) is `/home/x`.
 pub fn wsl_path(path: &str) -> String {
