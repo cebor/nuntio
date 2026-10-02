@@ -42,6 +42,12 @@ pub enum StartDir {
     Wsl(String),
 }
 
+/// Where the first pane starts: `dir`, or home if a directory was asked for
+/// but rejected. Without a request the shell keeps the process's directory.
+fn first_pane_dir(asked: bool, dir: Option<StartDir>, home: Option<PathBuf>) -> Option<StartDir> {
+    dir.or_else(|| home.filter(|_| asked).map(StartDir::Local))
+}
+
 /// Asks to confirm closing `target`, in which the programs `running` run
 /// (one name per pane).
 fn close_message(running: &[String], target: CloseTarget) -> String {
@@ -141,10 +147,12 @@ impl Core {
             working_directory,
         } = std::mem::take(&mut self.startup);
         let launch = command.map_or_else(|| self.default_launch(), Launch::Command);
+        let asked = working_directory.is_some() || self.config.working_directory.is_some();
         let dir = match working_directory {
             Some(dir) => self.existing_dir(dir).map(StartDir::Local),
             None => self.configured_dir(launch.distro().as_ref()),
         };
+        let dir = first_pane_dir(asked, dir, dirs::home_dir());
         let may_fall_back = matches!(&launch, Launch::Shell(ShellChoice { shell: Some(_), .. }));
         let err = match self.spawn_pane(dir, launch, INITIAL_GRID) {
             Ok(pane) => return Ok(pane),
@@ -445,6 +453,20 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_pane_falls_back_to_home_only_when_a_directory_was_asked_for() {
+        use std::path::Path;
+        let home = || Some(PathBuf::from("/home/u"));
+        assert!(
+            matches!(first_pane_dir(true, None, home()), Some(StartDir::Local(p)) if p == Path::new("/home/u"))
+        );
+        assert!(first_pane_dir(false, None, home()).is_none());
+        assert!(
+            matches!(first_pane_dir(true, Some(StartDir::Local("/srv".into())), home()), Some(StartDir::Local(p)) if p == Path::new("/srv"))
+        );
+        assert!(first_pane_dir(true, None, None).is_none());
+    }
 
     #[test]
     fn close_messages_name_the_programs() {
