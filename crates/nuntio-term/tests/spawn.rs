@@ -370,13 +370,7 @@ fn wide_characters_in_a_one_column_pane() {
     wait_for_exit(&rx);
 }
 
-#[test]
-fn color_queries_see_runtime_overrides() {
-    let (handle, rx) = spawn(
-        "stty raw -echo; printf '\\033]11;#102030\\007\\033]11;?\\007'; \
-         r=$(dd bs=1 count=24 2>/dev/null); stty sane; \
-         case \"$r\" in *1010/2020/3030*) printf OK;; *) printf NO;; esac",
-    );
+fn answer_queries_until_exit(handle: &TermHandle, rx: &mpsc::Receiver<TermEvent>) {
     loop {
         match rx
             .recv_timeout(Duration::from_secs(5))
@@ -387,6 +381,16 @@ fn color_queries_see_runtime_overrides() {
             _ => {}
         }
     }
+}
+
+#[test]
+fn color_queries_see_runtime_overrides() {
+    let (handle, rx) = spawn(
+        "stty raw -echo; printf '\\033]11;#102030\\007\\033]11;?\\007'; \
+         r=$(dd bs=1 count=24 2>/dev/null); stty sane; \
+         case \"$r\" in *1010/2020/3030*) printf OK;; *) printf NO;; esac",
+    );
+    answer_queries_until_exit(&handle, &rx);
     assert!(screen_contains(&handle, "OK"));
 }
 
@@ -401,6 +405,17 @@ fn window_id_variables() {
     let (handle, rx) = start(o);
     wait_for_exit(&rx);
     assert_eq!(line_text(&handle, 0), "[42][]");
+}
+
+#[test]
+fn replies_keep_the_order_of_the_queries() {
+    let (handle, rx) = spawn(
+        "stty raw -echo; printf '\\033]11;#102030\\007\\033]11;?\\007\\033[c'; \
+         r=$(dd bs=1 count=29 2>/dev/null); stty sane; \
+         case \"$r\" in *1010/2020/3030*'[?6c') printf OK;; *) printf NO;; esac",
+    );
+    answer_queries_until_exit(&handle, &rx);
+    assert!(screen_contains(&handle, "OK"));
 }
 
 #[test]

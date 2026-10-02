@@ -132,8 +132,16 @@ impl Dimensions for TermSize {
 type Callback = dyn Fn(TermEvent) + Send + Sync;
 type ColorFormat = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
 
+/// A reply to the program, in the order its queries came in.
+enum Reply {
+    Text(String),
+    /// Needs the main thread's runtime colors: palette index and formatter.
+    Color(usize, ColorFormat),
+}
+
 /// Bridges alacritty's events to the application and answers terminal
-/// queries (DA, size reports) directly on the PTY thread. Color queries go
+/// queries (DA, size reports) on the PTY thread, directly while no color
+/// query is pending and queued behind it otherwise. Color queries go
 /// through the main thread, which can read the runtime overrides (OSC
 /// 4/10/11/12): alacritty asks while the PTY thread holds the term lock.
 #[derive(Clone)]
@@ -152,14 +160,27 @@ struct ListenerInner {
     /// File stem of the program nuntio started, to recognize conhost's
     /// default title.
     shell_name: String,
-    /// Color queries waiting for [`TermHandle::answer_color_queries`].
-    color_queries: Mutex<Vec<(usize, ColorFormat)>>,
+    /// Replies waiting for [`TermHandle::answer_color_queries`]. Once a color
+    /// query is pending, every later reply queues behind it, so the program
+    /// sees the answers in query order (a DA1 sentinel after OSC 11 must not
+    /// overtake it).
+    replies: Mutex<Vec<Reply>>,
 }
 
 impl ListenerInner {
     fn write(&self, text: String) {
         if let Some(sender) = self.sender.get() {
             let _ = sender.send(Msg::Input(Cow::Owned(text.into_bytes())));
+        }
+    }
+
+    /// Write `text` now, or queue it behind pending color queries.
+    fn reply(&self, text: String) {
+        let mut queue = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        if queue.is_empty() {
+            self.write(text);
+        } else {
+            queue.push(Reply::Text(text));
         }
     }
 }
@@ -194,18 +215,18 @@ impl EventListener for Listener {
                 return;
             }
             Event::ClipboardStore(_, text) => TermEvent::ClipboardStore(text),
-            Event::PtyWrite(text) => return inner.write(text),
+            Event::PtyWrite(text) => return inner.reply(text),
             Event::ColorRequest(index, format) => {
                 inner
-                    .color_queries
+                    .replies
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .push((index, format));
+                    .push(Reply::Color(index, format));
                 TermEvent::ColorQuery
             }
             Event::TextAreaSizeRequest(format) => {
                 let size = *inner.size.lock().unwrap_or_else(PoisonError::into_inner);
-                return inner.write(format(size));
+                return inner.reply(format(size));
             }
             // Programs may not read the clipboard (OSC 52 queries), as in
             // xterm and iTerm2 by default: it could leak passwords. There is
@@ -265,7 +286,7 @@ impl TermHandle {
                 size: Mutex::new(size.window_size()),
                 wakeup_pending: AtomicBool::new(false),
                 shell_name: shell_name.clone(),
-                color_queries: Mutex::new(Vec::new()),
+                replies: Mutex::new(Vec::new()),
             }),
         };
 
@@ -557,33 +578,22 @@ impl TermHandle {
     /// [`TermEvent::ColorQuery`]), with runtime overrides taking precedence
     /// over the palette.
     pub fn answer_color_queries(&self) {
-        // Same lock order as the PTY thread: term, then the queue.
-        let replies: Vec<String> = {
-            let term = self.term.lock();
-            let queries = std::mem::take(
-                &mut *self
-                    .listener
-                    .inner
-                    .color_queries
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner),
-            );
-            if queries.is_empty() {
-                return;
-            }
-            let palette = self
-                .listener
-                .inner
-                .palette
-                .read()
-                .unwrap_or_else(PoisonError::into_inner);
-            queries
-                .into_iter()
-                .map(|(index, format)| format(term.colors()[index].unwrap_or(palette.get(index))))
-                .collect()
-        };
-        for reply in replies {
-            self.listener.inner.write(reply);
+        let inner = &self.listener.inner;
+        // Same lock order as the PTY thread: term, then the queue. The writes
+        // happen under the queue lock so no reply can slip in between.
+        let term = self.term.lock();
+        let mut queue = inner.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        if queue.is_empty() {
+            return;
+        }
+        let palette = inner.palette.read().unwrap_or_else(PoisonError::into_inner);
+        for reply in queue.drain(..) {
+            inner.write(match reply {
+                Reply::Text(text) => text,
+                Reply::Color(index, format) => {
+                    format(term.colors()[index].unwrap_or(palette.get(index)))
+                }
+            });
         }
     }
 
