@@ -1285,6 +1285,23 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_c_in_a_picker_reverts_the_preview() {
+        let (mut app, memory) = app(Some("# mine\n"));
+        app.section = Section::ALL
+            .iter()
+            .position(|s| *s == Section::Theme)
+            .unwrap();
+        app.row = 1;
+        app.key(Key::Enter);
+        type_text(&mut app, "dr");
+        assert!(memory.text().contains("Dracula"));
+        app.key(Key::Ctrl('c'));
+        assert!(app.quit);
+        assert_eq!(memory.text(), "# mine\n");
+        assert!(!app.is_modified());
+    }
+
+    #[test]
     fn font_picker_accepts_any_name() {
         let (mut app, memory) = app(None);
         go_to(&mut app, "font.family");

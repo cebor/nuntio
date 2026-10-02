@@ -19,6 +19,10 @@ impl App {
 
     pub fn key(&mut self, key: Key) {
         if key == Key::Ctrl('c') {
+            match std::mem::replace(&mut self.mode, Mode::Normal) {
+                Mode::Picker(mode) => self.cancel_picker(mode),
+                other => self.mode = other,
+            }
             self.quit = true;
             return;
         }
@@ -482,16 +486,22 @@ impl App {
         }
     }
 
+    /// Leave a picker without choosing: a live preview goes back, unless the
+    /// file was changed elsewhere meanwhile: then that change wins and is
+    /// reloaded instead.
+    fn cancel_picker(&mut self, mode: PickerMode) {
+        let live = !matches!(mode.target, PickTarget::Action { .. });
+        if live && self.source != mode.before && self.in_sync() {
+            self.restore_text(mode.before);
+        }
+    }
+
     fn picker_key(&mut self, key: Key, mut mode: PickerMode) {
         let live = !matches!(mode.target, PickTarget::Action { .. });
         let reloads = self.reloads;
         match key {
             Key::Esc => {
-                // Unless the file was changed elsewhere meanwhile: then
-                // that change wins and is reloaded instead.
-                if live && self.source != mode.before && self.in_sync() {
-                    self.restore_text(mode.before);
-                }
+                self.cancel_picker(mode);
                 return;
             }
             Key::Enter => {
