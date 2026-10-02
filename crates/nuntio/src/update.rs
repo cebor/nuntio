@@ -10,10 +10,19 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use winit::event_loop::EventLoopProxy;
 
 use crate::event::UserEvent;
+
+const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+/// Tag characters kept as they are in a URL path.
+const TAG: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'.')
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'+');
 
 /// Title of the banner that announces an update.
 pub const BANNER: &str = "Update";
@@ -67,6 +76,18 @@ pub struct Release {
     pub url: String,
 }
 
+impl Release {
+    /// The page to open: `url` if it is on this repository's releases (it comes from GitHub or a
+    /// cache file), else the page of the tag, built here.
+    fn page_url(&self) -> String {
+        let releases = format!("{}/releases/", REPOSITORY.trim_end_matches('/'));
+        if self.url.starts_with(&releases) {
+            return self.url.clone();
+        }
+        format!("{releases}tag/{}", utf8_percent_encode(&self.tag, TAG))
+    }
+}
+
 /// The fields of GitHub's answer we need; its `url` is the API's own.
 #[derive(Deserialize)]
 struct GitHubRelease {
@@ -103,7 +124,7 @@ impl Update {
         let current = Version::parse(current)?;
         (latest.cmp(&current) == Ordering::Greater).then(|| Self {
             version: release.tag.trim_start_matches('v').to_owned(),
-            url: release.url.clone(),
+            url: release.page_url(),
             build,
         })
     }
@@ -386,6 +407,33 @@ mod tests {
         assert_eq!(
             Update::against(&release("junk"), "0.1.5", Build::Source),
             None
+        );
+    }
+
+    #[test]
+    fn foreign_release_urls_are_replaced() {
+        let page = "https://github.com/cebor/nuntio/releases/tag/v0.1.6";
+        for url in [
+            "ms-msdt:/x",
+            "file:///C:/x.exe",
+            "https://github.com.evil.example/cebor/nuntio/releases/x",
+            "https://github.com/other/repo/releases/tag/v0.1.6",
+            "",
+        ] {
+            let r = Release {
+                tag: "v0.1.6".into(),
+                url: url.into(),
+            };
+            let update = Update::against(&r, "0.1.5", Build::Release).unwrap();
+            assert_eq!(update.url, page, "{url}");
+        }
+        let r = Release {
+            tag: "v0.1.6-../../x?y".into(),
+            url: "file:///x".into(),
+        };
+        assert_eq!(
+            r.page_url(),
+            "https://github.com/cebor/nuntio/releases/tag/v0.1.6-..%2F..%2Fx%3Fy"
         );
     }
 
