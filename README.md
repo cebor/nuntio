@@ -84,7 +84,7 @@ cargo run -r
 
 ### Building packages
 
-`cargo xtask package` builds a release and writes packages for the host OS to `dist/`. The release workflow runs the same command for every `v*` tag.
+`cargo xtask package` builds a release and writes packages for the host OS to `dist/`. The release workflow runs the same command for every `v*` tag. It also needs [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) (`cargo install cargo-about --locked --features cli`); it writes `THIRD-PARTY-LICENSES.html` into every package.
 
 | Platform | Output |
 |---|---|

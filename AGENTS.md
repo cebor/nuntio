@@ -10,7 +10,7 @@ cargo run -r -- --config <path> --log-level debug    # custom config / verbose l
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo xtask package      # release build + packages for the host OS into dist/
+cargo xtask package      # release build + packages for the host OS into dist/ (needs cargo-about)
 cargo xtask icons        # re-render assets/icons/ from assets/icon.svg
 cargo xtask changelog <from>..HEAD
 cargo xtask site [serve] # build the website in site/ with Zola (needs `zola` on PATH)

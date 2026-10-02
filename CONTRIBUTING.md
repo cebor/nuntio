@@ -125,6 +125,8 @@ cargo xtask icons     # regenerate assets/icons/ after editing assets/icon.svg
 - macOS: a universal `.app` (Intel + Apple Silicon) in a `.dmg`; needs both Rust targets (`rustup target add x86_64-apple-darwin aarch64-apple-darwin`).
 - Windows: a `.zip` with `nuntio.exe`.
 
+`cargo xtask package` also needs [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) (`cargo install cargo-about --locked --features cli`); it writes `THIRD-PARTY-LICENSES.html` into every package.
+
 To release, bump `version` in the workspace `Cargo.toml`, run `cargo check` so `Cargo.lock` picks it up (packaging builds with `--locked`), add a `<release>` entry at the top of `assets/nuntio.metainfo.xml` (a test checks it), commit, and push a tag like `v0.2.0`. The release workflow checks that the tag matches the version, builds all packages and publishes a GitHub release with the changelog since the previous tag.
 
 ## License

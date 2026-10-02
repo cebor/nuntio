@@ -84,6 +84,7 @@ assets = [
     ["target/release/nuntio", "usr/bin/", "755"],
     # Only on the PATH inside nuntio's panes.
     ["target/release/nuntio-config", "usr/lib/nuntio/", "755"],
+    ["../../target/THIRD-PARTY-LICENSES.html", "usr/share/doc/nuntio/", "644"],
     ["../../assets/nuntio.desktop", "usr/share/applications/", "644"],
     ["../../assets/nuntio.metainfo.xml", "usr/share/metainfo/io.github.cebor.nuntio.metainfo.xml", "644"],
     ["../../assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/nuntio.svg", "644"],

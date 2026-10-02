@@ -46,6 +46,7 @@ Source: "{#Stage}\nuntio.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\nuntio-config.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Stage}\THIRD-PARTY-LICENSES.html"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\nuntio"; Filename: "{app}\nuntio.exe"

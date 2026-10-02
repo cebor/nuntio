@@ -24,6 +24,8 @@ const NAME: &str = "nuntio";
 /// The config editor, built from the same package. It must not land on
 /// the global PATH: nuntio adds it only inside its panes.
 const HELPER: &str = "nuntio-config";
+/// The dependency license notices shipped in every package.
+const THIRD_PARTY: &str = "THIRD-PARTY-LICENSES.html";
 const PNG_SIZES: [u32; 9] = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
 const ICO_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 const ICNS_SIZES: [u32; 7] = [16, 32, 64, 128, 256, 512, 1024];
@@ -350,16 +352,45 @@ fn package() -> Result<()> {
     }
 }
 
+/// License notices of the dependencies in the binaries (about.toml,
+/// about.hbs), written once per run to `target/` (`target/package` is
+/// wiped by the macOS package). Needs cargo-about.
+fn third_party_licenses() -> Result<PathBuf> {
+    ensure!(
+        available("cargo-about"),
+        "cargo-about not found; packages must ship the licenses of their dependencies (cargo install cargo-about --locked --features cli)"
+    );
+    let out = root().join("target").join(THIRD_PARTY);
+    run(Command::new(env!("CARGO"))
+        .current_dir(root())
+        .args([
+            "about",
+            "generate",
+            "--locked",
+            "--fail",
+            "-m",
+            "crates/nuntio/Cargo.toml",
+            "-c",
+            "about.toml",
+            "-o",
+        ])
+        .arg(&out)
+        .arg("about.hbs"))?;
+    Ok(out)
+}
+
 /// Files shipped in every archive next to the binary.
-fn copy_docs(to: &Path) -> Result<()> {
+fn copy_docs(to: &Path, notices: &Path) -> Result<()> {
     for file in ["LICENSE-MIT", "LICENSE-APACHE"] {
         copy(&root().join(file), &to.join(file))?;
     }
+    copy(notices, &to.join(THIRD_PARTY))?;
     Ok(())
 }
 
 fn package_linux(dist: &Path, version: &str) -> Result<()> {
     let binary = cargo_build(None)?;
+    let notices = third_party_licenses()?;
     let arch = std::env::consts::ARCH;
     let assets = root().join("assets");
     let stage = root().join("target/package");
@@ -375,7 +406,7 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
         &tree.join("lib").join(NAME).join(HELPER),
     )?;
     install_desktop_files(&assets, &tree.join("share"))?;
-    copy_docs(&tree)?;
+    copy_docs(&tree, &notices)?;
     let tarball = dist.join(format!("{base}.tar.gz"));
     run(Command::new("tar")
         .arg("-czf")
@@ -405,6 +436,7 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
             &appdir.join("usr/lib").join(NAME).join(HELPER),
         )?;
         install_desktop_files(&assets, &appdir.join("usr/share"))?;
+        copy_docs(&appdir.join("usr/share/doc").join(NAME), &notices)?;
         copy(
             &assets.join("nuntio.desktop"),
             &appdir.join("nuntio.desktop"),
@@ -468,6 +500,7 @@ fn package_macos(dist: &Path, version: &str) -> Result<()> {
     // Universal binary for Intel and Apple Silicon.
     let intel = cargo_build(Some("x86_64-apple-darwin"))?;
     let arm = cargo_build(Some("aarch64-apple-darwin"))?;
+    let notices = third_party_licenses()?;
     let stage = root().join("target/package");
     fresh_dir(&stage)?;
 
@@ -500,7 +533,7 @@ fn package_macos(dist: &Path, version: &str) -> Result<()> {
     run(Command::new("codesign")
         .args(["--force", "--sign", "-"])
         .arg(stage.join("nuntio.app")))?;
-    copy_docs(&stage)?;
+    copy_docs(&stage, &notices)?;
 
     // Disk image with the app and a link to /Applications for drag-install.
     #[cfg(unix)]
@@ -547,13 +580,14 @@ fn diskutil_image_available() -> bool {
 
 fn package_windows(dist: &Path, version: &str) -> Result<()> {
     let binary = cargo_build(None)?;
+    let notices = third_party_licenses()?;
     let stage = root()
         .join("target/package")
         .join(format!("{NAME}-{version}"));
     fresh_dir(&stage)?;
     copy(&binary, &stage.join(format!("{NAME}.exe")))?;
     copy(&helper_of(&binary), &stage.join(format!("{HELPER}.exe")))?;
-    copy_docs(&stage)?;
+    copy_docs(&stage, &notices)?;
     let zip = dist.join(format!(
         "{NAME}-{version}-{}-windows.zip",
         std::env::consts::ARCH
@@ -612,6 +646,28 @@ fn find_iscc() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_accepts_the_licenses_deny_allows() {
+        let deny = fs::read_to_string(root().join("deny.toml")).unwrap();
+        let about = fs::read_to_string(root().join("about.toml")).unwrap();
+        let allow = deny
+            .split("allow = [")
+            .nth(1)
+            .unwrap()
+            .split(']')
+            .next()
+            .unwrap();
+        for id in allow
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('"')?.split('"').next())
+        {
+            assert!(
+                about.contains(&format!("\"{id}\"")),
+                "add {id} to about.toml"
+            );
+        }
+    }
 
     #[test]
     fn metainfo_lists_the_current_version() {
