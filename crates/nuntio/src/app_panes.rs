@@ -12,6 +12,7 @@ use crate::banner::{Banner, Severity};
 use crate::event::{PaneId, UserEvent};
 use crate::pane_tree::Axis;
 use crate::shells::{self, Launch, ShellChoice};
+use crate::tabs::Placement;
 use crate::window::{Pane, TabContent, WindowState};
 use crate::wsl::Distro;
 
@@ -275,15 +276,20 @@ impl Core {
 
     // ----- Tabs and splits ---------------------------------------------------
 
-    /// Open a tab that runs `launch`.
-    pub(super) fn new_tab(&mut self, state: &mut WindowState, launch: Launch) {
+    /// Open a tab that runs `launch` at `placement`.
+    pub(super) fn new_tab(
+        &mut self,
+        state: &mut WindowState,
+        launch: Launch,
+        placement: Placement,
+    ) {
         let inherit = self.config.tabs.inherit_directory;
         let Some(pane) = self.spawn_for_focused(state, launch, inherit) else {
             return;
         };
         let id = pane.id;
         state.send_focus(false);
-        state.tabs.open(TabContent::new(pane));
+        state.tabs.open(TabContent::new(pane), placement);
         state.hold_reveal(id, Instant::now());
         state.reset_focus_state();
         // The first extra tab may show the tab bar and shrink the grid.

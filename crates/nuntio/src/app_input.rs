@@ -23,6 +23,7 @@ use crate::pane_tree::Axis;
 use crate::shell_words::{PathSyntax, dropped_path};
 use crate::shells::{self, Launch};
 use crate::tab_bar::BarHit;
+use crate::tabs::Placement;
 use crate::update;
 use crate::window::{TabDrag, WindowState};
 
@@ -134,7 +135,7 @@ impl Core {
             Action::FontIncrease => self.set_font_size(state, self.font_size + 1.0),
             Action::FontDecrease => self.set_font_size(state, self.font_size - 1.0),
             Action::FontReset => self.set_font_size(state, self.config.font.size),
-            Action::NewTab => self.new_tab(state, self.default_launch()),
+            Action::NewTab => self.new_tab(state, self.default_launch(), Placement::AfterActive),
             Action::OpenSettings => self.open_settings(state),
             Action::CheckForUpdates => update::check_now(self.proxy.clone()),
             Action::CloseTab => {
@@ -168,7 +169,7 @@ impl Core {
             Action::OpenShellMenu => self.open_shell_menu(state, false),
             Action::NewTabWithShell(index) => {
                 if let Some(choice) = self.shell_choices.get(index).cloned() {
-                    self.new_tab(state, Launch::Shell(choice));
+                    self.new_tab(state, Launch::Shell(choice), self.shell_menu_placement);
                 }
             }
         }
@@ -179,6 +180,11 @@ impl Core {
     /// `at_new_tab`, otherwise at the `shell` status bar item. Looks for
     /// installed shells each time, so new ones show up.
     pub(super) fn open_shell_menu(&mut self, state: &mut WindowState, at_new_tab: bool) {
+        self.shell_menu_placement = if at_new_tab {
+            Placement::End
+        } else {
+            Placement::AfterActive
+        };
         self.shell_choices = shells::choices(
             &self.config,
             detect::installed_shells(),
@@ -201,6 +207,7 @@ impl Core {
                 self.new_tab(
                     state,
                     Launch::Settings(helper.to_string_lossy().into_owned()),
+                    Placement::AfterActive,
                 );
             }
             None => self.notify(Banner::new(
@@ -634,7 +641,7 @@ impl Core {
                 });
             }
             BarHit::Close(index) => self.request_close_tab(state, index),
-            BarHit::NewTab => self.new_tab(state, self.default_launch()),
+            BarHit::NewTab => self.new_tab(state, self.default_launch(), Placement::End),
             BarHit::Empty => {
                 // Double click maximizes, like a title bar.
                 let now = Instant::now();

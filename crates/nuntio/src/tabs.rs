@@ -26,6 +26,15 @@ pub struct Tabs<P> {
     active: usize,
 }
 
+/// Where `Tabs::open` puts a new tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// Right after the active tab.
+    AfterActive,
+    /// After the last tab.
+    End,
+}
+
 impl<P> Tabs<P> {
     pub fn new(first: P) -> Self {
         Self {
@@ -66,9 +75,12 @@ impl<P> Tabs<P> {
         self.tabs.iter().position(|t| predicate(&t.content))
     }
 
-    /// Open a tab right after the active one and activate it.
-    pub fn open(&mut self, content: P) {
-        self.active += 1;
+    /// Open a tab at `placement` and activate it.
+    pub fn open(&mut self, content: P, placement: Placement) {
+        self.active = match placement {
+            Placement::AfterActive => self.active + 1,
+            Placement::End => self.tabs.len(),
+        };
         self.tabs.insert(self.active, Tab::new(content));
     }
 
@@ -124,7 +136,7 @@ mod tests {
     fn tabs(n: u32) -> Tabs<u32> {
         let mut t = Tabs::new(0);
         for i in 1..n {
-            t.open(i);
+            t.open(i, Placement::AfterActive);
         }
         t
     }
@@ -137,9 +149,19 @@ mod tests {
     fn open_inserts_after_active() {
         let mut t = tabs(3); // [0, 1, 2], active 2
         t.select(0);
-        t.open(9);
+        t.open(9, Placement::AfterActive);
         assert_eq!(order(&t), [0, 9, 1, 2]);
         assert_eq!(t.active().content, 9);
+    }
+
+    #[test]
+    fn open_at_end_appends_after_the_last() {
+        let mut t = tabs(3);
+        t.select(0);
+        t.open(9, Placement::End);
+        assert_eq!(order(&t), [0, 1, 2, 9]);
+        assert_eq!(t.active().content, 9);
+        assert_eq!(t.active_index(), 3);
     }
 
     #[test]

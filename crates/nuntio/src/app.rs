@@ -320,6 +320,9 @@ struct Core {
     /// The shell menu's entries, found when it opened;
     /// `Action::NewTabWithShell` indexes them.
     shell_choices: Vec<crate::shells::ShellChoice>,
+    /// Where the shell menu's tab opens: after the last tab when the menu
+    /// came from the tab bar's "+", otherwise right of the active one.
+    shell_menu_placement: crate::tabs::Placement,
     /// Used up by the first pane.
     startup: Startup,
     /// The last tab was closed; quit at the next opportunity.
@@ -412,6 +415,7 @@ impl Core {
             next_pane_id: 0,
             wsl_homes: Default::default(),
             shell_choices: Vec::new(),
+            shell_menu_placement: crate::tabs::Placement::AfterActive,
             startup,
             exit_requested: false,
             pending_close: None,
