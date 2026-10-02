@@ -338,6 +338,18 @@ fn theme_value(selection: &ThemeSelection) -> toml_edit::Value {
     }
 }
 
+/// What `App::reread` found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reread {
+    Unchanged,
+    /// The file changed and was loaded.
+    Reloaded,
+    /// The file changed but isn't valid TOML; nothing was loaded.
+    Unparsable,
+    /// The file couldn't be read.
+    Unreadable,
+}
+
 impl App {
     pub fn new(
         store: Box<dyn Store>,
@@ -416,7 +428,25 @@ impl App {
     /// Reload if the file was changed by someone else. Returns `false` then,
     /// so the change the user just made isn't applied to stale contents.
     fn in_sync(&mut self) -> bool {
-        self.reread("The file was changed elsewhere and has been reloaded.")
+        self.reread("The file was changed elsewhere and has been reloaded.") == Reread::Unchanged
+    }
+
+    /// Like `in_sync` for the commands that overwrite the file (undo,
+    /// restore): a file that no longer parses is no conflict, it is what they
+    /// fix. `None` = don't go ahead; `Some(broken)` otherwise.
+    fn in_sync_or_broken(&mut self) -> Option<bool> {
+        match self.reread("The file was changed elsewhere and has been reloaded.") {
+            Reread::Unchanged => Some(false),
+            Reread::Unparsable => Some(true),
+            Reread::Reloaded | Reread::Unreadable => None,
+        }
+    }
+
+    /// Remember `text` for undo, unless it is already the newest entry.
+    fn push_undo(&mut self, text: String) {
+        if self.undo.last() != Some(&text) {
+            self.undo.push(text);
+        }
     }
 
     /// Pick up the file after it was edited in an external editor. The
@@ -424,23 +454,29 @@ impl App {
     pub fn reload(&mut self) {
         self.message = None;
         let before = self.source.clone();
-        if !self.reread("Reloaded the file after editing.") && self.source != before {
-            self.undo.push(before);
+        match self.reread("Reloaded the file after editing.") {
+            Reread::Reloaded | Reread::Unparsable => self.push_undo(before),
+            // Fixed back to the old text: drop the entry a broken save pushed.
+            Reread::Unchanged => {
+                if self.undo.last() == Some(&self.source) {
+                    self.undo.pop();
+                }
+            }
+            Reread::Unreadable => {}
         }
     }
 
     /// Reread the file; if it changed, load it and show `message`.
-    /// Returns whether it was unchanged.
-    fn reread(&mut self, message: &str) -> bool {
+    fn reread(&mut self, message: &str) -> Reread {
         let current = match self.store.read() {
             Ok(current) => current.unwrap_or_default(),
             Err(err) => {
                 self.message = Some((Tone::Error, format!("can't read the file: {err}")));
-                return false;
+                return Reread::Unreadable;
             }
         };
         if current == self.source {
-            return true;
+            return Reread::Unchanged;
         }
         match ConfigDoc::parse(&current) {
             Ok(doc) => {
@@ -449,10 +485,13 @@ impl App {
                 self.reloads += 1;
                 self.revalidate();
                 self.message = Some((Tone::Warn, message.into()));
+                Reread::Reloaded
             }
-            Err(err) => self.message = Some((Tone::Error, err)),
+            Err(err) => {
+                self.message = Some((Tone::Error, err));
+                Reread::Unparsable
+            }
         }
-        false
     }
 
     /// Check an edit without applying it.
@@ -563,31 +602,35 @@ impl App {
     }
 
     pub fn undo(&mut self) {
-        if !self.in_sync() {
+        let Some(broken) = self.in_sync_or_broken() else {
             return;
-        }
+        };
         match self.undo.pop() {
             Some(text) => {
                 if self.restore_text(text) {
                     self.message = Some((Tone::Normal, "Undone.".into()));
                 }
             }
+            // The parse error stays on screen.
+            None if broken => {}
             None => self.message = Some((Tone::Dim, "Nothing to undo.".into())),
         }
     }
 
     /// Back to the file as it was when the editor started (undoable).
     pub fn restore_original(&mut self) {
-        if !self.in_sync() {
+        let Some(broken) = self.in_sync_or_broken() else {
             return;
-        }
-        if !self.is_modified() {
+        };
+        if !broken && !self.is_modified() {
             self.message = Some((Tone::Dim, "No changes to restore.".into()));
             return;
         }
         let current = self.source.clone();
         if self.restore_text(self.original.clone()) {
-            self.undo.push(current);
+            if current != self.original {
+                self.push_undo(current);
+            }
             self.message = Some((Tone::Normal, "Restored the original file.".into()));
         }
     }
@@ -1590,6 +1633,40 @@ mod tests {
         app.reload();
         assert_eq!(app.config.scrollback, 7);
         assert!(app.message.is_some());
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 5\n");
+    }
+
+    #[test]
+    fn undo_works_after_an_editor_leaves_a_syntax_error() {
+        let (mut app, memory) = app(Some("scrollback = 5\n"));
+        memory.set("[font");
+        app.reload();
+        assert!(matches!(app.message, Some((Tone::Error, _))));
+        assert_eq!(app.source, "scrollback = 5\n");
+        go_to(&mut app, "scrollback");
+        app.key(Key::Right);
+        assert_eq!(memory.text(), "[font", "edits are blocked");
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 5\n");
+        assert_eq!(app.config.scrollback, 5);
+    }
+
+    #[test]
+    fn restore_works_after_a_syntax_error_and_a_fix_adds_one_undo_entry() {
+        let (mut app, memory) = app(Some("scrollback = 5\n"));
+        memory.set("[font");
+        app.reload();
+        memory.set("scrollback = 7\n");
+        app.reload();
+        assert_eq!(app.undo.len(), 1);
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 5\n");
+        memory.set("[x");
+        app.reload();
+        app.key(Key::Char('R'));
+        assert_eq!(memory.text(), "scrollback = 5\n");
+        assert_eq!(app.undo.len(), 1);
         app.key(Key::Char('u'));
         assert_eq!(memory.text(), "scrollback = 5\n");
     }
