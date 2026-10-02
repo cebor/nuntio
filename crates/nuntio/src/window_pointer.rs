@@ -208,7 +208,8 @@ impl WindowState {
     /// Look up the link under the pointer, if the link modifier (Ctrl, Cmd
     /// on macOS) is held. Output, scrolling or a closed pane move the text
     /// under a resting pointer, so this also runs before every frame and
-    /// click. Returns whether it changed.
+    /// click, and nothing is looked up while a menu is open. Returns whether
+    /// it changed.
     pub fn refresh_hover_link(&mut self, config: &Config) -> bool {
         let mods = self.modifiers.state();
         let held = if cfg!(target_os = "macos") {
@@ -216,6 +217,8 @@ impl WindowState {
         } else {
             mods.control_key()
         };
+        // Nothing under an open menu reacts to the pointer.
+        let held = held && self.actions_menu.is_none();
         let link = self.mouse.position.filter(|_| held).and_then(|pos| {
             let id = self.pane_at(config, pos)?;
             let point = self.cell_in(config, id, pos);
