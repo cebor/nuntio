@@ -102,6 +102,7 @@ nuntio [options] [[-e] <command> [<args>...]]
 |---|---|
 | `-e`, `--command <command> [<args>...]` | Run a command instead of the shell in the first tab, e.g. `nuntio -e htop`. Everything after it goes to the command. The window closes when it exits |
 | `--working-directory <dir>` | Start the first tab in this directory |
+| `-T`, `--title <title>` | Accepted and ignored, so callers of `x-terminal-emulator` that pass a window title keep working |
 | `--config <path>` | Use this config file instead of the default location |
 | `--log-level <level>` | Log filter such as `debug` or `nuntio=trace` (`RUST_LOG` also works) |
 | `-V`, `--version` | Print the version |

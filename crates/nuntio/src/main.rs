@@ -50,6 +50,7 @@ Options:
                                 Run a command instead of the shell in the first
                                 tab; everything after it is passed to the command
       --working-directory <dir> Start the first tab in this directory
+  -T, --title <title>           Accepted and ignored (x-terminal-emulator callers pass it)
       --config <path>           Use this config file instead of the default one
       --log-level <level>       Log filter, such as `debug` or `nuntio=trace`
   -h, --help                    Print this help
@@ -72,6 +73,7 @@ const DEBUG_HELP: &str = "";
 struct Args {
     config: Option<PathBuf>,
     log_level: Option<String>,
+    title: Option<String>,
     startup: Startup,
     #[cfg(feature = "debug-server")]
     debug_server: Option<PathBuf>,
@@ -80,10 +82,13 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, lexopt::Error> {
+    parse(lexopt::Parser::from_env())
+}
+
+fn parse(mut parser: lexopt::Parser) -> Result<Args, lexopt::Error> {
     use lexopt::prelude::*;
 
     let mut args = Args::default();
-    let mut parser = lexopt::Parser::from_env();
     while let Some(arg) = parser.next()? {
         match arg {
             Long("config") => args.config = Some(parser.value()?.into()),
@@ -92,6 +97,9 @@ fn parse_args() -> Result<Args, lexopt::Error> {
             Long("debug-server") => args.debug_server = Some(parser.value()?.into()),
             #[cfg(feature = "debug-server")]
             Long("headless") => args.headless = true,
+            // x-terminal-emulator callers pass `-T <title>`; tab titles come from
+            // `tabs.title`, so it is only logged.
+            Short('T') | Long("title") => args.title = Some(parser.value()?.string()?),
             Long("working-directory") => {
                 args.startup.working_directory = Some(parser.value()?.into());
             }
@@ -246,6 +254,9 @@ fn run() -> Result<()> {
             .init(),
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
     }
+    if let Some(title) = &args.title {
+        tracing::debug!(%title, "ignoring --title: tab titles come from tabs.title");
+    }
     // After the logger, so the font thread's warnings are kept.
     nuntio_render::preload_fonts();
     #[cfg(windows)]
@@ -326,4 +337,46 @@ fn run() -> Result<()> {
     }
     event_loop.run_app(&mut app).context("event loop failed")?;
     app.into_result()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_from(args: &[&str]) -> Result<Args, lexopt::Error> {
+        parse(lexopt::Parser::from_args(args.iter().copied()))
+    }
+
+    #[test]
+    fn title_is_accepted_before_the_command() {
+        let args = parse_from(&["-T", "build", "-e", "sh", "-c", "ls"]).unwrap();
+        assert_eq!(args.title.as_deref(), Some("build"));
+        assert_eq!(
+            args.startup.command,
+            Some(vec!["sh".into(), "-c".into(), "ls".into()])
+        );
+    }
+
+    #[test]
+    fn long_title_takes_an_equals_value() {
+        assert_eq!(
+            parse_from(&["--title=x"]).unwrap().title.as_deref(),
+            Some("x")
+        );
+    }
+
+    #[test]
+    fn title_without_a_value_is_an_error() {
+        assert!(parse_from(&["-T"]).is_err());
+    }
+
+    #[test]
+    fn command_swallows_a_later_title_flag() {
+        let args = parse_from(&["-e", "sh", "-T", "x"]).unwrap();
+        assert_eq!(args.title, None);
+        assert_eq!(
+            args.startup.command,
+            Some(vec!["sh".into(), "-T".into(), "x".into()])
+        );
+    }
 }
