@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
+use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// Editors write files in several steps; wait for them to settle.
@@ -15,11 +16,41 @@ pub struct ConfigWatcher {
 }
 
 enum Signal {
-    /// A watched file changed.
+    /// A watched file changed, or a watched directory was moved or deleted.
     Changed,
     /// A directory on the way to a watched directory, or one of those
     /// directories itself, appeared or disappeared.
     Rescan,
+}
+
+/// What events are matched against and which directories are needed.
+/// Resolved again after changes: symlinks may point elsewhere by then.
+#[derive(PartialEq, Eq)]
+struct Targets {
+    config_files: Vec<PathBuf>,
+    theme_dirs: Vec<PathBuf>,
+    /// Parents of `config_files` and `theme_dirs`; sorted, no duplicates.
+    wanted: Vec<PathBuf>,
+}
+
+impl Targets {
+    fn resolve(config_path: &Path, themes_dir: Option<&Path>) -> Self {
+        let config_files = path_variants(config_path);
+        let theme_dirs: Vec<PathBuf> = themes_dir.map(path_variants).unwrap_or_default();
+        let mut wanted: Vec<PathBuf> = config_files
+            .iter()
+            .filter_map(|p| p.parent())
+            .map(Path::to_owned)
+            .chain(theme_dirs.iter().cloned())
+            .collect();
+        wanted.sort();
+        wanted.dedup();
+        Self {
+            config_files,
+            theme_dirs,
+            wanted,
+        }
+    }
 }
 
 impl ConfigWatcher {
@@ -35,20 +66,15 @@ impl ConfigWatcher {
         // Event paths may be canonical (macOS FSEvents resolves symlinks such
         // as /var -> /private/var), and the config may itself be a symlink
         // into a dotfiles repository: match and watch every variant.
-        let config_files = path_variants(config_path);
-        let theme_dirs: Vec<PathBuf> = themes_dir.map(path_variants).unwrap_or_default();
-        let mut wanted: Vec<PathBuf> = config_files
-            .iter()
-            .filter_map(|p| p.parent())
-            .map(Path::to_owned)
-            .chain(theme_dirs.iter().cloned())
-            .collect();
-        wanted.sort();
-        wanted.dedup();
+        let targets = Arc::new(Mutex::new(Targets::resolve(config_path, themes_dir)));
+        let initial = targets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .wanted
+            .clone();
 
         let (tx, rx) = mpsc::channel::<Signal>();
-        let watched_themes = theme_dirs;
-        let wanted_dirs = wanted.clone();
+        let callback_targets = Arc::clone(&targets);
         let watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
             let event = match result {
                 Ok(event) => event,
@@ -61,16 +87,25 @@ impl ConfigWatcher {
             if matches!(event.kind, EventKind::Access(_)) {
                 return;
             }
+            let t = callback_targets
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             let relevant = event.paths.iter().any(|path| {
-                config_files.contains(path)
-                    || watched_themes.iter().any(|dir| path.starts_with(dir))
+                t.config_files.contains(path)
+                    || t.theme_dirs.iter().any(|dir| path.starts_with(dir))
             });
+            // A watched directory that is moved or deleted: what it holds is
+            // no longer what the config was loaded from.
+            let dir_gone = matches!(
+                event.kind,
+                EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+            ) && event.paths.iter().any(|path| t.wanted.contains(path));
             let on_the_way = event
                 .paths
                 .iter()
-                .any(|path| wanted_dirs.iter().any(|dir| dir.starts_with(path)));
+                .any(|path| t.wanted.iter().any(|dir| dir.starts_with(path)));
             // Deleting a watched themes directory is both.
-            if relevant {
+            if relevant || dir_gone {
                 let _ = tx.send(Signal::Changed);
             }
             if on_the_way {
@@ -79,12 +114,14 @@ impl ConfigWatcher {
         })?;
         let watcher = Arc::new(Mutex::new(watcher));
         let mut watched = Vec::new();
-        watch_existing(&mut watcher.lock().unwrap(), &wanted, &mut watched)?;
+        watch_existing(&mut watcher.lock().unwrap(), &initial, &mut watched)?;
 
         // Collapse bursts of events into one notification. The thread only
         // holds a weak reference: dropping `ConfigWatcher` drops the watcher
         // and with it `tx`, which ends the thread.
         let thread_watcher = Arc::downgrade(&watcher);
+        let config_path = config_path.to_owned();
+        let themes_dir = themes_dir.map(Path::to_owned);
         std::thread::Builder::new()
             .name("config watcher".into())
             .spawn(move || {
@@ -97,7 +134,19 @@ impl ConfigWatcher {
                             Signal::Rescan => rescan = true,
                         }
                     }
-                    if rescan {
+                    // Symlinks may point elsewhere by now. Never hold the
+                    // lock across `watch_existing`: notify's `watch` waits for
+                    // the event thread, which may wait for this lock.
+                    let fresh = Targets::resolve(&config_path, themes_dir.as_deref());
+                    let (moved, wanted) = {
+                        let mut current = targets.lock().unwrap_or_else(PoisonError::into_inner);
+                        let moved = *current != fresh;
+                        if moved {
+                            *current = fresh;
+                        }
+                        (moved, current.wanted.clone())
+                    };
+                    if rescan || moved {
                         let Some(watcher) = thread_watcher.upgrade() else {
                             break;
                         };
@@ -108,6 +157,8 @@ impl ConfigWatcher {
                             Err(err) => tracing::warn!("config watcher: {err}"),
                         }
                     }
+                    // A symlink now points elsewhere: the config may differ.
+                    changed |= moved;
                     if changed {
                         on_change();
                     }
@@ -365,5 +416,68 @@ mod tests {
         let changed = rx.recv_timeout(Duration::from_secs(3));
         std::fs::remove_dir_all(&base).unwrap();
         assert!(changed.is_ok(), "change behind the symlink not reported");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn notices_a_directory_replaced_by_rename() {
+        let base = std::env::temp_dir().join(format!("nuntio-watch-swap-{}", std::process::id()));
+        let (dir, new) = (base.join("nuntio"), base.join("new"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        std::fs::write(new.join("config.toml"), "scrollback = 5").unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&path, None, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        std::fs::rename(&dir, base.join("old")).unwrap();
+        std::fs::rename(&new, &dir).unwrap();
+        let swapped = rx.recv_timeout(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(&path, "scrollback = 6").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(swapped.is_ok(), "replaced directory not noticed");
+        assert!(changed.is_ok(), "change in the new directory not noticed");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn follows_a_symlink_retargeted_to_another_directory() {
+        let base =
+            std::env::temp_dir().join(format!("nuntio-watch-retarget-{}", std::process::id()));
+        let config_dir = base.join("config");
+        let (a, b) = (base.join("dots/a"), base.join("dots/b"));
+        for dir in [&config_dir, &a, &b] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(a.join("nuntio.toml"), "").unwrap();
+        std::fs::write(b.join("nuntio.toml"), "").unwrap();
+        let link = config_dir.join("config.toml");
+        std::os::unix::fs::symlink(a.join("nuntio.toml"), &link).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let _watcher = ConfigWatcher::new(&link, None, move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        let tmp = config_dir.join("tmp");
+        std::os::unix::fs::symlink(b.join("nuntio.toml"), &tmp).unwrap();
+        std::fs::rename(&tmp, &link).unwrap();
+        let retargeted = rx.recv_timeout(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+        std::fs::write(b.join("nuntio.toml"), "scrollback = 5").unwrap();
+        let changed = rx.recv_timeout(Duration::from_secs(3));
+        std::fs::remove_dir_all(&base).unwrap();
+        assert!(retargeted.is_ok(), "retargeted symlink not noticed");
+        assert!(changed.is_ok(), "change in the new target not noticed");
     }
 }
