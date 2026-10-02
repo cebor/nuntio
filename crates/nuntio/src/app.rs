@@ -177,6 +177,18 @@ fn round_corners(window: &Window) {
     }
 }
 
+/// The X11 window id, if winit created an X11 window.
+fn x11_window_id(window: &Window) -> Option<u64> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        // `c_ulong`: 64 bits on Linux and macOS, 32 on Windows.
+        #[allow(clippy::unnecessary_cast)]
+        RawWindowHandle::Xlib(h) => Some(h.window as u64),
+        RawWindowHandle::Xcb(h) => Some(u64::from(h.window.get())),
+        _ => None,
+    }
+}
+
 /// The AppKit view winit draws the window's content in.
 #[cfg(target_os = "macos")]
 fn ns_view(window: &Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSView>> {
@@ -283,6 +295,8 @@ pub struct App {
 /// Everything the app keeps besides the window's state, so that handlers
 /// can borrow both at once.
 struct Core {
+    /// X11 id of the window, for new panes' $WINDOWID.
+    window_id: Option<u64>,
     config: Config,
     config_path: Option<PathBuf>,
     /// Keeps hot reload running.
@@ -402,6 +416,7 @@ impl Core {
             os_dark: true,
             banner,
             window: None,
+            window_id: None,
             proxy,
             bindings,
             system_monitor: None,
@@ -1062,6 +1077,7 @@ impl Core {
             .collect();
         self.notify(Banner::config(Severity::Warning, warnings));
         self.set_os_dark(None, window.theme() != Some(WindowTheme::Light));
+        self.window_id = x11_window_id(&window);
         let pane = self.spawn_first_pane()?;
         self.window = Some(window.clone());
         let mut state = WindowState::new(window, renderer, pane, chrome, transparent);

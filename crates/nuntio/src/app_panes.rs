@@ -126,6 +126,7 @@ impl Core {
             term: term_options(&self.config),
             palette: self.palette.clone(),
             env: crate::pane_env::pane_env(self.config_path.as_deref(), distro.is_some()),
+            window_id: self.window_id,
         };
         let term = TermHandle::spawn(options, size, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));

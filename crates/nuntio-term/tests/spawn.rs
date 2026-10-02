@@ -37,8 +37,11 @@ fn spawn_with(
     env: Vec<(String, String)>,
     term: TermOptions,
 ) -> (TermHandle, mpsc::Receiver<TermEvent>) {
-    let (tx, rx) = mpsc::channel();
-    let options = SpawnOptions {
+    start(options(script, env, term))
+}
+
+fn options(script: &str, env: Vec<(String, String)>, term: TermOptions) -> SpawnOptions {
+    SpawnOptions {
         shell: Some(Shell {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), script.into()],
@@ -48,7 +51,12 @@ fn spawn_with(
         term,
         palette: Default::default(),
         env,
-    };
+        window_id: None,
+    }
+}
+
+fn start(options: SpawnOptions) -> (TermHandle, mpsc::Receiver<TermEvent>) {
+    let (tx, rx) = mpsc::channel();
     let handle = TermHandle::spawn(options, SIZE, move |event| {
         let _ = tx.send(event);
     })
@@ -230,6 +238,7 @@ fn login_shell_is_seen_behind_login() {
         term: OPTIONS,
         palette: Default::default(),
         env: Vec::new(),
+        window_id: None,
     };
     let handle = TermHandle::spawn(options, SIZE, move |event| {
         let _ = tx.send(event);
@@ -379,6 +388,19 @@ fn color_queries_see_runtime_overrides() {
         }
     }
     assert!(screen_contains(&handle, "OK"));
+}
+
+#[test]
+fn window_id_variables() {
+    let script = "printf \"[$WINDOWID][$ALACRITTY_WINDOW_ID]\"";
+    let (handle, rx) = start(options(script, vec![], OPTIONS));
+    wait_for_exit(&rx);
+    assert_eq!(line_text(&handle, 0), "[][]");
+    let mut o = options(script, vec![], OPTIONS);
+    o.window_id = Some(42);
+    let (handle, rx) = start(o);
+    wait_for_exit(&rx);
+    assert_eq!(line_text(&handle, 0), "[42][]");
 }
 
 #[test]

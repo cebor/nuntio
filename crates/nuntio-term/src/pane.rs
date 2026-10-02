@@ -81,6 +81,9 @@ pub struct SpawnOptions {
     pub palette: Palette,
     /// More environment variables for the shell; they replace inherited ones.
     pub env: Vec<(String, String)>,
+    /// The X11 window id the pane lives in, for programs that read `$WINDOWID`.
+    /// `None` on Wayland, macOS and Windows: the variable is then empty.
+    pub window_id: Option<u64>,
 }
 
 /// Terminal grid size plus the cell size in physical pixels.
@@ -278,6 +281,20 @@ impl TermHandle {
                 env!("CARGO_PKG_VERSION").into(),
             ),
         ]);
+        // alacritty sets both to the window id it is given and offers no way to
+        // unset them; `Options::env` is applied last, so empty values win. Empty
+        // is the closest to unset: `[ -n "$WINDOWID" ]` behaves as if it were.
+        #[cfg(unix)]
+        env.extend([
+            (
+                "WINDOWID".into(),
+                options
+                    .window_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+            ),
+            ("ALACRITTY_WINDOW_ID".into(), String::new()),
+        ]);
         env.extend(options.env);
         #[cfg(windows)]
         env.insert(
@@ -302,7 +319,12 @@ impl TermHandle {
             #[cfg(target_os = "windows")]
             escape_args: true,
         };
-        let pty = tty::new(&pty_options, size.window_size(), 0).map_err(SpawnError::Pty)?;
+        let pty = tty::new(
+            &pty_options,
+            size.window_size(),
+            options.window_id.unwrap_or(0),
+        )
+        .map_err(SpawnError::Pty)?;
         #[cfg(unix)]
         let child_pid = Some(pty.child().id());
         #[cfg(windows)]
