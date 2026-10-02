@@ -80,7 +80,7 @@ impl SearchBar {
                     Some(previous) => search.continue_from(previous),
                     None => search,
                 };
-                term.search(&mut search, true);
+                term.search_while_typing(&mut search);
                 self.search = Some(search);
             }
             Err(err) => {

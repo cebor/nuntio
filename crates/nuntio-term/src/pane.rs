@@ -666,7 +666,19 @@ impl TermHandle {
     /// Select the next match upwards (older output) or downwards and scroll
     /// to it. Returns whether there is a match.
     pub fn search(&self, search: &mut Search, up: bool) -> bool {
-        search::find(&mut self.term.lock(), search, up)
+        search::find(&mut self.term.lock(), search, up, None)
+    }
+
+    /// Find the nearest match upwards after the query changed. Scans at most
+    /// `MAX_SEARCH_WHILE_TYPING` lines; the next/previous commands still find
+    /// matches further away.
+    pub fn search_while_typing(&self, search: &mut Search) -> bool {
+        search::find(
+            &mut self.term.lock(),
+            search,
+            true,
+            Some(search::MAX_SEARCH_WHILE_TYPING),
+        )
     }
 
     /// The link (OSC 8 hyperlink or URL) at a viewport position.

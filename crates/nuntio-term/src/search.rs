@@ -9,6 +9,10 @@ use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 /// Matches counted at most; beyond that the count shows as "999+".
 const MAX_COUNTED: usize = 999;
 
+/// Lines scanned for a match while the query is being typed, as in
+/// alacritty; next/previous scan everything.
+pub(crate) const MAX_SEARCH_WHILE_TYPING: usize = 1000;
+
 /// The query is not a valid regular expression.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -26,6 +30,57 @@ pub struct Search {
     history: usize,
     /// Where the current match is among all matches, as of the last `find`.
     position: Option<MatchPosition>,
+    /// The matches of the last scan, reused by next/previous.
+    counted: Option<Counted>,
+}
+
+/// Starts of the matches in the scrollback, in grid order, as of `history`.
+struct Counted {
+    starts: Vec<Point>,
+    more: bool,
+    history: usize,
+}
+
+impl Counted {
+    /// Scan the whole scrollback for at most `MAX_COUNTED` matches.
+    fn scan<T>(term: &Term<T>, regex: &mut RegexSearch, history: usize) -> Self {
+        let start = Point::new(term.topmost_line(), Column(0));
+        let end = Point::new(term.bottommost_line(), term.last_column());
+        let mut starts = Vec::new();
+        let mut more = false;
+        for m in RegexIter::new(start, end, Direction::Right, term, regex) {
+            if starts.len() == MAX_COUNTED {
+                more = true;
+                break;
+            }
+            starts.push(*m.start());
+        }
+        Self {
+            starts,
+            more,
+            history,
+        }
+    }
+
+    /// `None` when `current` isn't covered, i.e. the output changed since
+    /// the scan.
+    fn position(&self, current: Point) -> Option<MatchPosition> {
+        let total = self.starts.len();
+        match self.starts.binary_search(&current) {
+            Ok(i) => Some(MatchPosition {
+                index: Some(i + 1),
+                total,
+                more: self.more,
+            }),
+            // Beyond the counted matches: shown as "999+".
+            Err(i) if self.more && i == total => Some(MatchPosition {
+                index: None,
+                total,
+                more: true,
+            }),
+            Err(_) => None,
+        }
+    }
 }
 
 /// The current match's place among all matches in the scrollback.
@@ -59,6 +114,7 @@ impl Search {
             anchor: None,
             history: 0,
             position: None,
+            counted: None,
         })
     }
 
@@ -126,8 +182,14 @@ fn escape(text: &str) -> String {
 }
 
 /// Move to the next match upwards (older output) or downwards and scroll
-/// it into view. Wraps around the whole scrollback.
-pub(crate) fn find<T: EventListener>(term: &mut Term<T>, search: &mut Search, up: bool) -> bool {
+/// it into view. Wraps around the whole scrollback. `max_lines` limits how
+/// far the match is looked for.
+pub(crate) fn find<T: EventListener>(
+    term: &mut Term<T>,
+    search: &mut Search,
+    up: bool,
+    max_lines: Option<usize>,
+) -> bool {
     search.follow_output(term);
     let offset = term.grid().display_offset() as i32;
     let (direction, side) = if up {
@@ -152,34 +214,37 @@ pub(crate) fn find<T: EventListener>(term: &mut Term<T>, search: &mut Search, up
             }
         }),
     };
-    search.current = term.search_next(&mut search.regex, origin, direction, side, None);
+    search.current = term.search_next(&mut search.regex, origin, direction, side, max_lines);
     if let Some(m) = &search.current {
         term.scroll_to_point(*m.start());
     }
-    search.position = search.current.is_some().then(|| count(term, search));
+    search.position = search.current.is_some().then(|| position(term, search));
     search.current.is_some()
 }
 
-/// Count the matches in the whole scrollback, up to `MAX_COUNTED`, and
-/// find the current one among them.
-fn count<T>(term: &Term<T>, search: &mut Search) -> MatchPosition {
-    let start = Point::new(term.topmost_line(), Column(0));
-    let end = Point::new(term.bottommost_line(), term.last_column());
-    let current = search.current.as_ref().map(|m| *m.start());
-    let mut total = 0;
-    let mut index = None;
-    let mut more = false;
-    for m in RegexIter::new(start, end, Direction::Right, term, &mut search.regex) {
-        if total == MAX_COUNTED {
-            more = true;
-            break;
-        }
-        total += 1;
-        if Some(*m.start()) == current {
-            index = Some(total);
-        }
+/// Where the current match is among the matches of the scrollback, from the
+/// cached scan if the output hasn't changed since.
+fn position<T>(term: &Term<T>, search: &mut Search) -> MatchPosition {
+    let history = term.grid().history_size();
+    let current = *search
+        .current
+        .as_ref()
+        .expect("called with a current match")
+        .start();
+    if let Some(counted) = &search.counted
+        && counted.history == history
+        && let Some(position) = counted.position(current)
+    {
+        return position;
     }
-    MatchPosition { index, total, more }
+    let counted = Counted::scan(term, &mut search.regex, history);
+    let position = counted.position(current).unwrap_or(MatchPosition {
+        index: None,
+        total: counted.starts.len(),
+        more: counted.more,
+    });
+    search.counted = Some(counted);
+    position
 }
 
 /// All matches in the visible part of the screen, for highlighting.
@@ -233,14 +298,14 @@ mod tests {
         let mut term = term(4);
         feed(&mut term, "one\r\ntwo\r\nneedle\r\n");
         let mut search = Search::new("needle", false).unwrap();
-        assert!(find(&mut term, &mut search, true));
+        assert!(find(&mut term, &mut search, true, None));
         // More output pushes the match up into the scrollback.
         feed(&mut term, "x\r\ny\r\nz\r\n");
         let current = search.current_in(&term).cloned().unwrap();
         assert_eq!(text_at(&term, &current), "needle");
         // Searching on starts from there, not from where it used to be.
         feed(&mut term, "needle\r\n");
-        assert!(find(&mut term, &mut search, false));
+        assert!(find(&mut term, &mut search, false, None));
         let next = search.current_in(&term).cloned().unwrap();
         assert!(next.start().line > current.start().line);
     }
@@ -250,14 +315,51 @@ mod tests {
         let mut term = term(3);
         feed(&mut term, "a1\r\nb\r\na2\r\nc\r\nd\r\na3\r\ne");
         let mut search = Search::new("a", false).unwrap();
-        assert!(find(&mut term, &mut search, true));
+        assert!(find(&mut term, &mut search, true, None));
         let position = search.position().unwrap();
         assert_eq!(
             (position.index, position.total, position.more),
             (Some(3), 3, false)
         );
-        assert!(find(&mut term, &mut search, true));
+        assert!(find(&mut term, &mut search, true, None));
         assert_eq!(search.position().unwrap().index, Some(2));
+    }
+
+    #[test]
+    fn typing_scans_a_limited_number_of_lines() {
+        let mut term = term(4);
+        feed(&mut term, "needle\r\n");
+        feed(&mut term, &"x\r\n".repeat(2500));
+        let mut search = Search::new("needle", false).unwrap();
+        assert!(!find(
+            &mut term,
+            &mut search,
+            true,
+            Some(MAX_SEARCH_WHILE_TYPING)
+        ));
+        let mut search = Search::new("needle", false).unwrap();
+        assert!(find(&mut term, &mut search, true, None));
+    }
+
+    #[test]
+    fn next_and_previous_reuse_the_count() {
+        let mut term = term(3);
+        feed(&mut term, "a1\r\nb\r\na2\r\nc\r\nd\r\na3\r\ne");
+        let mut search = Search::new("a", false).unwrap();
+        let mut seen = Vec::new();
+        for i in 0..4 {
+            assert!(find(&mut term, &mut search, true, None));
+            let position = search.position().unwrap();
+            assert_eq!(position.total, 3);
+            seen.push(position.index);
+            if i == 0 {
+                assert!(search.counted.is_some());
+            }
+        }
+        assert_eq!(seen, [Some(3), Some(2), Some(1), Some(3)]);
+        feed(&mut term, "\r\na4\r\nz\r\nz\r\n");
+        assert!(find(&mut term, &mut search, true, None));
+        assert_eq!(search.position().unwrap().total, 4);
     }
 
     #[test]
