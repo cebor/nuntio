@@ -9,7 +9,11 @@ on:
     paths:
       - "site/**"
       - "docs/**"
+      - "PRIVACY.md"
       - "assets/icon.svg"
+      - "assets/icons/png/32.png"
+      - "assets/screenshot.png"
+      - "assets/screenshots/**"
       - "xtask/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
