@@ -19,14 +19,18 @@ pub fn rasterize(style: UnderlineStyle, width: u32, stroke: u32) -> Option<Mask>
         UnderlineStyle::Single | UnderlineStyle::Double => return None,
         UnderlineStyle::Curly => curly(width, stroke),
         UnderlineStyle::Dotted => {
-            // Square dots, one stroke apart.
+            // Whole periods per cell, each a square dot followed by a gap, so
+            // neighbors never touch: the last dot ends at least a stroke before
+            // the cell edge.
+            let dot = stroke.min(width.saturating_sub(1).max(1));
+            let n = (width / (2 * stroke)).max(1);
             let row: Vec<u8> = (0..width)
                 .map(|x| {
-                    if (x / stroke).is_multiple_of(2) {
-                        255
-                    } else {
-                        0
-                    }
+                    let lit = (0..n).any(|i| {
+                        let start = i * width / n;
+                        x >= start && x < start + dot
+                    });
+                    if lit { 255 } else { 0 }
                 })
                 .collect();
             (stroke, row.repeat(stroke as usize))
@@ -94,6 +98,29 @@ mod tests {
         let row = |y: u32| mask.data[(y * 10) as usize..((y + 1) * 10) as usize].to_vec();
         assert!(row(0).iter().any(|&a| a > 0));
         assert!(row(3).iter().any(|&a| a > 0));
+    }
+
+    #[test]
+    fn dots_do_not_merge_across_cells() {
+        for width in [9u32, 10, 11] {
+            for stroke in [1u32, 2] {
+                let mask = rasterize(UnderlineStyle::Dotted, width, stroke).unwrap();
+                let row = &mask.data[..width as usize];
+                let two: Vec<bool> = row.iter().chain(row).map(|&a| a > 0).collect();
+                let mut x = 0;
+                while x < two.len() {
+                    if two[x] {
+                        let s = x;
+                        while x < two.len() && two[x] {
+                            x += 1;
+                        }
+                        assert_eq!(x - s, stroke as usize, "width {width} stroke {stroke}");
+                    } else {
+                        x += 1;
+                    }
+                }
+            }
+        }
     }
 
     #[test]
