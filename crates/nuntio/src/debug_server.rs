@@ -9,7 +9,7 @@
 //! followed by `bytes` bytes of raw RGBA pixels for images. Requests are
 //! handled on the main thread, one at a time.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::mpsc;
@@ -41,6 +41,8 @@ use nuntio_render::Rect;
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Frames kept by a recording unless the client asks for another limit.
 const DEFAULT_MAX_FRAMES: usize = 60;
+/// The longest request line a connection may send, in bytes.
+const MAX_LINE: u64 = 64 * 1024;
 
 /// A request and where its reply goes.
 #[derive(Debug)]
@@ -258,18 +260,44 @@ fn token() -> String {
 }
 
 fn serve(stream: TcpStream, token: &str, proxy: &EventLoopProxy<UserEvent>) -> Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = stream;
+    let reader = BufReader::new(stream.try_clone()?);
+    serve_requests(reader, stream, token, |request| call(request, proxy))
+}
+
+/// Read one request line of at most `MAX_LINE` bytes; `false` at end of input.
+fn read_request_line(reader: &mut impl BufRead, line: &mut String) -> std::io::Result<bool> {
+    let read = reader.by_ref().take(MAX_LINE).read_line(line)?;
+    if read as u64 == MAX_LINE && !line.ends_with('\n') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "request line too long",
+        ));
+    }
+    Ok(read > 0)
+}
+
+/// Answer the requests of one connection until it ends. A request without
+/// the right token is answered with an error and ends the connection, so a
+/// client can't keep guessing on it.
+fn serve_requests(
+    mut reader: impl BufRead,
+    mut writer: impl Write,
+    token: &str,
+    mut handle: impl FnMut(Request) -> Reply,
+) -> Result<()> {
     let mut line = String::new();
-    while reader.read_line(&mut line)? > 0 {
-        let reply = match parse(&line, token) {
-            Ok(request) => call(request, proxy),
-            Err(err) => Reply::error(err),
+    while read_request_line(&mut reader, &mut line)? {
+        let (reply, authentic) = match parse(&line, token) {
+            Ok(request) => (handle(request), true),
+            Err(err) => (Reply::error(err), false),
         };
         writer.write_all(reply.json.to_string().as_bytes())?;
         writer.write_all(b"\n")?;
         writer.write_all(&reply.binary)?;
         writer.flush()?;
+        if !authentic {
+            return Ok(());
+        }
         line.clear();
     }
     Ok(())
@@ -912,6 +940,51 @@ mod tests {
         assert!(!same_token("abc124", "abc123"));
         assert!(!same_token("abc", "abc123"));
         assert!(!same_token("", "abc123"));
+    }
+
+    #[test]
+    fn long_lines_are_refused() {
+        let mut out = Vec::new();
+        let result = serve_requests(
+            std::io::Cursor::new(vec![b'a'; 70_000]),
+            &mut out,
+            "secret",
+            |_| unreachable!(),
+        );
+        assert!(result.is_err());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_wrong_token_closes_the_connection() {
+        let input =
+            "{\"token\":\"guess\",\"cmd\":\"state\"}\n{\"token\":\"secret\",\"cmd\":\"state\"}\n";
+        let mut out = Vec::new();
+        let mut calls = 0;
+        serve_requests(input.as_bytes(), &mut out, "secret", |_| {
+            calls += 1;
+            Reply::ok(json!({}))
+        })
+        .unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(calls, 0);
+        assert_eq!(out.lines().count(), 1);
+        assert!(out.contains("\"ok\":false"), "{out}");
+    }
+
+    #[test]
+    fn requests_share_a_connection() {
+        let input =
+            "{\"token\":\"secret\",\"cmd\":\"state\"}\n{\"token\":\"secret\",\"cmd\":\"state\"}\n";
+        let mut out = Vec::new();
+        let mut calls = 0;
+        serve_requests(input.as_bytes(), &mut out, "secret", |_| {
+            calls += 1;
+            Reply::ok(json!({}))
+        })
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(String::from_utf8(out).unwrap().lines().count(), 2);
     }
 
     #[test]
