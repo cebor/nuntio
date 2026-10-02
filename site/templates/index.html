@@ -6,7 +6,6 @@
 {% set headers = ["Authorization=Bearer " ~ token] if token else [] %}
 {% set release = load_data(url="https://api.github.com/repos/cebor/nuntio/releases/latest", format="json", headers=headers, required=token != "") %}
 {% set releases_url = config.extra.repo ~ "/releases/latest" %}
-<main>
   <section class="hero">
     <div class="wrap hero-head">
       <h1>A fast terminal with tabs, split panes and a config that reloads while you type.</h1>
@@ -169,7 +168,6 @@ dark = <span class="c-y">"Tokyo Night"</span></code></pre>
       {% endif %}
     </div>
   </section>
-</main>
 <script>
   // Point the hero button at the visitor's platform. Without JS it jumps to #download.
   (function () {
