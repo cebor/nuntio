@@ -301,16 +301,28 @@ impl TermHandle {
             "WSLENV".into(),
             wslenv(std::env::var("WSLENV").ok().as_deref()),
         );
+        #[cfg(target_os = "macos")]
+        let login = match &options.shell {
+            Some(shell) if options.login_shell => {
+                let user = std::env::var("USER").unwrap_or_default();
+                // `login` looks for `.hushlogin` in the current directory only.
+                let hush = std::env::var_os("HOME")
+                    .is_some_and(|home| Path::new(&home).join(".hushlogin").exists());
+                let login = login_command(shell, &user, hush);
+                if login.is_none() {
+                    tracing::debug!("USER is not set, starting the shell without login");
+                }
+                login
+            }
+            _ => None,
+        };
+        #[cfg(not(target_os = "macos"))]
+        let login: Option<Shell> = None;
         // Without a shell, alacritty runs the default one through `login`
         // on macOS as well.
-        let via_login =
-            cfg!(target_os = "macos") && (options.shell.is_none() || options.login_shell);
+        let via_login = cfg!(target_os = "macos") && (options.shell.is_none() || login.is_some());
         let runs_command = options.shell.is_some() && !options.login_shell;
-        let shell = match options.shell {
-            #[cfg(target_os = "macos")]
-            Some(shell) if options.login_shell => Some(login_command(&shell)),
-            shell => shell,
-        };
+        let shell = login.or(options.shell);
         let pty_options = tty::Options {
             shell: shell.map(|s| tty::Shell::new(s.program, s.args)),
             working_directory: options.working_directory,
@@ -798,27 +810,22 @@ fn passwd_shell() -> Option<String> {
 /// through `login -flp`, which registers the session, with `exec -a` giving
 /// the shell a `-` in front of its name (`-l` keeps `login` from doing
 /// that, and from changing to the home directory).
-#[cfg(target_os = "macos")]
-fn login_command(shell: &Shell) -> Shell {
-    let user = std::env::var("USER").unwrap_or_default();
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn login_command(shell: &Shell, user: &str, hush: bool) -> Option<Shell> {
     if user.is_empty() {
-        tracing::debug!("USER is not set, starting the shell without login");
-        return shell.clone();
+        return None;
     }
-    // `login` looks for `.hushlogin` in the current directory only.
-    let hush =
-        std::env::var_os("HOME").is_some_and(|home| Path::new(&home).join(".hushlogin").exists());
     let flags = if hush { "-qflp" } else { "-flp" };
-    Shell {
+    Some(Shell {
         program: "/usr/bin/login".into(),
         args: vec![
             flags.into(),
-            user,
+            user.into(),
             "/bin/zsh".into(),
             "-fc".into(),
             exec_as_login(shell),
         ],
-    }
+    })
 }
 
 /// The zsh command that starts `shell` with `-<name>` as `argv[0]`.
@@ -961,6 +968,28 @@ mod tests {
             exec_as_login(&shell),
             r#"exec -a '-fish' '/opt/homebrew/bin/fish' '--init-command' 'echo '\''hi'\'' $HOME'"#
         );
+    }
+
+    #[test]
+    fn login_is_only_used_with_a_user() {
+        let zsh = Shell {
+            program: "/bin/zsh".into(),
+            args: vec![],
+        };
+        assert!(login_command(&zsh, "", false).is_none());
+        let l = login_command(&zsh, "felix", false).unwrap();
+        assert_eq!(l.program, "/usr/bin/login");
+        assert_eq!(
+            l.args,
+            [
+                "-flp",
+                "felix",
+                "/bin/zsh",
+                "-fc",
+                "exec -a '-zsh' '/bin/zsh'"
+            ]
+        );
+        assert_eq!(login_command(&zsh, "felix", true).unwrap().args[0], "-qflp");
     }
 
     #[test]
