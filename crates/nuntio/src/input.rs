@@ -540,6 +540,15 @@ mod tests {
         assert_eq!(char_key("x", None, ctrl_meta).unwrap(), b"\x1b\x18");
         assert_eq!(char_key("é", Some("é"), NONE).unwrap(), "é".as_bytes());
         assert_eq!(char_key("a", None, NONE), None);
+        let dead = encode_with(
+            Key::Dead(Some('^')),
+            ch("^"),
+            None,
+            KeyLocation::Standard,
+            NONE,
+            TermMode::empty(),
+        );
+        assert_eq!(dead, None);
     }
 
     #[test]

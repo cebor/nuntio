@@ -62,6 +62,13 @@ impl Functional {
 pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     let report_events = mode.contains(TermMode::REPORT_EVENT_TYPES);
     let all_keys = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+
+    // A dead key types nothing by itself; the composed character follows as
+    // text. Windows reports it with its character as `unmodified`, which
+    // would send "CSI 94u" and leave a stray "^" before "ê".
+    if !all_keys && matches!(input.key, Key::Dead(_)) {
+        return None;
+    }
     let event = match input.event {
         KeyEventKind::Release if !report_events => return None,
         KeyEventKind::Repeat if !report_events => KeyEventKind::Press,
@@ -619,6 +626,27 @@ mod tests {
         // German: Shift+ß types "?".
         let sz = ch("ß").physical(KeyCode::Minus).shift("?");
         assert_eq!(sz.sends(m), "\x1b[223:63:45;2u");
+    }
+
+    #[test]
+    fn dead_keys_type_nothing_until_all_keys_are_reported() {
+        // Windows: "^" on a German layout.
+        let dead = || Press {
+            key: Key::Dead(Some('^')),
+            unmodified: Key::Character("^".into()),
+            text: None,
+            ..named(NamedKey::Escape)
+        };
+        assert_eq!(dead().encode(DISAMBIGUATE), None);
+        assert_eq!(
+            dead()
+                .event(KeyEventKind::Release)
+                .encode(DISAMBIGUATE | EVENTS),
+            None
+        );
+        assert_eq!(dead().encode(DISAMBIGUATE | ALTERNATES | TEXT), None);
+        assert_eq!(dead().sends(ALL_KEYS), "\x1b[94u");
+        assert_eq!(dead().sends(ALL_KEYS | TEXT), "\x1b[94u");
     }
 
     #[test]
