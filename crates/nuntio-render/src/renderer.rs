@@ -53,6 +53,12 @@ impl Instance {
             _pad: [0; 3],
         }
     }
+
+    fn fill(rect: Rect, color: [f32; 4]) -> Self {
+        let mut i = Self::solid_rect(rect, Rgb { r: 0, g: 0, b: 0 });
+        i.color = color;
+        i
+    }
 }
 
 #[repr(C)]
@@ -69,6 +75,31 @@ fn rgba(c: Rgb) -> [f32; 4] {
         c.b as f32 / 255.0,
         1.0,
     ]
+}
+
+/// The color a cleared or filled default background is stored as: with
+/// `transparent` its alpha is the window opacity, premultiplied if the
+/// surface expects that.
+fn base_color(background: Rgb, opacity: f32, transparent: bool, premultiplied: bool) -> [f32; 4] {
+    let [r, g, b, _] = rgba(background);
+    let a = if transparent {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    if premultiplied {
+        [r * a, g * a, b * a, a]
+    } else {
+        [r, g, b, a]
+    }
+}
+
+/// The instances of one pane, clipped to its area.
+struct PaneBatch {
+    /// Whether the first instance is a fill of `area`, drawn with the fill pipeline.
+    fill: bool,
+    range: Range<u32>,
+    area: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -123,6 +154,8 @@ pub struct Renderer {
     /// Scratch buffer for building cluster text without allocating.
     cluster_text: String,
     pipeline: wgpu::RenderPipeline,
+    /// Fills a pane whose default background differs from the clear color.
+    fill_pipeline: wgpu::RenderPipeline,
     /// Cuts the window's rounded corners out of the finished frame.
     cutout_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -135,7 +168,7 @@ pub struct Renderer {
     instances: Vec<Instance>,
     /// The instances of each pane and the area they are clipped to, so
     /// glyphs wider than their cell don't reach into the next pane.
-    pane_batches: Vec<(Range<u32>, Rect)>,
+    pane_batches: Vec<PaneBatch>,
     /// Instances from here on are UI (bars, overlays), drawn unclipped.
     ui_start: usize,
     /// Instances from here on are corner cutouts, drawn with their own
@@ -200,7 +233,8 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let (bind_group_layout, pipeline, cutout_pipeline) = create_pipelines(device, gpu.format());
+        let (bind_group_layout, pipeline, fill_pipeline, cutout_pipeline) =
+            create_pipelines(device, gpu.format());
 
         let instance_capacity = 4096;
         let instance_buffer = create_instance_buffer(device, instance_capacity);
@@ -222,6 +256,7 @@ impl Renderer {
             clusters: HashMap::new(),
             cluster_text: String::new(),
             pipeline,
+            fill_pipeline,
             cutout_pipeline,
             bind_group,
             bind_group_layout,
@@ -512,11 +547,18 @@ impl Renderer {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        for (range, area) in &self.pane_batches {
+        for batch in &self.pane_batches {
             // A pane outside the window has nothing to show.
-            if let Some([x, y, w, h]) = scissor(*area, (width, height)) {
+            if let Some([x, y, w, h]) = scissor(batch.area, (width, height)) {
                 pass.set_scissor_rect(x, y, w, h);
-                pass.draw(0..4, range.clone());
+                let mut range = batch.range.clone();
+                if batch.fill {
+                    pass.set_pipeline(&self.fill_pipeline);
+                    pass.draw(0..4, range.start..range.start + 1);
+                    range.start += 1;
+                    pass.set_pipeline(&self.pipeline);
+                }
+                pass.draw(0..4, range);
             }
         }
         pass.set_scissor_rect(0, 0, width, height);
@@ -529,22 +571,17 @@ impl Renderer {
 
     /// The frame's background, as the color the pass starts from.
     fn clear_color(&self, frame: &Frame) -> wgpu::Color {
-        let [r, g, b, _] = rgba(frame.background).map(f64::from);
-        let a = if self.gpu.transparent() {
-            f64::from(frame.background_opacity.clamp(0.0, 1.0))
-        } else {
-            1.0
-        };
-        // Blending keeps the target premultiplied, so start that way.
-        if self.gpu.premultiplied() {
-            wgpu::Color {
-                r: r * a,
-                g: g * a,
-                b: b * a,
-                a,
-            }
-        } else {
-            wgpu::Color { r, g, b, a }
+        let c = base_color(
+            frame.background,
+            frame.background_opacity,
+            self.gpu.transparent(),
+            self.gpu.premultiplied(),
+        );
+        wgpu::Color {
+            r: f64::from(c[0]),
+            g: f64::from(c[1]),
+            b: f64::from(c[2]),
+            a: f64::from(c[3]),
         }
     }
 
@@ -556,6 +593,18 @@ impl Renderer {
         self.cutout_start = usize::MAX;
         for pane in frame.panes {
             let start = self.instances.len() as u32;
+            // A pane whose default background differs from the clear color is
+            // filled first, so `push_pane` can skip runs equal to it.
+            let fill = pane.snapshot.background != frame.background;
+            if fill {
+                let color = base_color(
+                    pane.snapshot.background,
+                    frame.background_opacity,
+                    self.gpu.transparent(),
+                    self.gpu.premultiplied(),
+                );
+                self.instances.push(Instance::fill(pane.area, color));
+            }
             self.push_pane(pane.snapshot, pane.x, pane.y)?;
             if pane.dim > 0.0 {
                 let mut veil = Instance::solid_rect(pane.area, pane.snapshot.background);
@@ -563,7 +612,11 @@ impl Renderer {
                 self.instances.push(veil);
             }
             let end = self.instances.len() as u32;
-            self.pane_batches.push((start..end, pane.area));
+            self.pane_batches.push(PaneBatch {
+                fill,
+                range: start..end,
+                area: pane.area,
+            });
         }
         self.ui_start = self.instances.len();
         self.push_ui(frame.rects, frame.texts)?;
@@ -963,13 +1016,15 @@ fn unpad_rows(data: &[u8], width: u32, height: u32, padded_row: u32, bgra: bool)
     rgba
 }
 
-/// The layout of the quad shader's bindings, and its two pipelines: one
-/// that draws the quads, one that cuts the window's corners out.
+/// The layout of the quad shader's bindings, and its three pipelines: one
+/// that draws the quads, one that fills a pane's own background (replacing
+/// what is there, like the clear), one that cuts the window's corners out.
 fn create_pipelines(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
 ) -> (
     wgpu::BindGroupLayout,
+    wgpu::RenderPipeline,
     wgpu::RenderPipeline,
     wgpu::RenderPipeline,
 ) {
@@ -1060,6 +1115,8 @@ fn create_pipelines(
         dst_factor: wgpu::BlendFactor::SrcAlpha,
         operation: wgpu::BlendOperation::Add,
     };
+    // Replaces what is there, like the clear: a pane's own default background.
+    let fill_pipeline = create_pipeline("pane fill", "fs_main", wgpu::BlendState::REPLACE);
     let cutout_pipeline = create_pipeline(
         "corner cutout",
         "fs_cutout",
@@ -1068,7 +1125,7 @@ fn create_pipelines(
             alpha: scale_by_alpha,
         },
     );
-    (bind_group_layout, pipeline, cutout_pipeline)
+    (bind_group_layout, pipeline, fill_pipeline, cutout_pipeline)
 }
 
 fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -1115,6 +1172,15 @@ fn create_bind_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_color_matches_the_clear() {
+        let red = Rgb { r: 255, g: 0, b: 0 };
+        assert_eq!(base_color(red, 0.5, true, true), [0.5, 0.0, 0.0, 0.5]);
+        assert_eq!(base_color(red, 0.5, true, false), [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(base_color(red, 0.5, false, true), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(base_color(red, 2.0, true, true), [1.0, 0.0, 0.0, 1.0]);
+    }
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
         Rect {

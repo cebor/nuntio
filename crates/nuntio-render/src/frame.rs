@@ -26,7 +26,9 @@ pub struct PaneView<'a> {
     pub snapshot: &'a Snapshot,
     pub x: f32,
     pub y: f32,
-    /// Area covered by the pane (including padding), for dimming.
+    /// Area covered by the pane (including padding), for dimming. Filled with
+    /// the pane's own default background if that differs from
+    /// `Frame::background`.
     pub area: Rect,
     /// 0 = normal, 1 = fully covered by the background color.
     pub dim: f32,
