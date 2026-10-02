@@ -607,8 +607,10 @@ impl App {
         };
         match self.undo.pop() {
             Some(text) => {
-                if self.restore_text(text) {
+                if self.restore_text(text.clone()) {
                     self.message = Some((Tone::Normal, "Undone.".into()));
+                } else {
+                    self.undo.push(text);
                 }
             }
             // The parse error stays on screen.
@@ -920,7 +922,7 @@ fn picker_details(mode: &PickerMode) -> Vec<(Tone, String)> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use nuntio_config::schema::setting_at;
@@ -928,7 +930,7 @@ mod tests {
     use super::*;
 
     #[derive(Clone, Default)]
-    struct Memory(Rc<RefCell<Option<String>>>);
+    struct Memory(Rc<RefCell<Option<String>>>, Rc<Cell<bool>>);
 
     impl Store for Memory {
         fn read(&self) -> io::Result<Option<String>> {
@@ -936,12 +938,19 @@ mod tests {
         }
 
         fn write(&mut self, contents: &str) -> io::Result<()> {
+            if self.1.get() {
+                return Err(io::Error::other("read-only"));
+            }
             *self.0.borrow_mut() = Some(contents.to_owned());
             Ok(())
         }
     }
 
     impl Memory {
+        fn fail_writes(&self, on: bool) {
+            self.1.set(on);
+        }
+
         fn text(&self) -> String {
             self.0.borrow().clone().unwrap_or_default()
         }
@@ -952,7 +961,10 @@ mod tests {
     }
 
     fn app(source: Option<&str>) -> (App, Memory) {
-        let memory = Memory(Rc::new(RefCell::new(source.map(str::to_owned))));
+        let memory = Memory(
+            Rc::new(RefCell::new(source.map(str::to_owned))),
+            Rc::default(),
+        );
         let (themes, _) = ThemeSet::load(None);
         let app = App::new(
             Box::new(memory.clone()),
@@ -1667,6 +1679,22 @@ mod tests {
         app.key(Key::Char('R'));
         assert_eq!(memory.text(), "scrollback = 5\n");
         assert_eq!(app.undo.len(), 1);
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 5\n");
+    }
+
+    #[test]
+    fn a_failed_undo_keeps_its_entry() {
+        let (mut app, memory) = app(Some("scrollback = 5\n"));
+        go_to(&mut app, "scrollback");
+        app.key(Key::Right);
+        assert_eq!(memory.text(), "scrollback = 1005\n");
+        memory.fail_writes(true);
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 1005\n");
+        assert!(matches!(app.message, Some((Tone::Error, _))));
+        assert_eq!(app.undo.len(), 1);
+        memory.fail_writes(false);
         app.key(Key::Char('u'));
         assert_eq!(memory.text(), "scrollback = 5\n");
     }
