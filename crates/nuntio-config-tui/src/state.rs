@@ -1258,6 +1258,33 @@ mod tests {
     }
 
     #[test]
+    fn theme_section_keeps_comments() {
+        let (mut app, memory) = app(Some(
+            "# top\n[theme]\n# day\nlight = \"Dracula\" # sun\ndark = \"Dracula\"\n",
+        ));
+        app.section = Section::ALL
+            .iter()
+            .position(|s| *s == Section::Theme)
+            .unwrap();
+        app.row = 1;
+        app.key(Key::Enter);
+        type_text(&mut app, "solarized l");
+        app.key(Key::Enter);
+        assert_eq!(
+            memory.text(),
+            "# top\n[theme]\n# day\nlight = \"Solarized Light\" # sun\ndark = \"Dracula\"\n"
+        );
+        app.key(Key::Down);
+        app.key(Key::Enter);
+        type_text(&mut app, "tokyo");
+        app.key(Key::Enter);
+        let text = memory.text();
+        assert!(text.contains("# top") && text.contains("# day") && text.contains("# sun"));
+        assert!(text.contains("light = \"Solarized Light\""));
+        assert!(text.contains("dark = \"Tokyo Night\""), "{text}");
+    }
+
+    #[test]
     fn font_picker_accepts_any_name() {
         let (mut app, memory) = app(None);
         go_to(&mut app, "font.family");

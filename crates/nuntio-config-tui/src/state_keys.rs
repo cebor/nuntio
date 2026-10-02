@@ -439,6 +439,20 @@ impl App {
             }
             (PickTarget::Theme(_), Pick::Unset) => Box::new(|doc| doc.unset("theme")),
             (PickTarget::Theme(slot), Pick::Value(name)) => {
+                // In a `[theme]` section, change only the slot so comments stay.
+                let path = match slot {
+                    ThemeSlot::Light => Some("theme.light"),
+                    ThemeSlot::Dark => Some("theme.dark"),
+                    ThemeSlot::Single => None,
+                };
+                if let Some(path) = path
+                    && self
+                        .doc
+                        .get("theme")
+                        .is_some_and(|item| item.as_table_like().is_some())
+                {
+                    return Box::new(move |doc| doc.set(path, name));
+                }
                 let selection = match (self.config.theme.clone(), slot) {
                     (ThemeSelection::Auto { dark, .. }, ThemeSlot::Light) => {
                         ThemeSelection::Auto { light: name, dark }
