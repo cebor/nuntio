@@ -171,12 +171,11 @@ impl Pane {
 
     fn title(&self, mode: TabTitle) -> String {
         let wants_directory = matches!(mode, TabTitle::Auto | TabTitle::Path);
+        let foreground = self.term.foreground_info(wants_directory);
         let info = TitleInfo {
             application: self.title.clone(),
-            process: self.term.process_name(),
-            directory: wants_directory
-                .then(|| self.term.working_directory())
-                .flatten(),
+            process: foreground.process_name,
+            directory: foreground.working_directory,
             shell_idle: (mode == TabTitle::Auto)
                 .then(|| self.term.foreground_is_shell())
                 .flatten(),

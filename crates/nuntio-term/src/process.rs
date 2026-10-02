@@ -14,16 +14,33 @@ fn foreground_pid(shell_pid: u32) -> u32 {
     let Some(pgid) = sys::tpgid(shell_pid) else {
         return shell_pid;
     };
-    // A dead or zombie leader (`ls | less`) has no cwd.
-    if sys::cwd(pgid).is_some() {
+    // A dead or zombie leader (`ls | less`) is replaced by a member of its
+    // group; an unreadable cwd (other user, setuid) doesn't make it dead.
+    if sys::is_alive(pgid) {
         return pgid;
     }
     sys::group_member(pgid).unwrap_or(pgid)
 }
 
+/// What is running in the foreground of a pane.
+pub struct Foreground {
+    pub name: Option<String>,
+    pub cwd: Option<PathBuf>,
+}
+
+/// Name and, if wanted, working directory of the foreground process, from
+/// one lookup of its pid.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn foreground_name(shell_pid: u32) -> Option<String> {
-    sys::name(foreground_pid(shell_pid)).filter(|s| !s.is_empty())
+pub fn foreground(shell_pid: u32, want_cwd: bool) -> Foreground {
+    let pid = foreground_pid(shell_pid);
+    Foreground {
+        name: sys::name(pid).filter(|s| !s.is_empty()),
+        cwd: if want_cwd {
+            sys::cwd(pid).or_else(|| sys::cwd(shell_pid))
+        } else {
+            None
+        },
+    }
 }
 
 /// Whether the shell itself is in the foreground, i.e. waiting at its
@@ -31,11 +48,6 @@ pub fn foreground_name(shell_pid: u32) -> Option<String> {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn foreground_is_shell(shell_pid: u32) -> Option<bool> {
     sys::tpgid(shell_pid).map(|pid| pid == shell_pid)
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn working_directory(shell_pid: u32) -> Option<PathBuf> {
-    sys::cwd(foreground_pid(shell_pid)).or_else(|| sys::cwd(shell_pid))
 }
 
 /// The shell that `login` (see `pane::login_command`) started as its
@@ -46,17 +58,15 @@ pub fn login_child(login_pid: u32) -> Option<u32> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn foreground_name(_shell_pid: u32) -> Option<String> {
-    None
+pub fn foreground(_shell_pid: u32, _want_cwd: bool) -> Foreground {
+    Foreground {
+        name: None,
+        cwd: None,
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn foreground_is_shell(_shell_pid: u32) -> Option<bool> {
-    None
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn working_directory(_shell_pid: u32) -> Option<PathBuf> {
     None
 }
 
@@ -77,6 +87,14 @@ mod sys {
 
     pub fn cwd(pid: u32) -> Option<PathBuf> {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
+    /// Whether `pid` exists and isn't a zombie.
+    pub fn is_alive(pid: u32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| super::parse_state(&stat))
+            .is_some_and(|state| !matches!(state, 'Z' | 'X'))
     }
 
     /// The highest pid in process group `pgid`.
@@ -145,6 +163,12 @@ mod sys {
             .collect()
     }
 
+    /// Whether `pid` exists and isn't a zombie.
+    pub fn is_alive(pid: u32) -> bool {
+        pidinfo::<libc::proc_bsdinfo>(pid, libc::PROC_PIDTBSDINFO)
+            .is_some_and(|info| info.pbi_status != libc::SZOMB)
+    }
+
     /// The highest pid in process group `pgid`.
     pub fn group_member(pgid: u32) -> Option<u32> {
         // From <sys/proc_info.h>; the libc crate doesn't export it.
@@ -183,6 +207,16 @@ fn parse_tpgid(stat: &str) -> Option<u32> {
     // state ppid pgrp session tty_nr tpgid
     let tpgid: i64 = after_comm.split_whitespace().nth(5)?.parse().ok()?;
     u32::try_from(tpgid).ok().filter(|&pid| pid > 0)
+}
+
+/// Field 3 (`state`) of `/proc/<pid>/stat`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_state(stat: &str) -> Option<char> {
+    stat[stat.rfind(')')? + 1..]
+        .split_whitespace()
+        .next()?
+        .chars()
+        .next()
 }
 
 /// Field 5 (`pgrp`) of `/proc/<pid>/stat`.
@@ -232,7 +266,48 @@ mod tests {
         let found = sys::cwd(pid).map(|p| p.canonicalize().unwrap());
         assert_eq!(found, Some(cwd));
         assert!(sys::name(pid).is_some_and(|name| !name.is_empty()));
-        assert!(working_directory(pid).is_some());
-        assert!(foreground_name(pid).is_some());
+        let fg = foreground(pid, true);
+        assert!(fg.cwd.is_some());
+        assert!(fg.name.is_some());
+    }
+
+    #[test]
+    fn state_from_stat() {
+        assert_eq!(parse_state("42 (my (weird) cmd) Z 1 42"), Some('Z'));
+        assert_eq!(parse_state("1 (zsh) S 0"), Some('S'));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unreadable_cwd_is_not_a_dead_leader() {
+        // Root's cwd is readable when running as root.
+        if sys::cwd(1).is_some() {
+            return;
+        }
+        assert!(sys::is_alive(1));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn zombies_are_not_alive() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let id = child.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{id}/stat"))
+                .ok()
+                .and_then(|stat| parse_state(&stat));
+            if state == Some('Z') {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never became a zombie"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!sys::is_alive(id));
+        child.wait().unwrap();
+        assert!(!sys::is_alive(id));
     }
 }

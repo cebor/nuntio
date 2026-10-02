@@ -13,8 +13,8 @@ pub use alacritty_terminal::vte::ansi::Rgb;
 pub use osc_cwd::ReportedDir;
 pub use palette::{Palette, rgb};
 pub use pane::{
-    GridPoint, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent, TermHandle, TermOptions,
-    TermSize, default_shell_name,
+    ForegroundInfo, GridPoint, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent,
+    TermHandle, TermOptions, TermSize, default_shell_name,
 };
 pub use search::{MatchPosition, Search, SearchError};
 pub use snapshot::{

@@ -242,6 +242,12 @@ impl EventListener for Listener {
     }
 }
 
+/// What [`TermHandle::foreground_info`] reports.
+pub struct ForegroundInfo {
+    pub process_name: String,
+    pub working_directory: Option<PathBuf>,
+}
+
 /// One terminal: grid state, the shell's PTY and its IO thread.
 pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
@@ -497,9 +503,24 @@ impl TermHandle {
 
     /// Name of the foreground process, or the shell's name if unknown.
     pub fn process_name(&self) -> String {
-        self.shell_pid()
-            .and_then(process::foreground_name)
-            .unwrap_or_else(|| self.shell_name.clone())
+        self.foreground_info(false).process_name
+    }
+
+    /// Name and, if wanted, directory of the foreground process from one
+    /// lookup of its pid.
+    pub fn foreground_info(&self, want_directory: bool) -> ForegroundInfo {
+        let found = self
+            .shell_pid()
+            .map(|pid| process::foreground(pid, want_directory));
+        let (name, cwd) = found.map_or((None, None), |f| (f.name, f.cwd));
+        ForegroundInfo {
+            process_name: name.unwrap_or_else(|| self.shell_name.clone()),
+            working_directory: if want_directory {
+                self.directory_or_reported(cwd)
+            } else {
+                None
+            },
+        }
     }
 
     /// Whether the shell waits at its prompt, if it can be determined.
@@ -515,8 +536,11 @@ impl TermHandle {
     /// Working directory of the foreground process, if it can be
     /// determined. Otherwise the one the shell reported, if it exists here.
     pub fn working_directory(&self) -> Option<PathBuf> {
-        self.shell_pid()
-            .and_then(process::working_directory)
+        self.foreground_info(true).working_directory
+    }
+
+    fn directory_or_reported(&self, cwd: Option<PathBuf>) -> Option<PathBuf> {
+        cwd
             // A deleted directory; `chdir` into it would fail silently.
             .filter(|path| path.is_dir())
             .or_else(|| {
