@@ -35,6 +35,12 @@ const MAX_LOCKED_READ: usize = u16::MAX as usize;
 /// How long the PTY thread waits for messages between checks whether an
 /// image is decoded.
 const DECODE_POLL: Duration = Duration::from_millis(5);
+/// Length of the escape that begins a synchronized update (DEC 2026).
+const BSU_LEN: usize = b"\x1b[?2026h".len();
+/// Read passes after the program exited: 2 MiB, more than WslPipe buffers
+/// (`MAX_BUFFERED` + one read), but bounded for processes that outlive it
+/// and keep writing.
+const EXIT_DRAIN_PASSES: usize = 32;
 
 /// A message to the PTY thread.
 pub(crate) enum Msg {
@@ -42,6 +48,9 @@ pub(crate) enum Msg {
     Input(Cow<'static, [u8]>),
     Resize(WindowSize),
     Shutdown,
+    /// An image decode finished; only `decode_serving` waits for it, the
+    /// loop ignores it.
+    Decoded,
 }
 
 /// Sends [`Msg`]s to the PTY thread and wakes it up.
@@ -179,6 +188,7 @@ impl IoLoop {
                     Msg::Input(bytes) if bytes.is_empty() => {}
                     Msg::Input(bytes) => self.write_list.push_back(bytes),
                     Msg::Resize(size) => self.pty.resize(size),
+                    Msg::Decoded => {}
                     Msg::Shutdown => {
                         shutdown = true;
                         break;
@@ -190,8 +200,17 @@ impl IoLoop {
             }
 
             if events.is_empty() && !received && !more_output {
-                self.parser.stop_sync(&mut *self.term.lock());
-                self.listener.send_event(Event::Wakeup);
+                // Flush a synchronized update only at its deadline: messages
+                // taken while an image decoded can end the wait early.
+                if self
+                    .parser
+                    .sync_timeout()
+                    .sync_timeout()
+                    .is_some_and(|t| t <= Instant::now())
+                {
+                    self.parser.stop_sync(&mut *self.term.lock());
+                    self.listener.send_event(Event::Wakeup);
+                }
                 continue;
             }
 
@@ -208,14 +227,14 @@ impl IoLoop {
                     if let Some(status) = status {
                         self.listener.send_event(Event::ChildExit(status));
                     }
-                    while let Ok(true) = self.pty_read(&mut buf) {}
+                    self.drain_after_exit(&mut buf);
                     self.term.lock().exit();
                     self.listener.send_event(Event::Wakeup);
                     break;
                 }
                 #[cfg(windows)]
                 Some(BackendEvent::HelperFailed(status)) => {
-                    while let Ok(true) = self.pty_read(&mut buf) {}
+                    self.drain_after_exit(&mut buf);
                     tracing::warn!(?status, "nuntio-wsl did not start, falling back to ConPTY");
                     if self.fall_back(&poll, interest) {
                         more_output = false;
@@ -267,6 +286,16 @@ impl IoLoop {
         let _ = self.pty.deregister(&poll);
     }
 
+    /// Read the output left after the program exited, but not forever: a
+    /// process it started may keep the PTY open and write on.
+    fn drain_after_exit(&mut self, buf: &mut [u8]) {
+        for _ in 0..EXIT_DRAIN_PASSES {
+            if !matches!(self.pty_read(buf), Ok(true)) || self.shutdown_requested {
+                break;
+            }
+        }
+    }
+
     /// Read and parse the available output, holding the term lock for at
     /// most [`MAX_LOCKED_READ`] bytes. Inline images and cell size queries
     /// are taken out of the stream and handled here, in stream order.
@@ -278,6 +307,8 @@ impl IoLoop {
         let mut guard = None;
         let mut processed = 0;
         let mut capped = false;
+        // Output reached the grid, even if a synchronized update is open now.
+        let mut applied = false;
         loop {
             let n = match self.pty.read(buf) {
                 Ok(0) => break,
@@ -298,16 +329,29 @@ impl IoLoop {
             let mut input = PtyInput {
                 pty: &mut self.pty,
                 rx: &self.rx,
+                tx: &self.tx,
                 write_list: &mut self.write_list,
                 written: &mut self.written,
                 shutdown_requested: &mut self.shutdown_requested,
             };
             self.scanner.feed(&buf[..n], &mut |event| match event {
                 ScanEvent::Text(bytes) => {
-                    parser.advance(
-                        &mut **guard.get_or_insert_with(|| term.lock_unfair()),
-                        bytes,
-                    );
+                    let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
+                    let was_sync = parser.sync_timeout().sync_timeout().is_some();
+                    let before = parser.sync_bytes_count();
+                    parser.advance(term, bytes);
+                    let syncing = parser.sync_timeout().sync_timeout().is_some();
+                    // Output reached the grid although an update is open now:
+                    // a frame ended (even if the next one began), or text came
+                    // before a BSU, which isn't buffered itself. Text outside
+                    // an update counts only if none is open at the end of the
+                    // pass: the scanner splits escapes, and a lone ESC or the
+                    // first half of a BSU changes nothing.
+                    applied |= if was_sync {
+                        parser.sync_bytes_count() < before + bytes.len()
+                    } else {
+                        syncing && parser.sync_bytes_count() + BSU_LEN < bytes.len()
+                    };
                 }
                 ScanEvent::CellSizeQuery => {
                     let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
@@ -317,6 +361,9 @@ impl IoLoop {
                     });
                 }
                 ScanEvent::Image(request) => {
+                    if *input.shutdown_requested {
+                        return;
+                    }
                     let args = image::parse_args(&request.args);
                     if !args.inline {
                         tracing::debug!("inline image without inline=1 ignored");
@@ -341,6 +388,9 @@ impl IoLoop {
                         }
                         None => {
                             let decoded = decode_serving(&mut input, &request, &args, geometry);
+                            if *input.shutdown_requested {
+                                return;
+                            }
                             lease = Some(term.lease());
                             let Some(decoded) = decoded else {
                                 return;
@@ -368,6 +418,9 @@ impl IoLoop {
                     }
                 }
             });
+            if self.shutdown_requested {
+                break;
+            }
             processed += n;
             if processed >= MAX_LOCKED_READ {
                 capped = true;
@@ -376,9 +429,10 @@ impl IoLoop {
         }
         drop(guard);
         drop(lease);
-        // Redraw, but not in the middle of a synchronized update: its end,
-        // or its timeout in `run`, wakes the main thread.
-        if processed > 0 && self.parser.sync_timeout().sync_timeout().is_none() {
+        // Redraw, but not in the middle of a synchronized update unless a
+        // frame was applied: its end, or its timeout in `run`, wakes the
+        // main thread.
+        if processed > 0 && (applied || self.parser.sync_timeout().sync_timeout().is_none()) {
             self.listener.send_event(Event::Wakeup);
         }
         Ok(capped)
@@ -422,6 +476,7 @@ impl IoLoop {
 struct PtyInput<'a> {
     pty: &'a mut Backend,
     rx: &'a mpsc::Receiver<Msg>,
+    tx: &'a mpsc::Sender<Msg>,
     write_list: &'a mut VecDeque<Cow<'static, [u8]>>,
     written: &'a mut usize,
     shutdown_requested: &'a mut bool,
@@ -475,7 +530,12 @@ fn decode_serving(
     geometry: CellGeometry,
 ) -> Option<TermImage> {
     std::thread::scope(|scope| {
-        let worker = scope.spawn(|| decode(request, args, geometry));
+        let tx = input.tx.clone();
+        let worker = scope.spawn(move || {
+            let image = decode(request, args, geometry);
+            let _ = tx.send(Msg::Decoded);
+            image
+        });
         while !worker.is_finished() {
             match input.rx.recv_timeout(DECODE_POLL) {
                 Ok(msg) => {
@@ -484,6 +544,7 @@ fn decode_serving(
                         Msg::Input(bytes) => input.write_list.push_back(bytes),
                         Msg::Resize(size) => input.pty.resize(size),
                         Msg::Shutdown => *input.shutdown_requested = true,
+                        Msg::Decoded => {}
                     }
                     // A failure shows again when the loop writes next.
                     let _ = write_pending(input.pty, input.write_list, input.written);

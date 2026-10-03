@@ -184,6 +184,22 @@ fn image_in_a_synchronized_update_does_not_wake_the_main_thread() {
 }
 
 #[test]
+fn a_finished_synchronized_frame_wakes_although_the_next_one_began() {
+    let (handle, rx) = spawn(
+        "printf '\\033[?2026hone\\033[?2026l\\033[?2026htwo'; sleep 1; printf '\\033[?2026l'",
+    );
+    loop {
+        let event = rx.recv_timeout(Duration::from_secs(5)).expect("no wakeup");
+        if event == TermEvent::Wakeup {
+            break;
+        }
+    }
+    // The first frame, not the second flushed by the update's timeout.
+    let line = line_text(&handle, 0);
+    assert!(line.contains("one") && !line.contains("two"), "{line:?}");
+}
+
+#[test]
 fn extra_environment() {
     let env = vec![
         ("NUNTIO_CONFIG".to_owned(), "/tmp/x.toml".to_owned()),
