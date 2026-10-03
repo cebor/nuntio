@@ -458,8 +458,10 @@ fn setup(
         ..Default::default()
     }))?;
 
+    // The surface can't be larger than the largest texture.
+    let max = device.limits().max_texture_dimension_2d;
     let mut config = surface
-        .get_default_config(adapter, width.max(1), height.max(1))
+        .get_default_config(adapter, width.clamp(1, max), height.clamp(1, max))
         .ok_or(GpuError::UnsupportedSurface)?;
     // Colors in the config/themes are sRGB values; blending in a non-sRGB
     // target keeps them exact, like other terminals do.
