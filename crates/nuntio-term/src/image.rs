@@ -26,7 +26,7 @@ use base64::Engine;
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use image::imageops::{self, FilterType};
-use image::{DynamicImage, ImageDecoder, ImageReader, Limits, RgbaImage};
+use image::{ColorType, DynamicImage, ImageDecoder, ImageReader, Limits, RgbaImage};
 use thiserror::Error;
 
 use crate::image_scan::ImageRequest;
@@ -126,7 +126,7 @@ pub(crate) fn image_cell_ref(cell: &Cell) -> Option<(u32, usize, usize)> {
     let Color::Spec(rgb) = cell.fg else {
         return None;
     };
-    let [line, column] = cell.zerowidth()? else {
+    let [line, column, ..] = cell.zerowidth()? else {
         return None;
     };
     let index = |c: char| {
@@ -147,12 +147,16 @@ pub(crate) fn strip_image_text(text: String) -> String {
         return text;
     }
     let mut out = String::with_capacity(text.len());
-    let mut in_image = false;
+    // An image cell is the placeholder and two marks; anything after them
+    // is text, even if it lies in the marks' range.
+    let mut marks_left = 0u8;
     for c in text.chars() {
         if c == PLACEHOLDER {
-            in_image = true;
-        } else if !(in_image && is_mark(c)) {
-            in_image = false;
+            marks_left = 2;
+        } else if marks_left > 0 && is_mark(c) {
+            marks_left -= 1;
+        } else {
+            marks_left = 0;
             out.push(c);
         }
     }
@@ -288,9 +292,17 @@ pub(crate) fn decode(
     limits.max_image_width = Some(16384);
     limits.max_image_height = Some(16384);
     limits.max_alloc = Some(256 << 20);
+    let mut budget = limits.clone();
     reader.limits(limits);
     // The first frame of animations, upright as the file's EXIF says.
     let mut decoder = reader.into_decoder()?;
+    // `into_decoder` only checks the dimensions; reserve what decoding and
+    // the RGBA copy allocate.
+    budget.reserve(decoder.total_bytes())?;
+    if decoder.color_type() != ColorType::Rgba8 {
+        let (w, h) = decoder.dimensions();
+        budget.reserve(u64::from(w) * u64::from(h) * 4)?;
+    }
     let orientation = decoder.orientation()?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
@@ -420,11 +432,10 @@ impl ImageKey {
     }
 }
 
-/// A stored image and the screens it was placed on.
+/// A stored image and whether it was placed on the primary screen.
 struct StoredImage {
     image: Arc<TermImage>,
     on_primary: bool,
-    on_alt: bool,
 }
 
 /// The images of one pane, by the id their cells carry.
@@ -495,7 +506,6 @@ impl ImageStore {
             StoredImage {
                 image: Arc::new(image),
                 on_primary: false,
-                on_alt: false,
             },
         );
         self.order.push_back(id);
@@ -504,21 +514,20 @@ impl ImageStore {
     }
 
     /// Note that image `id` was placed on the alternate screen (`alt`) or
-    /// the primary one.
+    /// the primary one. Only the primary screen is remembered: alacritty
+    /// clears the alternate one whenever it is entered.
     pub(crate) fn placed(&mut self, id: u32, alt: bool) {
-        if let Some(stored) = self.images.get_mut(&id) {
-            if alt {
-                stored.on_alt = true;
-            } else {
-                stored.on_primary = true;
-            }
+        if !alt && let Some(stored) = self.images.get_mut(&id) {
+            stored.on_primary = true;
         }
     }
 
     /// Over budget, drop the oldest images no cell of the active screen
-    /// refers to, unless they were placed on the inactive screen, whose
-    /// grid isn't reachable. Still over the hard limit, drop the oldest
-    /// ones that aren't visible, wherever they were placed.
+    /// refers to, unless they were placed on the primary screen while the
+    /// alternate one is active: its grid isn't reachable. Images placed
+    /// only on the alternate screen aren't protected, as it is cleared
+    /// whenever it is entered. Still over the hard limit, drop the oldest
+    /// ones that aren't visible, wherever they were placed, and then any.
     pub(crate) fn evict<T: EventListener>(&mut self, term: &Term<T>) {
         if self.bytes <= self.budget {
             return;
@@ -527,11 +536,7 @@ impl ImageStore {
         let grid = term.grid();
         let referenced = referenced_ids(term, grid.topmost_line().0..=grid.bottommost_line().0);
         self.drop_oldest(self.budget, |id, stored| {
-            let on_inactive = if alt {
-                stored.on_primary
-            } else {
-                stored.on_alt
-            };
+            let on_inactive = alt && stored.on_primary;
             !referenced.contains(&id) && !on_inactive
         });
         if self.bytes > self.limit {
@@ -540,6 +545,11 @@ impl ImageStore {
             let mut visible = referenced_ids(term, 0..=screen_lines - 1);
             visible.extend(referenced_ids(term, -offset..=screen_lines - 1 - offset));
             self.drop_oldest(self.budget, |id, _| !visible.contains(&id));
+        }
+        // Overlapping images can keep any number of them visible: the limit
+        // holds anyway.
+        if self.bytes > self.limit {
+            self.drop_oldest(self.limit, |_, _| true);
         }
         let images = &self.images;
         self.recent.retain(|_, id| images.contains_key(id));
@@ -871,6 +881,24 @@ mod tests {
     }
 
     #[test]
+    fn a_decompression_bomb_is_rejected() {
+        // A GIF with a 16384×16384 screen and a 1×1 frame: 35 bytes that
+        // would decode to 1 GiB.
+        let gif = [
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x40, 0x00, 0x40, 0x80, 0x00, 0x00, 0xFF,
+            0xFF, 0xFF, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+            0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+        ];
+        let payload = base64::engine::general_purpose::STANDARD.encode(gif);
+        let request = request("inline=1", payload.into_bytes());
+        let result = decode(&request, &parse_args(&request.args), GEOMETRY);
+        assert!(
+            matches!(result, Err(ImageError::Image(image::ImageError::Limits(_)))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
     fn eviction_keeps_images_on_screen() {
         let mut term = term(4, 2);
         let mut parser: Processor = Processor::new();
@@ -1008,6 +1036,51 @@ mod tests {
     }
 
     #[test]
+    fn images_of_the_alt_screen_are_dropped_after_leaving_it() {
+        let mut term = term(4, 2);
+        let mut parser: Processor = Processor::new();
+        let mut store = ImageStore::with_budget(16);
+        parser.advance(&mut term, b"\x1b[?1049h");
+        let alt = store.insert(test_key(1), test_image(2, 2));
+        place(&mut term, alt, &test_image(2, 2));
+        store.placed(alt, true);
+        // alacritty clears the alternate screen whenever it is entered.
+        parser.advance(&mut term, b"\x1b[?1049l");
+        let primary = store.insert(test_key(2), test_image(2, 2));
+        place(&mut term, primary, &test_image(2, 2));
+        store.placed(primary, false);
+        store.evict(&term);
+        assert!(store.get(alt).is_none());
+        assert!(store.get(primary).is_some());
+    }
+
+    #[test]
+    fn the_hard_limit_holds_when_every_image_is_visible() {
+        let mut term = term(4, 2);
+        let mut parser: Processor = Processor::new();
+        // Budget 16 bytes, limit 32.
+        let mut store = ImageStore::with_budget(16);
+        // Each image leaves one column of the one before visible.
+        let [first, second, third] = [1, 2, 3].map(|n| {
+            parser.advance(&mut term, format!("\x1b[1;{n}H").as_bytes());
+            let id = store.insert(test_key(n), test_image(2, 2));
+            place(&mut term, id, &test_image(2, 2));
+            id
+        });
+        store.evict(&term);
+        assert!(store.get(first).is_none());
+        assert!(store.get(second).is_some());
+        assert!(store.get(third).is_some());
+    }
+
+    #[test]
+    fn an_image_cell_with_a_combining_mark_is_still_one() {
+        let mut cell = image_cell(1, 0, 0, Cell::default().bg);
+        cell.push_zerowidth('\u{301}');
+        assert_eq!(image_cell_ref(&cell), Some((1, 0, 0)));
+    }
+
+    #[test]
     fn translucent_pixels_are_scaled_premultiplied() {
         let mut source = RgbaImage::new(2, 1);
         source.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
@@ -1038,5 +1111,7 @@ mod tests {
             "ab\nc"
         );
         assert_eq!(strip_image_text("plain".into()), "plain");
+        // A Nerd Font icon after an image is text.
+        assert_eq!(strip_image_text(format!("{image}\u{F0001}x")), "\u{F0001}x");
     }
 }

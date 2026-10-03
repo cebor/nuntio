@@ -112,14 +112,13 @@ impl ImageScanner {
                 ESC => self.state = State::PayloadEsc,
                 CAN | SUB => self.reset(),
                 0..0x20 => {}
-                _ => {
-                    self.payload.push(b);
-                    if self.payload.len() > MAX_PAYLOAD {
-                        tracing::warn!("inline image larger than 64 MiB ignored");
-                        self.reset();
-                        self.state = State::Discard;
-                    }
+                // Checked before the push, which could double the buffer.
+                _ if self.payload.len() == MAX_PAYLOAD => {
+                    tracing::warn!("inline image larger than 64 MiB ignored");
+                    self.reset();
+                    self.state = State::Discard;
                 }
+                _ => self.payload.push(b),
             },
             State::PayloadEsc => {
                 self.dispatch(on_event);
