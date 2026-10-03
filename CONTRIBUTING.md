@@ -29,7 +29,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-On Linux it also builds the docs (`cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`), checks the minimum Rust version from `rust-version` in `Cargo.toml`, runs [`cargo deny check`](https://github.com/EmbarkStudios/cargo-deny) (licenses and advisories, configured in `deny.toml`), and builds the Linux package and the website.
+It also checks the minimum Rust version from `rust-version` in `Cargo.toml` (with and without the debug server) and builds the packages on all three systems; on Linux it builds the docs (`cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`), runs [`cargo deny check`](https://github.com/EmbarkStudios/cargo-deny) (licenses and advisories, configured in `deny.toml`) and builds the website.
 
 For changes to rendering or terminal emulation, please also check the affected cases manually, e.g. `vim`, `htop`, `tmux`, `less`, colored `git log`, emoji/CJK output and box drawing (`tree`, TUI borders).
 
@@ -42,6 +42,7 @@ For changes to rendering or terminal emulation, please also check the affected c
 | `crates/nuntio-config-tui` | The `nuntio-config` terminal UI |
 | `crates/nuntio-render` | wgpu renderer |
 | `crates/nuntio-term` | Wrapper around `alacritty_terminal` and the PTY |
+| `crates/nuntio-wsl` | Linux helper that gives WSL panes on Windows a real PTY over plain pipes |
 | `xtask` | Icons, packaging, changelog, website, debug driver (`drive`) |
 
 Conventions:

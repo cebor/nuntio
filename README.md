@@ -91,7 +91,7 @@ cargo run -r
 |---|---|
 | Linux | `.tar.gz`, plus `.deb` if [`cargo-deb`](https://crates.io/crates/cargo-deb) is installed and `.AppImage` if `appimagetool` is available |
 | macOS | universal (Intel + Apple Silicon) `.app` in a `.dmg` |
-| Windows | `.zip`, plus a setup `.exe` if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed |
+| Windows | `.zip` with the WSL helper `nuntio-wsl` (needs `rustup target add x86_64-unknown-linux-musl`), plus a setup `.exe` if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed |
 
 ### Command line
 

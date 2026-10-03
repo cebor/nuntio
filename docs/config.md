@@ -297,7 +297,7 @@ shell = { wsl = "Ubuntu", wsl_user = "root" }
 shell = { wsl = "Ubuntu", program = "fish", args = ["-l"] }
 ```
 
-New tabs start in your Linux home directory (`~`) or in `working_directory`, splits (and new tabs with `tabs.inherit_directory`) in the directory of the focused pane. nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM` and `TERM_PROGRAM_VERSION` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept.
+New tabs start in your Linux home directory (`~`) or in `working_directory`, splits (and new tabs with `tabs.inherit_directory`) in the directory of the focused pane. nuntio adds `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION` and `PI_FORCE_IMAGE_PROTOCOL` to `WSLENV`, so they reach programs inside WSL. Any `WSLENV` entries you already have are kept. `PI_FORCE_IMAGE_PROTOCOL` is `iterm2` in panes that run through nuntio-wsl and empty when a WSL pane falls back to ConPTY, so omp shows inline images only where they work.
 
 #### Working directory in WSL
 
