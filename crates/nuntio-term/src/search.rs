@@ -32,6 +32,9 @@ pub struct Search {
     position: Option<MatchPosition>,
     /// The matches of the last scan, reused by next/previous.
     counted: Option<Counted>,
+    /// The last `find` covered the whole scrollback; false after a bounded
+    /// miss.
+    searched_all: bool,
 }
 
 /// Starts of the matches in the scrollback, in grid order, as of
@@ -116,6 +119,7 @@ impl Search {
             history: 0,
             position: None,
             counted: None,
+            searched_all: true,
         })
     }
 
@@ -168,6 +172,12 @@ impl Search {
     pub fn position(&self) -> Option<MatchPosition> {
         self.position.filter(|_| self.current.is_some())
     }
+
+    /// Whether the last search covered the whole scrollback. A bounded
+    /// search while typing that found nothing didn't.
+    pub fn searched_all(&self) -> bool {
+        self.searched_all
+    }
 }
 
 /// Escape regex syntax so `text` matches literally.
@@ -218,6 +228,8 @@ pub(crate) fn find<T: EventListener>(
         }),
     };
     search.current = term.search_next(&mut search.regex, origin, direction, side, max_lines);
+    search.searched_all =
+        search.current.is_some() || max_lines.is_none_or(|max| term.grid().total_lines() <= max);
     if let Some(m) = &search.current {
         term.scroll_to_point(*m.start());
     }
@@ -343,8 +355,10 @@ mod tests {
             Some(MAX_SEARCH_WHILE_TYPING),
             0
         ));
+        assert!(!search.searched_all());
         let mut search = Search::new("needle", false).unwrap();
         assert!(find(&mut term, &mut search, true, None, 0));
+        assert!(search.searched_all());
     }
 
     #[test]

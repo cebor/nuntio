@@ -103,7 +103,8 @@ impl SearchBar {
         self.update(term);
     }
 
-    /// The regex error, "no match", or where the current match is ("3/17").
+    /// The regex error, "no match", a hint to search all when typing found
+    /// nothing nearby, or where the current match is ("3/17").
     fn status(&self) -> (String, bool) {
         if let Some(error) = &self.error {
             return (error.clone(), true);
@@ -112,6 +113,7 @@ impl SearchBar {
             return (String::new(), false);
         };
         match search.position() {
+            None if !search.searched_all() => ("Enter: search all".into(), false),
             None => ("no match".into(), true),
             Some(position) => (format_position(position), false),
         }
