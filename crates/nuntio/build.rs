@@ -18,7 +18,7 @@ fn main() {
             println!("cargo:rerun-if-changed={}", path.display());
         }
         if let Err(e) = build_wsl_helper() {
-            println!("cargo:warning=nuntio-wsl not built, WSL panes will use ConPTY: {e}");
+            println!("cargo:warning=nuntio-wsl not built: {e}");
         }
     }
 }
@@ -55,9 +55,18 @@ fn build_wsl_helper() -> Result<(), String> {
         .nth(3)
         .ok_or("unexpected OUT_DIR layout")?;
     // Without a fresh build, no helper: nuntio falls back to ConPTY and
-    // packaging stops. A running nuntio-wsl may hold the file.
+    // packaging stops. A running nuntio-wsl holds the file: then it stays,
+    // and the warning says why.
     let helper = exe_dir.join("nuntio-wsl");
-    let _ = fs::remove_file(&helper);
+    match fs::remove_file(&helper) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(format!(
+                "the previous nuntio-wsl stays, it is in use: close its WSL panes ({e})"
+            ));
+        }
+    }
 
     // Without rustup (or if it fails) just try the build.
     if let Ok(installed) = Command::new("rustup")
@@ -125,7 +134,10 @@ fn build_wsl_helper() -> Result<(), String> {
     // Copied, then renamed: never a half-written helper.
     let staged = exe_dir.join("nuntio-wsl.tmp");
     fs::copy(built, &staged).map_err(|e| e.to_string())?;
-    fs::rename(&staged, &helper).map_err(|e| e.to_string())?;
+    fs::rename(&staged, &helper).map_err(|e| {
+        let _ = fs::remove_file(&staged);
+        e.to_string()
+    })?;
     Ok(())
 }
 
