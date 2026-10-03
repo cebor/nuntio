@@ -177,9 +177,10 @@ fn map_key(event: KeyEvent) -> Option<Key> {
     if event.kind == KeyEventKind::Release {
         return None;
     }
-    // Ctrl+Alt is how AltGr arrives on some systems: that is text.
+    // On Windows AltGr arrives as Ctrl+Alt: that is text. Elsewhere Ctrl+Alt
+    // is a real combination.
     let ctrl = event.modifiers.contains(KeyModifiers::CONTROL)
-        && !event.modifiers.contains(KeyModifiers::ALT);
+        && !(cfg!(windows) && event.modifiers.contains(KeyModifiers::ALT));
     let shift = event.modifiers.contains(KeyModifiers::SHIFT);
     Some(match event.code {
         KeyCode::Char(c) if ctrl => Key::Ctrl(c.to_ascii_lowercase()),
@@ -264,10 +265,17 @@ mod tests {
     #[test]
     fn altgr_characters_are_text_not_ctrl() {
         let ev = |c, m| KeyEvent::new(KeyCode::Char(c), m);
-        assert_eq!(
-            map_key(ev('@', KeyModifiers::CONTROL | KeyModifiers::ALT)),
-            Some(Key::Char('@'))
-        );
+        if cfg!(windows) {
+            assert_eq!(
+                map_key(ev('@', KeyModifiers::CONTROL | KeyModifiers::ALT)),
+                Some(Key::Char('@'))
+            );
+        } else {
+            assert_eq!(
+                map_key(ev('d', KeyModifiers::CONTROL | KeyModifiers::ALT)),
+                Some(Key::Ctrl('d'))
+            );
+        }
         assert_eq!(
             map_key(ev('c', KeyModifiers::CONTROL)),
             Some(Key::Ctrl('c'))
