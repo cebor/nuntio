@@ -107,7 +107,8 @@ const PROGRAM: &str = "it could run a program";
 
 /// Why a link must not be opened, if it mustn't.
 pub fn check(url: &str) -> Result<(), String> {
-    let Some(path) = file_path(url, &local_host(), Drives::current())? else {
+    let drives = Drives::current();
+    let Some(path) = file_path(url, &local_host(), drives)? else {
         return Ok(());
     };
     // By name first: a missing file with a program extension is refused too.
@@ -124,7 +125,8 @@ pub fn check(url: &str) -> Result<(), String> {
     };
     let metadata =
         std::fs::metadata(&path).map_err(|err| format!("it can't be checked ({err})"))?;
-    if is_program(&path, &metadata) {
+    let exec_bits = !(drives == Drives::Wsl && on_windows_drive(&path));
+    if is_program(&path, &metadata, exec_bits) {
         return Err(PROGRAM.into());
     }
     Ok(())
@@ -132,6 +134,21 @@ pub fn check(url: &str) -> Result<(), String> {
 
 fn local_host() -> String {
     gethostname::gethostname().to_string_lossy().into_owned()
+}
+
+/// Whether `path` is on a Windows drive mounted by WSL (`/mnt/c/…`).
+/// Windows drives in WSL (DrvFs) mark every file executable; Windows decides
+/// by extension, which is checked anyway.
+fn on_windows_drive(path: &Path) -> bool {
+    use std::path::Component;
+    let mut components = path.components();
+    matches!(
+        (components.next(), components.next(), components.next()),
+        (Some(Component::RootDir), Some(Component::Normal(mnt)), Some(Component::Normal(drive)))
+            if mnt == "mnt"
+                && drive.len() == 1
+                && drive.as_encoded_bytes()[0].is_ascii_alphabetic()
+    )
 }
 
 /// What `/C:/…` in a `file://` URL means here.
@@ -210,20 +227,21 @@ fn file_path(url: &str, local_host: &str, drives: Drives) -> Result<Option<PathB
 }
 
 /// Opening it would start something: a known program type (including
-/// macOS app bundles, which are directories) or an executable file.
-fn is_program(path: &Path, metadata: &std::fs::Metadata) -> bool {
+/// macOS app bundles, which are directories) or, if `exec_bits` mean
+/// something there, an executable file.
+fn is_program(path: &Path, metadata: &std::fs::Metadata, exec_bits: bool) -> bool {
     if has_program_extension(path) {
         return true;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+        if exec_bits && metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
             return true;
         }
     }
     #[cfg(not(unix))]
-    let _ = metadata;
+    let _ = (metadata, exec_bits);
     false
 }
 
@@ -470,6 +488,19 @@ mod tests {
         assert!(p("file:///C:x", Wsl).is_err());
         assert_eq!(p("file:///C", Unsupported), some("/C"));
         assert_eq!(p("file:///tmp/x", Unsupported), some("/tmp/x"));
+    }
+
+    #[test]
+    fn windows_drives_in_wsl_are_recognized() {
+        for (path, expected) in [
+            ("/mnt/c", true),
+            ("/mnt/c/x.txt", true),
+            ("/mnt/cd/x", false),
+            ("/home/x", false),
+            ("/mnt", false),
+        ] {
+            assert_eq!(on_windows_drive(Path::new(path)), expected, "{path}");
+        }
     }
 
     #[test]
