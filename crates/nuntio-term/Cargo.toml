@@ -22,6 +22,7 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 # The protocol to nuntio-wsl, which runs WSL panes without ConPTY.
 nuntio-wsl.workspace = true
+windows-sys.workspace = true
 
 [lints]
 workspace = true

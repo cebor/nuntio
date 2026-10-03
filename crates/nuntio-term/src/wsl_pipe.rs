@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, ErrorKind, Read, Write};
+use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
@@ -24,8 +25,12 @@ use crate::backend::BackendEvent;
 /// No console window for `wsl.exe`.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const READ_SIZE: usize = 0x1_0000;
-/// How long the exit waits for the output pipes to close after `wsl.exe`
-/// exited, in case a process it started still holds them.
+/// Output buffered for the IO loop before the reader threads wait: the 1 MiB
+/// that alacritty puts behind ConPTY.
+const MAX_BUFFERED: usize = 0x10_0000;
+/// How long the exit waits without the IO loop reading anything for the
+/// output pipes to close after `wsl.exe` exited, in case a process it started
+/// still holds them.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) struct WslPipe {
@@ -33,6 +38,8 @@ pub(crate) struct WslPipe {
     /// Encoded frames for the input thread.
     frames: mpsc::Sender<Vec<u8>>,
     pid: u32,
+    /// wsl.exe, terminated when the pane goes away.
+    process: OwnedHandle,
     reported: bool,
 }
 
@@ -53,6 +60,11 @@ struct State {
     open_readers: u8,
     /// `wsl.exe` exited and its output is read; the status if known.
     exit: Option<Option<ExitStatus>>,
+    /// The pane is gone: output is dropped and readers don't wait.
+    closed: bool,
+    /// Bytes the IO loop has read, so the waiter can tell whether the drain
+    /// progresses.
+    consumed: u64,
 }
 
 impl State {
@@ -77,17 +89,53 @@ impl Shared {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Append output, waking the loop if it had drained everything.
+    /// Append output, waking the loop if it had drained everything. Waits
+    /// while the IO loop is `MAX_BUFFERED` behind.
     fn push(&self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
         let mut state = self.lock();
+        while !state.closed && state.output.len() >= MAX_BUFFERED {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        if state.closed {
+            return;
+        }
         let was_empty = state.output.is_empty();
         state.output.extend(bytes);
         if was_empty {
             state.wake();
         }
+    }
+
+    fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut state = self.lock();
+        if state.output.is_empty() {
+            return Err(ErrorKind::WouldBlock.into());
+        }
+        let was_full = state.output.len() >= MAX_BUFFERED;
+        let (front, _) = state.output.as_slices();
+        let n = front.len().min(buf.len());
+        buf[..n].copy_from_slice(&front[..n]);
+        state.output.drain(..n);
+        state.consumed += n as u64;
+        if was_full {
+            self.changed.notify_all();
+        }
+        Ok(n)
+    }
+
+    /// The pane went away: drop the output and release waiting readers.
+    fn close(&self) {
+        let mut state = self.lock();
+        state.closed = true;
+        state.output = VecDeque::new();
+        state.registration = None;
+        self.changed.notify_all();
     }
 
     fn reader_done(&self) {
@@ -115,6 +163,7 @@ impl WslPipe {
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()?;
         let pid = child.id();
+        let process = child.as_handle().try_clone_to_owned()?;
         let (Some(mut stdin), Some(mut stdout), Some(mut stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
@@ -180,12 +229,23 @@ impl WslPipe {
         let waiter = shared.clone();
         spawn_named("nuntio-wsl waiter", move || {
             let status = child.wait().ok();
-            let state = waiter.lock();
-            // All output comes before the exit.
-            let (mut state, _) = waiter
-                .changed
-                .wait_timeout_while(state, DRAIN_TIMEOUT, |s| s.open_readers > 0)
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut state = waiter.lock();
+            // All output comes before the exit, as long as the IO loop keeps
+            // reading it.
+            loop {
+                if state.open_readers == 0 || state.closed {
+                    break;
+                }
+                let consumed = state.consumed;
+                let (next, wait) = waiter
+                    .changed
+                    .wait_timeout(state, DRAIN_TIMEOUT)
+                    .unwrap_or_else(PoisonError::into_inner);
+                state = next;
+                if wait.timed_out() && state.consumed == consumed {
+                    break;
+                }
+            }
             state.exit = Some(status);
             state.wake();
         });
@@ -194,6 +254,7 @@ impl WslPipe {
             shared,
             frames,
             pid,
+            process,
             reported: false,
         })
     }
@@ -222,15 +283,7 @@ impl WslPipe {
     }
 
     pub(crate) fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut state = self.shared.lock();
-        if state.output.is_empty() {
-            return Err(ErrorKind::WouldBlock.into());
-        }
-        let (front, _) = state.output.as_slices();
-        let n = front.len().min(buf.len());
-        buf[..n].copy_from_slice(&front[..n]);
-        state.output.drain(..n);
-        Ok(n)
+        self.shared.read(buf)
     }
 
     /// Queue `buf` for the shell. Succeeds even after nuntio-wsl is gone:
@@ -267,11 +320,72 @@ impl WslPipe {
     }
 }
 
+impl Drop for WslPipe {
+    fn drop(&mut self) {
+        self.shared.close();
+        // SAFETY: the handle is owned and valid; for a process that already
+        // exited the call just fails. nuntio-wsl sees its stdin close and
+        // hangs up the shell.
+        unsafe {
+            windows_sys::Win32::System::Threading::TerminateProcess(
+                self.process.as_raw_handle(),
+                1,
+            );
+        }
+    }
+}
+
 fn proto_size(size: WindowSize) -> Size {
     Size {
         columns: size.num_cols,
         lines: size.num_lines,
         cell_width: size.cell_width,
         cell_height: size.cell_height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use super::*;
+
+    fn shared() -> Arc<Shared> {
+        Arc::new(Shared {
+            state: Mutex::new(State::default()),
+            changed: Condvar::new(),
+        })
+    }
+
+    /// Fill the buffer and start a reader thread that pushes one more byte.
+    fn blocked_pusher(shared: &Arc<Shared>) -> mpsc::Receiver<()> {
+        shared.push(&vec![0; MAX_BUFFERED]);
+        let (tx, rx) = mpsc::channel();
+        let pusher = shared.clone();
+        thread::spawn(move || {
+            pusher.push(b"x");
+            let _ = tx.send(());
+        });
+        rx
+    }
+
+    #[test]
+    fn a_full_buffer_holds_the_reader_until_output_is_read() {
+        let shared = shared();
+        let done = blocked_pusher(&shared);
+        assert!(done.recv_timeout(Duration::from_millis(100)).is_err());
+        shared.read(&mut [0; 0x1_0000]).unwrap();
+        assert!(done.recv_timeout(Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn closing_releases_a_waiting_reader_and_drops_the_output() {
+        let shared = shared();
+        let done = blocked_pusher(&shared);
+        assert!(done.recv_timeout(Duration::from_millis(100)).is_err());
+        shared.close();
+        assert!(done.recv_timeout(Duration::from_secs(5)).is_ok());
+        let err = shared.read(&mut [0; 16]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::WouldBlock);
     }
 }
