@@ -437,7 +437,12 @@ impl App {
     fn in_sync_or_broken(&mut self) -> Option<bool> {
         match self.reread("The file was changed elsewhere and has been reloaded.") {
             Reread::Unchanged => Some(false),
-            Reread::Unparsable => Some(true),
+            Reread::Unparsable => {
+                // The broken text came from outside: undo first goes back to
+                // what was loaded here. `reload` already pushed it after `e`.
+                self.push_undo(self.source.clone());
+                Some(true)
+            }
             Reread::Reloaded | Reread::Unreadable => None,
         }
     }
@@ -1706,6 +1711,19 @@ mod tests {
         app.key(Key::Char('u'));
         assert_eq!(memory.text(), "scrollback = 5\n");
         assert_eq!(app.config.scrollback, 5);
+    }
+
+    #[test]
+    fn undo_after_an_outside_syntax_error_restores_the_loaded_text_first() {
+        let (mut app, memory) = app(Some("scrollback = 5\n"));
+        go_to(&mut app, "scrollback");
+        app.key(Key::Right);
+        assert_eq!(memory.text(), "scrollback = 1005\n");
+        memory.set("[font");
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 1005\n");
+        app.key(Key::Char('u'));
+        assert_eq!(memory.text(), "scrollback = 5\n");
     }
 
     #[test]
