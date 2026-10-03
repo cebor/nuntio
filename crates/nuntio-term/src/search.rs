@@ -34,16 +34,17 @@ pub struct Search {
     counted: Option<Counted>,
 }
 
-/// Starts of the matches in the scrollback, in grid order, as of `history`.
+/// Starts of the matches in the scrollback, in grid order, as of
+/// `generation`.
 struct Counted {
     starts: Vec<Point>,
     more: bool,
-    history: usize,
+    generation: u64,
 }
 
 impl Counted {
     /// Scan the whole scrollback for at most `MAX_COUNTED` matches.
-    fn scan<T>(term: &Term<T>, regex: &mut RegexSearch, history: usize) -> Self {
+    fn scan<T>(term: &Term<T>, regex: &mut RegexSearch, generation: u64) -> Self {
         let start = Point::new(term.topmost_line(), Column(0));
         let end = Point::new(term.bottommost_line(), term.last_column());
         let mut starts = Vec::new();
@@ -58,7 +59,7 @@ impl Counted {
         Self {
             starts,
             more,
-            history,
+            generation,
         }
     }
 
@@ -183,12 +184,14 @@ fn escape(text: &str) -> String {
 
 /// Move to the next match upwards (older output) or downwards and scroll
 /// it into view. Wraps around the whole scrollback. `max_lines` limits how
-/// far the match is looked for.
+/// far the match is looked for. `generation` identifies the grid's content;
+/// the cached match count is reused only while it stays the same.
 pub(crate) fn find<T: EventListener>(
     term: &mut Term<T>,
     search: &mut Search,
     up: bool,
     max_lines: Option<usize>,
+    generation: u64,
 ) -> bool {
     search.follow_output(term);
     let offset = term.grid().display_offset() as i32;
@@ -218,26 +221,28 @@ pub(crate) fn find<T: EventListener>(
     if let Some(m) = &search.current {
         term.scroll_to_point(*m.start());
     }
-    search.position = search.current.is_some().then(|| position(term, search));
+    search.position = search
+        .current
+        .is_some()
+        .then(|| position(term, search, generation));
     search.current.is_some()
 }
 
 /// Where the current match is among the matches of the scrollback, from the
-/// cached scan if the output hasn't changed since.
-fn position<T>(term: &Term<T>, search: &mut Search) -> MatchPosition {
-    let history = term.grid().history_size();
+/// cached scan if the grid hasn't changed since.
+fn position<T>(term: &Term<T>, search: &mut Search, generation: u64) -> MatchPosition {
     let current = *search
         .current
         .as_ref()
         .expect("called with a current match")
         .start();
     if let Some(counted) = &search.counted
-        && counted.history == history
+        && counted.generation == generation
         && let Some(position) = counted.position(current)
     {
         return position;
     }
-    let counted = Counted::scan(term, &mut search.regex, history);
+    let counted = Counted::scan(term, &mut search.regex, generation);
     let position = counted.position(current).unwrap_or(MatchPosition {
         index: None,
         total: counted.starts.len(),
@@ -298,14 +303,14 @@ mod tests {
         let mut term = term(4);
         feed(&mut term, "one\r\ntwo\r\nneedle\r\n");
         let mut search = Search::new("needle", false).unwrap();
-        assert!(find(&mut term, &mut search, true, None));
+        assert!(find(&mut term, &mut search, true, None, 0));
         // More output pushes the match up into the scrollback.
         feed(&mut term, "x\r\ny\r\nz\r\n");
         let current = search.current_in(&term).cloned().unwrap();
         assert_eq!(text_at(&term, &current), "needle");
         // Searching on starts from there, not from where it used to be.
         feed(&mut term, "needle\r\n");
-        assert!(find(&mut term, &mut search, false, None));
+        assert!(find(&mut term, &mut search, false, None, 2));
         let next = search.current_in(&term).cloned().unwrap();
         assert!(next.start().line > current.start().line);
     }
@@ -315,13 +320,13 @@ mod tests {
         let mut term = term(3);
         feed(&mut term, "a1\r\nb\r\na2\r\nc\r\nd\r\na3\r\ne");
         let mut search = Search::new("a", false).unwrap();
-        assert!(find(&mut term, &mut search, true, None));
+        assert!(find(&mut term, &mut search, true, None, 0));
         let position = search.position().unwrap();
         assert_eq!(
             (position.index, position.total, position.more),
             (Some(3), 3, false)
         );
-        assert!(find(&mut term, &mut search, true, None));
+        assert!(find(&mut term, &mut search, true, None, 0));
         assert_eq!(search.position().unwrap().index, Some(2));
     }
 
@@ -335,10 +340,11 @@ mod tests {
             &mut term,
             &mut search,
             true,
-            Some(MAX_SEARCH_WHILE_TYPING)
+            Some(MAX_SEARCH_WHILE_TYPING),
+            0
         ));
         let mut search = Search::new("needle", false).unwrap();
-        assert!(find(&mut term, &mut search, true, None));
+        assert!(find(&mut term, &mut search, true, None, 0));
     }
 
     #[test]
@@ -348,7 +354,7 @@ mod tests {
         let mut search = Search::new("a", false).unwrap();
         let mut seen = Vec::new();
         for i in 0..4 {
-            assert!(find(&mut term, &mut search, true, None));
+            assert!(find(&mut term, &mut search, true, None, 0));
             let position = search.position().unwrap();
             assert_eq!(position.total, 3);
             seen.push(position.index);
@@ -358,8 +364,20 @@ mod tests {
         }
         assert_eq!(seen, [Some(3), Some(2), Some(1), Some(3)]);
         feed(&mut term, "\r\na4\r\nz\r\nz\r\n");
-        assert!(find(&mut term, &mut search, true, None));
+        assert!(find(&mut term, &mut search, true, None, 1));
         assert_eq!(search.position().unwrap().total, 4);
+    }
+
+    #[test]
+    fn output_that_does_not_scroll_is_counted() {
+        let mut term = term(24);
+        feed(&mut term, "a1\r\nb\r\na2");
+        let mut search = Search::new("a", false).unwrap();
+        assert!(find(&mut term, &mut search, true, None, 0));
+        assert_eq!(search.position().unwrap().total, 2);
+        feed(&mut term, "\r\na3");
+        assert!(find(&mut term, &mut search, true, None, 1));
+        assert_eq!(search.position().unwrap().total, 3);
     }
 
     #[test]

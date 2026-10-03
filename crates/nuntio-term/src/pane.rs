@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
@@ -198,6 +198,9 @@ struct ListenerInner {
     size: Mutex<WindowSize>,
     /// Coalesces wakeups: only one is in flight until the next snapshot.
     wakeup_pending: AtomicBool,
+    /// Bumped whenever the grid may have changed: output, resize, cleared
+    /// history, new options. Keys the find bar's cached match count.
+    output_generation: AtomicU64,
     /// File stem of the program nuntio started, to recognize conhost's
     /// default title.
     shell_name: String,
@@ -231,6 +234,7 @@ impl EventListener for Listener {
         let inner = &self.inner;
         let forward = match event {
             Event::Wakeup => {
+                inner.output_generation.fetch_add(1, Ordering::AcqRel);
                 if inner.wakeup_pending.swap(true, Ordering::AcqRel) {
                     return;
                 }
@@ -336,6 +340,7 @@ impl TermHandle {
                 palette: RwLock::new(options.palette),
                 size: Mutex::new(size.window_size()),
                 wakeup_pending: AtomicBool::new(false),
+                output_generation: AtomicU64::new(0),
                 shell_name: shell_name.clone(),
                 replies: Mutex::new(Vec::new()),
             }),
@@ -541,6 +546,16 @@ impl TermHandle {
         let mut term = self.term.lock();
         term.scroll_display(Scroll::Bottom);
         term.clear_screen(ClearMode::Saved);
+        drop(term);
+        self.touch_grid();
+    }
+
+    /// Mark the grid as changed outside the IO thread.
+    fn touch_grid(&self) {
+        self.listener
+            .inner
+            .output_generation
+            .fetch_add(1, Ordering::AcqRel);
     }
 
     pub fn start_selection(&self, kind: SelectionKind, point: GridPoint) {
@@ -595,6 +610,7 @@ impl TermHandle {
         term.resize(size);
         drop(term);
         self.sender.send(Msg::Resize(size.window_size()));
+        self.touch_grid();
     }
 
     /// Name of the foreground process, or the shell's name if unknown.
@@ -661,6 +677,7 @@ impl TermHandle {
     /// lines.
     pub fn set_options(&self, options: TermOptions) {
         self.term.lock().set_options(term_config(options));
+        self.touch_grid();
     }
 
     /// Change the colors, e.g. after a theme switch.
@@ -764,19 +781,33 @@ impl TermHandle {
     /// Select the next match upwards (older output) or downwards and scroll
     /// to it. Returns whether there is a match.
     pub fn search(&self, search: &mut Search, up: bool) -> bool {
-        search::find(&mut self.term.lock(), search, up, None)
+        let mut term = self.term.lock();
+        // Read under the lock: later grid changes bump it afterwards, so the
+        // cached count can only be dropped too often, never kept stale.
+        let generation = self.output_generation();
+        search::find(&mut term, search, up, None, generation)
     }
 
     /// Find the nearest match upwards after the query changed. Scans at most
     /// `MAX_SEARCH_WHILE_TYPING` lines; the next/previous commands still find
     /// matches further away.
     pub fn search_while_typing(&self, search: &mut Search) -> bool {
+        let mut term = self.term.lock();
+        let generation = self.output_generation();
         search::find(
-            &mut self.term.lock(),
+            &mut term,
             search,
             true,
             Some(search::MAX_SEARCH_WHILE_TYPING),
+            generation,
         )
+    }
+
+    fn output_generation(&self) -> u64 {
+        self.listener
+            .inner
+            .output_generation
+            .load(Ordering::Acquire)
     }
 
     /// The link (OSC 8 hyperlink or URL) at a viewport position.
