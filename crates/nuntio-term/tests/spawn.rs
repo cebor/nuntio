@@ -141,11 +141,16 @@ fn inline_image_is_placed_at_the_cursor() {
     assert_eq!(snapshot.cell(2, 0).c, 'X');
 }
 
-/// An image inside a synchronized update (DEC 2026) is placed in stream
-/// order, but doesn't wake the main thread: nothing may be drawn before the
-/// update ends or times out (150 ms after the image).
-#[test]
-fn image_in_a_synchronized_update_does_not_wake_the_main_thread() {
+/// How long vte keeps a synchronized update (DEC 2026) open; it flushes it
+/// with a legitimate wakeup after that.
+const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
+
+/// One run of the image-in-an-update scenario. The events that arrived in
+/// the first 40 ms after the image was placed are only meaningful if the
+/// update's timeout can't have expired by then; a slow runner can stretch
+/// the wait past it, and `None` says so.
+fn image_in_a_synchronized_update()
+-> Option<(TermHandle, mpsc::Receiver<TermEvent>, Vec<TermEvent>)> {
     use base64::Engine;
 
     let mut png = std::io::Cursor::new(Vec::new());
@@ -153,22 +158,40 @@ fn image_in_a_synchronized_update_does_not_wake_the_main_thread() {
         .write_to(&mut png, image::ImageFormat::Png)
         .unwrap();
     let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    // One printf: the update must not begin long before the image.
     let (handle, rx) = spawn(&format!(
-        "printf '\\033[?2026h'; \
-         printf '\\033]1337;File=inline=1;width=2;height=1:%s\\007' '{data}'; \
+        "printf '\\033[?2026h\\033]1337;File=inline=1;width=2;height=1:%s\\007' '{data}'; \
          sleep 1; printf '\\033[?2026l'"
     ));
 
-    // Wait until the image is in the grid ...
+    // Wait until the image is in the grid. It was placed after the last
+    // snapshot that didn't show it began, so the update's timeout can't
+    // expire before `placed_after + SYNC_TIMEOUT`.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while handle.snapshot().images.is_empty() {
-        assert!(Instant::now() < deadline, "the image was not placed");
+    let mut placed_after = Instant::now();
+    loop {
+        let probe = Instant::now();
+        if !handle.snapshot().images.is_empty() {
+            break;
+        }
+        placed_after = probe;
+        assert!(probe < deadline, "the image was not placed");
         std::thread::sleep(Duration::from_millis(2));
     }
-    // ... and give a wrong wakeup time to arrive; the update times out only
-    // 150 ms after the image.
+    // A wrong wakeup comes right after the image, not with the timeout.
     std::thread::sleep(Duration::from_millis(40));
     let early: Vec<_> = rx.try_iter().collect();
+    (placed_after.elapsed() < SYNC_TIMEOUT).then_some((handle, rx, early))
+}
+
+/// An image inside a synchronized update (DEC 2026) is placed in stream
+/// order, but doesn't wake the main thread: nothing may be drawn before the
+/// update ends or times out.
+#[test]
+fn image_in_a_synchronized_update_does_not_wake_the_main_thread() {
+    let (_handle, rx, early) = (0..5)
+        .find_map(|_| image_in_a_synchronized_update())
+        .expect("runner too slow to tell a wrong wakeup from the update's timeout");
     assert!(
         !early.contains(&TermEvent::Wakeup),
         "woken inside the update: {early:?}"
