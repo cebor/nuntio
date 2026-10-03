@@ -14,6 +14,9 @@ fn main() {
         println!("cargo:rerun-if-changed=../nuntio-wsl/src");
         println!("cargo:rerun-if-changed=../nuntio-wsl/Cargo.toml");
         println!("cargo:rerun-if-changed=../../Cargo.lock");
+        if let Some(path) = rustlib_components() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
         if let Err(e) = build_wsl_helper() {
             println!("cargo:warning=nuntio-wsl not built, WSL panes will use ConPTY: {e}");
         }
@@ -45,6 +48,17 @@ fn build_wsl_helper() -> Result<(), String> {
         "aarch64" => "aarch64-unknown-linux-musl",
         arch => return Err(format!("no nuntio-wsl build for {arch}")),
     };
+    // OUT_DIR is <target>/[<triple>/]<profile>/build/nuntio-<hash>/out.
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
+    let exe_dir = out_dir
+        .ancestors()
+        .nth(3)
+        .ok_or("unexpected OUT_DIR layout")?;
+    // Without a fresh build, no helper: nuntio falls back to ConPTY and
+    // packaging stops. A running nuntio-wsl may hold the file.
+    let helper = exe_dir.join("nuntio-wsl");
+    let _ = fs::remove_file(&helper);
+
     // Without rustup (or if it fails) just try the build.
     if let Ok(installed) = Command::new("rustup")
         .args(["target", "list", "--installed"])
@@ -59,12 +73,6 @@ fn build_wsl_helper() -> Result<(), String> {
         ));
     }
 
-    // OUT_DIR is <target>/[<triple>/]<profile>/build/nuntio-<hash>/out.
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
-    let exe_dir = out_dir
-        .ancestors()
-        .nth(3)
-        .ok_or("unexpected OUT_DIR layout")?;
     // A separate target dir: the outer cargo holds the lock on this one.
     let target_dir = exe_dir.join("nuntio-wsl-build");
     let release = env::var("PROFILE").as_deref() == Ok("release");
@@ -96,6 +104,9 @@ fn build_wsl_helper() -> Result<(), String> {
             "--target-dir",
         ])
         .arg(&target_dir)
+        // Also for the build dir, which `build.build-dir` could put next to
+        // the outer build's, whose lock is held.
+        .env("CARGO_BUILD_BUILD_DIR", &target_dir)
         // Nothing nested may be read as a `cargo:` directive.
         .stdout(Stdio::null());
     if release {
@@ -107,13 +118,28 @@ fn build_wsl_helper() -> Result<(), String> {
             "`cargo build -p nuntio-wsl --target {triple}` failed"
         ));
     }
-    fs::copy(
-        target_dir
-            .join(triple)
-            .join(if release { "release" } else { "debug" })
-            .join("nuntio-wsl"),
-        exe_dir.join("nuntio-wsl"),
-    )
-    .map_err(|e| e.to_string())?;
+    let built = target_dir
+        .join(triple)
+        .join(if release { "release" } else { "debug" })
+        .join("nuntio-wsl");
+    // Copied, then renamed: never a half-written helper.
+    let staged = exe_dir.join("nuntio-wsl.tmp");
+    fs::copy(built, &staged).map_err(|e| e.to_string())?;
+    fs::rename(&staged, &helper).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// rustup's list of installed components, rewritten by `rustup target add`:
+/// the helper is built once its target is installed.
+fn rustlib_components() -> Option<PathBuf> {
+    let output = Command::new(env::var_os("RUSTC")?)
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
+    let sysroot = String::from_utf8(output.stdout).ok()?;
+    let path = Path::new(sysroot.trim())
+        .join("lib")
+        .join("rustlib")
+        .join("components");
+    path.is_file().then_some(path)
 }
