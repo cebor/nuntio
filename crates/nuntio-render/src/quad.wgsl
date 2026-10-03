@@ -12,12 +12,15 @@ struct Uniforms {
 @group(0) @binding(2) var color_atlas: texture_2d<f32>;
 @group(0) @binding(3) var atlas_sampler: sampler;
 @group(0) @binding(4) var image_atlas: texture_2d<f32>;
+// Smooth sampling for images drawn at another scale than their bitmap.
+@group(0) @binding(5) var image_sampler: sampler;
 
 const KIND_SOLID: u32 = 0u;
 const KIND_MASK: u32 = 1u;
 const KIND_COLOR: u32 = 2u;
 const KIND_ROUNDED: u32 = 3u;
 const KIND_IMAGE: u32 = 4u;
+const KIND_IMAGE_SCALED: u32 = 5u;
 
 struct Instance {
     @location(0) pos: vec2<f32>,
@@ -86,6 +89,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         }
         case KIND_IMAGE: {
             return textureSampleLevel(image_atlas, atlas_sampler, in.uv, 0.0);
+        }
+        case KIND_IMAGE_SCALED: {
+            return textureSampleLevel(image_atlas, image_sampler, in.uv, 0.0);
         }
         default: {
             return in.color;

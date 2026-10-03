@@ -19,6 +19,7 @@ const KIND_MASK: u32 = 1;
 const KIND_COLOR: u32 = 2;
 const KIND_ROUNDED: u32 = 3;
 const KIND_IMAGE: u32 = 4;
+const KIND_IMAGE_SCALED: u32 = 5;
 /// Upper bound for the mask atlas: 16 MiB at one byte per texel.
 const MAX_MASK_ATLAS_SIZE: u32 = 4096;
 /// Starting size of the mask atlas (1 MiB); enough for ASCII plus some
@@ -171,6 +172,8 @@ pub struct Renderer {
     /// Kept to rebuild `bind_group` when an atlas texture grows.
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// Linear filtering for images that are drawn at another scale than their bitmap.
+    image_sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
@@ -248,6 +251,14 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("image sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
             size: size_of::<Uniforms>() as u64,
@@ -267,7 +278,7 @@ impl Renderer {
             &mask_atlas,
             &color_atlas,
             &image_atlas,
-            &sampler,
+            [&sampler, &image_sampler],
         );
 
         Ok(Self {
@@ -286,6 +297,7 @@ impl Renderer {
             bind_group,
             bind_group_layout,
             sampler,
+            image_sampler,
             uniforms,
             instance_buffer,
             instance_capacity,
@@ -378,15 +390,7 @@ impl Renderer {
             return false;
         }
         self.clear_glyphs();
-        self.bind_group = create_bind_group(
-            &self.gpu.device,
-            &self.bind_group_layout,
-            &self.uniforms,
-            &self.mask_atlas,
-            &self.color_atlas,
-            &self.image_atlas,
-            &self.sampler,
-        );
+        self.rebuild_bind_group();
         true
     }
 
@@ -546,8 +550,32 @@ impl Renderer {
         );
     }
 
+    /// Bind the current atlas textures, after one was replaced.
+    fn rebuild_bind_group(&mut self) {
+        self.bind_group = create_bind_group(
+            &self.gpu.device,
+            &self.bind_group_layout,
+            &self.uniforms,
+            &self.mask_atlas,
+            &self.color_atlas,
+            &self.image_atlas,
+            [&self.sampler, &self.image_sampler],
+        );
+    }
+
     /// Upload the frame's inline images that aren't in the image atlas yet.
     fn upload_images(&mut self, frame: &Frame) {
+        if frame.panes.iter().all(|p| p.snapshot.images.is_empty()) {
+            // Give the memory back that a large image needed.
+            if self.image_atlas.size() > INITIAL_IMAGE_ATLAS_SIZE {
+                self.image_atlas
+                    .reset(&self.gpu.device, INITIAL_IMAGE_ATLAS_SIZE);
+                self.image_regions.clear();
+                self.rebuild_bind_group();
+            }
+            self.image_overflow = false;
+            return;
+        }
         let mut cleared = false;
         'pass: loop {
             let mut skipped = false;
@@ -567,23 +595,16 @@ impl Renderer {
                 let max = self.image_atlas.max_size();
                 if image.width + 1 > max || image.height + 1 > max {
                     skipped = true;
-                } else if self.image_atlas.grow(&self.gpu.device) {
-                    self.image_regions.clear();
-                    self.bind_group = create_bind_group(
-                        &self.gpu.device,
-                        &self.bind_group_layout,
-                        &self.uniforms,
-                        &self.mask_atlas,
-                        &self.color_atlas,
-                        &self.image_atlas,
-                        &self.sampler,
-                    );
-                    continue 'pass;
                 } else if !cleared {
-                    // Full of images no longer on screen: start over.
+                    // Probably full of images no longer on screen: start over
+                    // before spending more memory.
                     self.image_atlas.clear();
                     self.image_regions.clear();
                     cleared = true;
+                    continue 'pass;
+                } else if self.image_atlas.grow(&self.gpu.device) {
+                    self.image_regions.clear();
+                    self.rebuild_bind_group();
                     continue 'pass;
                 } else {
                     skipped = true;
@@ -836,7 +857,13 @@ impl Renderer {
                 size: [piece.columns as f32 * cw, ch],
                 uv: image_uv(region, self.image_atlas.size(), piece),
                 color: [1.0; 4],
-                kind: KIND_IMAGE,
+                kind: if region.width as usize == piece.image.columns * m.width as usize
+                    && region.height as usize == piece.image.lines * m.height as usize
+                {
+                    KIND_IMAGE
+                } else {
+                    KIND_IMAGE_SCALED
+                },
                 _pad: [0; 3],
             });
         }
@@ -1155,6 +1182,12 @@ fn create_pipelines(
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     });
 
@@ -1240,7 +1273,8 @@ fn create_bind_group(
     mask_atlas: &Atlas,
     color_atlas: &Atlas,
     image_atlas: &Atlas,
-    sampler: &wgpu::Sampler,
+    // The nearest sampler for glyphs and pixel-exact images, then the linear one for scaled images.
+    [sampler, image_sampler]: [&wgpu::Sampler; 2],
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("quad"),
@@ -1265,6 +1299,10 @@ fn create_bind_group(
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: wgpu::BindingResource::TextureView(image_atlas.view()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(image_sampler),
             },
         ],
     })

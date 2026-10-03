@@ -69,6 +69,17 @@ impl Atlas {
         true
     }
 
+    /// Replace the texture with an empty one of side length `size` (clamped
+    /// to the maximum), larger or smaller than before. The caller has to
+    /// drop its cached regions and rebuild what binds the texture view.
+    pub fn reset(&mut self, device: &wgpu::Device, size: u32) {
+        let size = size.min(self.max_size);
+        (self.texture, self.view) = create_texture(device, self.format, self.label, size);
+        self.allocator = AtlasAllocator::new(size2(size as i32, size as i32));
+        self.size = size;
+        tracing::debug!(atlas = self.label, size, "atlas reset");
+    }
+
     /// Side length in texels, to normalize texture coordinates.
     pub fn size(&self) -> u32 {
         self.size
