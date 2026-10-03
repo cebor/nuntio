@@ -279,6 +279,15 @@ impl State {
         dismissed.is_some() && dismissed == Version::parse(&release.tag)
     }
 
+    /// `other` if it was checked later: the state this thread remembers
+    /// when the file couldn't be saved.
+    fn newer(self, other: Option<&State>) -> State {
+        match other {
+            Some(other) if other.last_check > self.last_check => other.clone(),
+            _ => self,
+        }
+    }
+
     /// Ask GitHub, and remember the answer.
     fn refresh(&mut self, now: u64) -> Result<Release> {
         // An ETag without the release it belongs to is useless.
@@ -393,14 +402,17 @@ impl Checker {
             .spawn(move || {
                 // The release the main thread was last told about.
                 let mut reported: Option<Release> = None;
+                // The last successful check, in case the file can't be saved.
+                let mut remembered: Option<State> = None;
                 loop {
-                    let mut state = State::load();
+                    let mut state = State::load().newer(remembered.as_ref());
                     let now = now();
                     let wait = state.wait(now);
                     let fresh = if wait.is_zero() {
                         match state.refresh(now) {
                             Ok(release) => {
                                 state.save();
+                                remembered = Some(state.clone());
                                 Some(release)
                             }
                             Err(err) => {
@@ -627,6 +639,23 @@ mod tests {
             ..State::default()
         };
         assert_eq!(state.wait(1_000 + INTERVAL.as_secs() + 5), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_check_that_could_not_be_saved_is_remembered() {
+        let now = 1_000_000;
+        let checked = State {
+            last_check: now,
+            latest: Some(release("v0.1.6")),
+            ..State::default()
+        };
+        assert!(State::default().newer(Some(&checked)).wait(now) > Duration::ZERO);
+        let older = State {
+            last_check: now - 10,
+            ..checked.clone()
+        };
+        assert_eq!(checked.clone().newer(Some(&older)), checked);
+        assert_eq!(checked.clone().newer(None), checked);
     }
 
     fn answer(result: Result<Release, String>, manual: bool, dismissed: bool) -> Checked {
