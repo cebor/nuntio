@@ -172,12 +172,36 @@ fn query_home(_distro: &str, _user: Option<&str>) -> Option<String> {
 }
 
 /// nuntio-wsl, the Linux helper that gives WSL panes their own Linux PTY,
-/// if it sits next to the executable. Not canonicalized: `wslpath` can't
-/// read `\\?\` paths.
+/// if it sits next to the executable and WSL can run it. Not canonicalized:
+/// `wslpath` can't read `\\?\` paths.
 #[cfg(windows)]
 pub fn helper() -> Option<std::path::PathBuf> {
+    if !helper_runs_natively() {
+        tracing::debug!(
+            "nuntio-wsl is built for x86_64, but this machine isn't one: WSL panes use ConPTY"
+        );
+        return None;
+    }
     let helper = std::env::current_exe().ok()?.parent()?.join("nuntio-wsl");
     helper.is_file().then_some(helper)
+}
+
+/// Whether WSL's Linux can run the helper, which is built for nuntio's
+/// architecture: x86_64 nuntio also runs emulated on Windows on Arm, whose
+/// WSL is aarch64.
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn helper_runs_natively() -> bool {
+    use windows_sys::Win32::System::SystemInformation::IMAGE_FILE_MACHINE_AMD64;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
+    let (mut process, mut native) = (0, 0);
+    // SAFETY: this process's pseudo handle and valid out-pointers.
+    let ok = unsafe { IsWow64Process2(GetCurrentProcess(), &mut process, &mut native) } != 0;
+    !ok || native == IMAGE_FILE_MACHINE_AMD64
+}
+
+#[cfg(all(windows, not(target_arch = "x86_64")))]
+fn helper_runs_natively() -> bool {
+    true
 }
 
 #[cfg(test)]
