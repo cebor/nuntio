@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nuntio_term::{
     GridPoint, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
@@ -138,6 +138,48 @@ fn inline_image_is_placed_at_the_cursor() {
         .collect();
     assert_eq!(pieces, [(0, 0, 2)]);
     assert_eq!(snapshot.cell(2, 0).c, 'X');
+}
+
+/// An image inside a synchronized update (DEC 2026) is placed in stream
+/// order, but doesn't wake the main thread: nothing may be drawn before the
+/// update ends or times out (150 ms after the image).
+#[test]
+fn image_in_a_synchronized_update_does_not_wake_the_main_thread() {
+    use base64::Engine;
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let (handle, rx) = spawn(&format!(
+        "printf '\\033[?2026h'; \
+         printf '\\033]1337;File=inline=1;width=2;height=1:%s\\007' '{data}'; \
+         sleep 1; printf '\\033[?2026l'"
+    ));
+
+    // Wait until the image is in the grid ...
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while handle.snapshot().images.is_empty() {
+        assert!(Instant::now() < deadline, "the image was not placed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // ... and give a wrong wakeup time to arrive; the update times out only
+    // 150 ms after the image.
+    std::thread::sleep(Duration::from_millis(40));
+    let early: Vec<_> = rx.try_iter().collect();
+    assert!(
+        !early.contains(&TermEvent::Wakeup),
+        "woken inside the update: {early:?}"
+    );
+
+    let events = wait_for_exit(&rx);
+    let wakeup = events.iter().position(|e| *e == TermEvent::Wakeup);
+    let exit = events.iter().position(|e| *e == TermEvent::Exit);
+    assert!(
+        wakeup.is_some() && wakeup < exit,
+        "no wakeup before the exit: {events:?}"
+    );
 }
 
 #[test]

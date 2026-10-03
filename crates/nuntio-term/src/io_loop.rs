@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::Term;
+use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
 use alacritty_terminal::vte::ansi::Processor;
 use polling::{Events, PollMode, Poller};
@@ -27,6 +27,9 @@ const READ_BUFFER_SIZE: usize = 0x10_0000;
 /// Bytes parsed per read pass before the term lock is given up again, so
 /// the main thread can draw during floods of output.
 const MAX_LOCKED_READ: usize = u16::MAX as usize;
+/// How long the PTY thread waits for messages between checks whether an
+/// image is decoded.
+const DECODE_POLL: Duration = Duration::from_millis(5);
 
 /// A message to the PTY thread.
 pub(crate) enum Msg {
@@ -68,6 +71,8 @@ pub(crate) struct IoLoop {
     write_list: VecDeque<Cow<'static, [u8]>>,
     /// Bytes of the front of `write_list` already written.
     written: usize,
+    /// A [`Msg::Shutdown`] arrived while an image was decoding.
+    shutdown_requested: bool,
 }
 
 impl IoLoop {
@@ -93,6 +98,7 @@ impl IoLoop {
             images,
             write_list: VecDeque::new(),
             written: 0,
+            shutdown_requested: false,
         })
     }
 
@@ -188,7 +194,11 @@ impl IoLoop {
 
             more_output = false;
             if readable {
-                match self.pty_read(&mut buf) {
+                let result = self.pty_read(&mut buf);
+                if self.shutdown_requested {
+                    break;
+                }
+                match result {
                     Ok(capped) => more_output = capped,
                     Err(err) => {
                         // On Linux, reading the master side fails with EIO once
@@ -249,6 +259,13 @@ impl IoLoop {
             let parser = &mut self.parser;
             let listener = &self.listener;
             let images = &self.images;
+            let mut input = PtyInput {
+                pty: &mut self.pty,
+                rx: &self.rx,
+                write_list: &mut self.write_list,
+                written: &mut self.written,
+                shutdown_requested: &mut self.shutdown_requested,
+            };
             self.scanner.feed(&buf[..n], &mut |event| match event {
                 ScanEvent::Text(bytes) => {
                     parser.advance(
@@ -270,6 +287,10 @@ impl IoLoop {
                         return;
                     }
                     let geometry = CellGeometry::from(listener.window_size());
+                    // Hashing the payload and decoding take a while: let the
+                    // main thread draw meanwhile.
+                    drop(guard.take());
+                    drop(lease.take());
                     let key = ImageKey::new(&request, geometry);
                     let cached = {
                         let store = lock(images);
@@ -277,13 +298,13 @@ impl IoLoop {
                             .cached(key)
                             .and_then(|id| Some((id, store.get(id)?.clone())))
                     };
-                    let (id, image) = match cached {
-                        Some(hit) => hit,
+                    let (id, image, inserted) = match cached {
+                        Some((id, image)) => {
+                            lease = Some(term.lease());
+                            (id, image, false)
+                        }
                         None => {
-                            // Let the main thread draw while decoding.
-                            drop(guard.take());
-                            drop(lease.take());
-                            let decoded = decode(&request, &args, geometry);
+                            let decoded = decode_serving(&mut input, &request, &args, geometry);
                             lease = Some(term.lease());
                             let Some(decoded) = decoded else {
                                 return;
@@ -291,12 +312,24 @@ impl IoLoop {
                             let mut store = lock(images);
                             let id = store.insert(key, decoded);
                             let image = store.get(id).expect("just inserted").clone();
-                            (id, image)
+                            (id, image, true)
                         }
                     };
                     let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
-                    with_flushed_sync(parser, term, |term| image::place(term, id, &image));
-                    lock(images).evict(term);
+                    // The screen is known only once the output buffered in a
+                    // synchronized update is applied.
+                    let mut alt = false;
+                    with_flushed_sync(parser, term, |term| {
+                        image::place(term, id, &image);
+                        alt = term.mode().contains(TermMode::ALT_SCREEN);
+                    });
+                    let mut store = lock(images);
+                    store.placed(id, alt);
+                    // Memory only grows with new images; cache hits don't
+                    // need to scan the grid.
+                    if inserted {
+                        store.evict(term);
+                    }
                 }
             });
             processed += n;
@@ -307,8 +340,9 @@ impl IoLoop {
         }
         drop(guard);
         drop(lease);
-        // Redraw unless everything went into a synchronized update.
-        if processed > 0 && self.parser.sync_bytes_count() < processed {
+        // Redraw, but not in the middle of a synchronized update: its end,
+        // or its timeout in `run`, wakes the main thread.
+        if processed > 0 && self.parser.sync_timeout().sync_timeout().is_none() {
             self.listener.send_event(Event::Wakeup);
         }
         Ok(capped)
@@ -316,26 +350,42 @@ impl IoLoop {
 
     /// Write queued input until the PTY would block.
     fn pty_write(&mut self) -> io::Result<()> {
-        while let Some(front) = self.write_list.front() {
-            match self.pty.writer().write(&front[self.written..]) {
-                Ok(0) => break,
-                Ok(n) => {
-                    self.written += n;
-                    if self.written == front.len() {
-                        self.write_list.pop_front();
-                        self.written = 0;
-                    }
-                }
-                Err(err)
-                    if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
-                {
-                    break;
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        Ok(())
+        write_pending(&mut self.pty, &mut self.write_list, &mut self.written)
     }
+}
+
+/// The parts of the loop that keep working while an image decodes.
+struct PtyInput<'a> {
+    pty: &'a mut tty::Pty,
+    rx: &'a mpsc::Receiver<Msg>,
+    write_list: &'a mut VecDeque<Cow<'static, [u8]>>,
+    written: &'a mut usize,
+    shutdown_requested: &'a mut bool,
+}
+
+/// Write the queued input to the PTY until it would block.
+fn write_pending(
+    pty: &mut tty::Pty,
+    write_list: &mut VecDeque<Cow<'static, [u8]>>,
+    written: &mut usize,
+) -> io::Result<()> {
+    while let Some(front) = write_list.front() {
+        match pty.writer().write(&front[*written..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                *written += n;
+                if *written == front.len() {
+                    write_list.pop_front();
+                    *written = 0;
+                }
+            }
+            Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {
+                break;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -350,6 +400,37 @@ fn decode(
     image::decode(request, args, geometry)
         .inspect_err(|err| tracing::debug!(%err, "inline image ignored"))
         .ok()
+}
+
+/// [`decode`] on a worker thread. This thread meanwhile takes the messages
+/// for the PTY, so keystrokes and resizes aren't held up by a large image.
+fn decode_serving(
+    input: &mut PtyInput<'_>,
+    request: &ImageRequest,
+    args: &image::ImageArgs,
+    geometry: CellGeometry,
+) -> Option<TermImage> {
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| decode(request, args, geometry));
+        while !worker.is_finished() {
+            match input.rx.recv_timeout(DECODE_POLL) {
+                Ok(msg) => {
+                    match msg {
+                        Msg::Input(bytes) if bytes.is_empty() => {}
+                        Msg::Input(bytes) => input.write_list.push_back(bytes),
+                        Msg::Resize(size) => input.pty.on_resize(size),
+                        Msg::Shutdown => *input.shutdown_requested = true,
+                    }
+                    // A failure shows again when the loop writes next.
+                    let _ = write_pending(input.pty, input.write_list, input.written);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(DECODE_POLL),
+            }
+        }
+        // A panic in the worker counts as a failed decode.
+        worker.join().ok().flatten()
+    })
 }
 
 /// Run `action` with the output buffered in a synchronized update (DEC

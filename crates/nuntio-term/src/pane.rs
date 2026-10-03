@@ -14,7 +14,7 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Rgb;
 use thiserror::Error;
 
-use crate::image::{ImageStore, strip_image_text};
+use crate::image::{ImageStore, crop_columns, strip_image_text};
 use crate::io_loop::{IoLoop, LoopSender, Msg};
 use crate::osc_cwd::ReportedDir;
 use crate::palette::Palette;
@@ -521,7 +521,19 @@ impl TermHandle {
             .size
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = size.window_size();
-        self.term.lock().resize(size);
+        let mut term = self.term.lock();
+        let narrowing = (size.columns as usize) < term.columns();
+        let has_images = !self
+            .images
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty();
+        if narrowing && has_images {
+            // Image cells beyond the new width would reflow into strips.
+            crop_columns(&mut term, size.columns as usize);
+        }
+        term.resize(size);
+        drop(term);
         self.sender.send(Msg::Resize(size.window_size()));
     }
 

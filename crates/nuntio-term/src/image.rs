@@ -26,7 +26,7 @@ use base64::Engine;
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use image::imageops::{self, FilterType};
-use image::{ImageReader, Limits, RgbaImage};
+use image::{DynamicImage, ImageDecoder, ImageReader, Limits, RgbaImage};
 use thiserror::Error;
 
 use crate::image_scan::ImageRequest;
@@ -37,10 +37,16 @@ pub(crate) const PLACEHOLDER: char = '\u{10EEEE}';
 const MARK_BASE: u32 = 0xF0000;
 /// Number of marks: rows and columns up to this are encodable.
 const MARK_COUNT: u32 = 0xFFFE;
-/// Image memory per pane before images no longer on screen are dropped.
+/// Image memory per pane above which images no longer on the active screen
+/// are dropped.
 const IMAGE_MEMORY_BUDGET: usize = 256 << 20;
-/// Longest side of an image bitmap; larger ones are scaled down.
-const MAX_BITMAP_SIDE: u64 = 4096;
+/// Image memory per pane above which even images in the scrollback and on
+/// the inactive screen are dropped, as far as they aren't visible.
+const IMAGE_MEMORY_LIMIT: usize = 512 << 20;
+/// Longest side of an image bitmap; larger ones are scaled down. One less
+/// than the 4096 texels of the smallest GPU limit, so the atlas's 1-texel
+/// padding still fits.
+const MAX_BITMAP_SIDE: u64 = 4095;
 /// Most rows an image may cover.
 const MAX_LINES: u64 = 10_000;
 /// Most columns an image may cover; more than any terminal is wide.
@@ -283,8 +289,12 @@ pub(crate) fn decode(
     limits.max_image_height = Some(16384);
     limits.max_alloc = Some(256 << 20);
     reader.limits(limits);
-    // The first frame of animations.
-    let decoded = reader.decode()?.to_rgba8();
+    // The first frame of animations, upright as the file's EXIF says.
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut img = DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    let decoded = img.into_rgba8();
 
     let inherent = (decoded.width() as u64, decoded.height() as u64);
     let terminal = (geometry.columns as u64 * cw, geometry.lines as u64 * ch);
@@ -331,13 +341,8 @@ pub(crate) fn decode(
     drawn = (drawn.0.min(bitmap.0), drawn.1.min(bitmap.1));
 
     let mut canvas = RgbaImage::new(bitmap.0 as u32, bitmap.1 as u32);
-    let resized = imageops::resize(
-        &decoded,
-        drawn.0 as u32,
-        drawn.1 as u32,
-        FilterType::Triangle,
-    );
-    imageops::overlay(&mut canvas, &resized, 0, 0);
+    let scaled = scale(decoded, (drawn.0 as u32, drawn.1 as u32));
+    imageops::replace(&mut canvas, &scaled, 0, 0);
 
     Ok(TermImage {
         uid: NEXT_UID.fetch_add(1, Ordering::Relaxed),
@@ -347,6 +352,52 @@ pub(crate) fn decode(
         height: canvas.height(),
         rgba: canvas.into_raw().into_boxed_slice(),
     })
+}
+
+/// `image` scaled to `size`. Transparent pixels are averaged premultiplied,
+/// so the color of fully transparent ones doesn't bleed into the edges.
+fn scale(mut image: RgbaImage, size: (u32, u32)) -> RgbaImage {
+    let translucent = image.pixels().any(|p| p.0[3] < 255);
+    if translucent {
+        premultiply(&mut image);
+    }
+    // Shrinking by area averaging is cheap and doesn't alias; only the
+    // axes that get smaller are shrunk.
+    let shrunk = (image.width().min(size.0), image.height().min(size.1));
+    if shrunk != image.dimensions() {
+        image = imageops::thumbnail(&image, shrunk.0, shrunk.1);
+    }
+    // What is left is enlarging, from an image no larger than `size`.
+    if image.dimensions() != size {
+        image = imageops::resize(&image, size.0, size.1, FilterType::Triangle);
+    }
+    if translucent {
+        unpremultiply(&mut image);
+    }
+    image
+}
+
+/// Multiply the colors with the alpha channel, rounding.
+fn premultiply(image: &mut RgbaImage) {
+    for pixel in image.pixels_mut() {
+        let a = pixel.0[3] as u32;
+        for c in &mut pixel.0[..3] {
+            *c = ((*c as u32 * a + 127) / 255) as u8;
+        }
+    }
+}
+
+/// Undo [`premultiply`], rounding.
+fn unpremultiply(image: &mut RgbaImage) {
+    for pixel in image.pixels_mut() {
+        let a = pixel.0[3] as u32;
+        if a == 0 || a == 255 {
+            continue;
+        }
+        for c in &mut pixel.0[..3] {
+            *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+        }
+    }
 }
 
 /// Identifies a request at a geometry, so an image sent again (omp redraws
@@ -369,25 +420,41 @@ impl ImageKey {
     }
 }
 
+/// A stored image and the screens it was placed on.
+struct StoredImage {
+    image: Arc<TermImage>,
+    on_primary: bool,
+    on_alt: bool,
+}
+
 /// The images of one pane, by the id their cells carry.
 pub(crate) struct ImageStore {
     next_id: u32,
-    images: HashMap<u32, Arc<TermImage>>,
+    images: HashMap<u32, StoredImage>,
     /// Ids, oldest first.
     order: VecDeque<u32>,
     recent: HashMap<ImageKey, u32>,
     bytes: usize,
+    /// Above this, images no cell of the active grid refers to are dropped.
     budget: usize,
+    /// Above this, images not visible are dropped.
+    limit: usize,
 }
 
 impl Default for ImageStore {
     fn default() -> Self {
-        Self::with_budget(IMAGE_MEMORY_BUDGET)
+        Self::with_limits(IMAGE_MEMORY_BUDGET, IMAGE_MEMORY_LIMIT)
     }
 }
 
 impl ImageStore {
+    /// A store whose hard limit is twice the `budget`.
+    #[cfg(test)]
     pub(crate) fn with_budget(budget: usize) -> Self {
+        Self::with_limits(budget, budget.saturating_mul(2))
+    }
+
+    fn with_limits(budget: usize, limit: usize) -> Self {
         Self {
             next_id: 1,
             images: HashMap::new(),
@@ -395,11 +462,16 @@ impl ImageStore {
             recent: HashMap::new(),
             bytes: 0,
             budget,
+            limit,
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.images.is_empty()
+    }
+
     pub(crate) fn get(&self, id: u32) -> Option<&Arc<TermImage>> {
-        self.images.get(&id)
+        self.images.get(&id).map(|stored| &stored.image)
     }
 
     /// The id of an image decoded from the same request at the same
@@ -418,42 +490,121 @@ impl ImageStore {
         }
         self.next_id = if id >= MAX_ID { 1 } else { id + 1 };
         self.bytes += image.rgba.len();
-        self.images.insert(id, Arc::new(image));
+        self.images.insert(
+            id,
+            StoredImage {
+                image: Arc::new(image),
+                on_primary: false,
+                on_alt: false,
+            },
+        );
         self.order.push_back(id);
         self.recent.insert(key, id);
         id
     }
 
-    /// Over budget, drop the oldest images no cell refers to anymore.
+    /// Note that image `id` was placed on the alternate screen (`alt`) or
+    /// the primary one.
+    pub(crate) fn placed(&mut self, id: u32, alt: bool) {
+        if let Some(stored) = self.images.get_mut(&id) {
+            if alt {
+                stored.on_alt = true;
+            } else {
+                stored.on_primary = true;
+            }
+        }
+    }
+
+    /// Over budget, drop the oldest images no cell of the active screen
+    /// refers to, unless they were placed on the inactive screen, whose
+    /// grid isn't reachable. Still over the hard limit, drop the oldest
+    /// ones that aren't visible, wherever they were placed.
     pub(crate) fn evict<T: EventListener>(&mut self, term: &Term<T>) {
         if self.bytes <= self.budget {
             return;
         }
-        // Only the active screen is reachable through alacritty's API, so
-        // the images of the inactive one may go as well.
+        let alt = term.mode().contains(TermMode::ALT_SCREEN);
         let grid = term.grid();
-        let mut referenced = HashSet::new();
-        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
-            let row = &grid[Line(line)];
-            for column in 0..grid.columns() {
-                if let Some((id, ..)) = image_cell_ref(&row[Column(column)]) {
-                    referenced.insert(id);
-                }
-            }
+        let referenced = referenced_ids(term, grid.topmost_line().0..=grid.bottommost_line().0);
+        self.drop_oldest(self.budget, |id, stored| {
+            let on_inactive = if alt {
+                stored.on_primary
+            } else {
+                stored.on_alt
+            };
+            !referenced.contains(&id) && !on_inactive
+        });
+        if self.bytes > self.limit {
+            let screen_lines = grid.screen_lines() as i32;
+            let offset = grid.display_offset() as i32;
+            let mut visible = referenced_ids(term, 0..=screen_lines - 1);
+            visible.extend(referenced_ids(term, -offset..=screen_lines - 1 - offset));
+            self.drop_oldest(self.budget, |id, _| !visible.contains(&id));
         }
+        let images = &self.images;
+        self.recent.retain(|_, id| images.contains_key(id));
+    }
+
+    /// Drop the oldest images `droppable` accepts until at most `target`
+    /// bytes are left.
+    fn drop_oldest(&mut self, target: usize, mut droppable: impl FnMut(u32, &StoredImage) -> bool) {
         let mut kept = VecDeque::with_capacity(self.order.len());
         while let Some(id) = self.order.pop_front() {
-            if self.bytes > self.budget && !referenced.contains(&id) {
-                if let Some(image) = self.images.remove(&id) {
-                    self.bytes -= image.rgba.len();
+            let stored = self.images.get(&id);
+            if self.bytes > target && stored.is_some_and(|s| droppable(id, s)) {
+                if let Some(stored) = self.images.remove(&id) {
+                    self.bytes -= stored.image.rgba.len();
                 }
             } else {
                 kept.push_back(id);
             }
         }
         self.order = kept;
-        let images = &self.images;
-        self.recent.retain(|_, id| images.contains_key(id));
+    }
+}
+
+/// The ids of the images on `lines` of the active grid.
+fn referenced_ids<T: EventListener>(
+    term: &Term<T>,
+    lines: std::ops::RangeInclusive<i32>,
+) -> HashSet<u32> {
+    let grid = term.grid();
+    let mut ids = HashSet::new();
+    for line in lines {
+        let row = &grid[Line(line)];
+        for column in 0..grid.columns() {
+            if let Some((id, ..)) = image_cell_ref(&row[Column(column)]) {
+                ids.insert(id);
+            }
+        }
+    }
+    ids
+}
+
+/// Remove the image cells from `columns` on, in every line of the active
+/// grid, before the terminal is narrowed to `columns`. The cells would
+/// otherwise be reflowed onto new lines, which cuts an image into strips.
+/// Default cells are empty, so shrinking drops them.
+///
+/// Only the active grid is reachable: alacritty keeps the inactive one
+/// private. Image cells there are reflowed when it becomes active again.
+pub(crate) fn crop_columns<T: EventListener>(term: &mut Term<T>, columns: usize) {
+    let (top, bottom, width) = {
+        let grid = term.grid();
+        (
+            grid.topmost_line().0,
+            grid.bottommost_line().0,
+            grid.columns(),
+        )
+    };
+    let grid = term.grid_mut();
+    for line in top..=bottom {
+        let row = &mut grid[Line(line)];
+        for column in columns..width {
+            if image_cell_ref(&row[Column(column)]).is_some() {
+                row[Column(column)] = Cell::default();
+            }
+        }
     }
 }
 
@@ -474,7 +625,16 @@ pub(crate) fn place<T: EventListener>(term: &mut Term<T>, id: u32, image: &TermI
     };
     for row in 0..image.lines {
         if row > 0 {
+            let before = term.grid().cursor.point.line;
             term.linefeed();
+            let line = term.grid().cursor.point.line;
+            // A cursor below the scroll region can't move down; it would
+            // overwrite the previous row. Crop the image there.
+            if line == before
+                && image_cell_ref(&term.grid()[line][Column(x)]) == Some((id, row - 1, 0))
+            {
+                break;
+            }
         }
         let line = term.grid().cursor.point.line;
         let cells = &mut term.grid_mut()[line];
@@ -507,6 +667,7 @@ pub(crate) fn place<T: EventListener>(term: &mut Term<T>, id: u32, image: &TermI
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::grid::Scroll;
     use alacritty_terminal::term::Config;
     use alacritty_terminal::vte::ansi::Processor;
     use image::ImageFormat;
@@ -729,6 +890,144 @@ mod tests {
         assert_eq!(store.cached(key(1)), None);
         assert!(store.get(kept).is_some());
         assert_eq!(store.cached(key(2)), Some(kept));
+    }
+
+    fn test_key(n: u64) -> ImageKey {
+        ImageKey {
+            hash: n,
+            geometry: GEOMETRY,
+        }
+    }
+
+    /// Three 16-byte images in a 4×2 terminal: the first two in the
+    /// scrollback, the third visible. Returns their ids.
+    fn scrolled_images(store: &mut ImageStore, term: &mut Term<VoidListener>) -> [u32; 3] {
+        let mut parser: Processor = Processor::new();
+        [1, 2, 3].map(|n| {
+            let id = store.insert(test_key(n), test_image(2, 2));
+            place(term, id, &test_image(2, 2));
+            if n < 3 {
+                parser.advance(term, b"\r\n\r\n\r\n");
+            }
+            id
+        })
+    }
+
+    #[test]
+    fn cropping_before_narrowing_keeps_images_in_one_piece_per_row() {
+        let mut term = term(8, 4);
+        place(&mut term, 1, &test_image(6, 2));
+        // The cursor below the image, as after a prompt: a cursor right of
+        // the new width would reflow its own line.
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\x1b[4;1H");
+        crop_columns(&mut term, 4);
+        let size = crate::TermSize {
+            columns: 4,
+            lines: 4,
+            cell_width: 1,
+            cell_height: 1,
+        };
+        term.resize(size);
+        for (line, row) in [(0, 0), (1, 1)] {
+            for column in 0..4 {
+                assert_eq!(
+                    image_cell_ref(cell_at(&term, line, column)),
+                    Some((1, row, column))
+                );
+            }
+        }
+        for line in 2..4 {
+            assert!((0..4).all(|c| image_cell_ref(cell_at(&term, line, c)).is_none()));
+        }
+        assert_eq!(term.grid().history_size(), 0);
+    }
+
+    #[test]
+    fn place_stops_below_the_scroll_region() {
+        let mut term = term(10, 5);
+        let mut parser: Processor = Processor::new();
+        // Lines 1 to 3 scroll; the cursor goes to the last line, below them.
+        parser.advance(&mut term, b"\x1b[1;3r\x1b[5;1H");
+        place(&mut term, 1, &test_image(2, 3));
+        assert_eq!(image_cell_ref(cell_at(&term, 4, 0)), Some((1, 0, 0)));
+        for line in 0..4 {
+            assert!(
+                (0..10).all(|c| image_cell_ref(cell_at(&term, line, c)).is_none()),
+                "line {line}"
+            );
+        }
+        assert_eq!(term.grid().cursor.point.line.0, 4);
+        assert_eq!(term.grid().cursor.point.column.0, 2);
+    }
+
+    #[test]
+    fn the_hard_limit_drops_images_in_the_scrollback() {
+        let mut term = term(4, 2);
+        // Budget 16 bytes, limit 32: three images are over the limit.
+        let mut store = ImageStore::with_budget(16);
+        let [first, second, third] = scrolled_images(&mut store, &mut term);
+        store.evict(&term);
+        assert!(store.get(first).is_none());
+        assert!(store.get(second).is_none());
+        assert!(store.get(third).is_some());
+        assert_eq!(store.cached(test_key(1)), None);
+        assert_eq!(store.cached(test_key(3)), Some(third));
+    }
+
+    #[test]
+    fn the_hard_limit_keeps_images_in_the_viewport() {
+        let mut term = term(4, 2);
+        let mut store = ImageStore::with_budget(16);
+        let [first, second, third] = scrolled_images(&mut store, &mut term);
+        term.scroll_display(Scroll::Top);
+        store.evict(&term);
+        assert!(store.get(first).is_some(), "shown by the scrolled viewport");
+        assert!(store.get(second).is_none());
+        assert!(store.get(third).is_some());
+    }
+
+    #[test]
+    fn images_of_the_primary_screen_survive_while_the_alt_screen_is_active() {
+        let mut term = term(4, 2);
+        let mut parser: Processor = Processor::new();
+        let mut store = ImageStore::with_budget(16);
+        let primary = store.insert(test_key(1), test_image(2, 2));
+        place(&mut term, primary, &test_image(2, 2));
+        store.placed(primary, false);
+        parser.advance(&mut term, b"\x1b[?1049h");
+        let alt = store.insert(test_key(2), test_image(2, 2));
+        place(&mut term, alt, &test_image(2, 2));
+        store.placed(alt, true);
+        // Never placed anywhere, so nothing protects it.
+        let unplaced = store.insert(test_key(3), test_image(2, 2));
+        store.evict(&term);
+        assert!(store.get(primary).is_some());
+        assert!(store.get(alt).is_some());
+        assert!(store.get(unplaced).is_none());
+    }
+
+    #[test]
+    fn translucent_pixels_are_scaled_premultiplied() {
+        let mut source = RgbaImage::new(2, 1);
+        source.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        source.put_pixel(1, 0, image::Rgba([0, 0, 0, 0]));
+        let mut bytes = Cursor::new(Vec::new());
+        source.write_to(&mut bytes, ImageFormat::Png).unwrap();
+        let payload = base64::engine::general_purpose::STANDARD
+            .encode(bytes.into_inner())
+            .into_bytes();
+        let image = decode_with(
+            "inline=1;width=1px;height=1px;preserveAspectRatio=0",
+            payload,
+            GEOMETRY,
+        );
+        let pixel = &image.rgba[..4];
+        assert!(pixel[0] >= 250, "red survived: {pixel:?}");
+        assert!(
+            (127..=129).contains(&pixel[3]),
+            "half transparent: {pixel:?}"
+        );
     }
 
     #[test]
