@@ -72,34 +72,26 @@ impl Version {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Release {
     pub tag: String,
-    /// The release page, with the notes and downloads.
-    pub url: String,
 }
 
 impl Release {
-    /// The page to open: `url` if it is on this repository's releases (it comes from GitHub or a
-    /// cache file), else the page of the tag, built here.
+    /// The tag's release page, built here: the cache file is not trusted.
     fn page_url(&self) -> String {
         let releases = format!("{}/releases/", REPOSITORY.trim_end_matches('/'));
-        if self.url.starts_with(&releases) {
-            return self.url.clone();
-        }
         format!("{releases}tag/{}", utf8_percent_encode(&self.tag, TAG))
     }
 }
 
-/// The fields of GitHub's answer we need; its `url` is the API's own.
+/// The field of GitHub's answer we need.
 #[derive(Deserialize)]
 struct GitHubRelease {
     tag_name: String,
-    html_url: String,
 }
 
 impl From<GitHubRelease> for Release {
     fn from(release: GitHubRelease) -> Self {
         Self {
             tag: release.tag_name,
-            url: release.html_url,
         }
     }
 }
@@ -479,10 +471,7 @@ mod tests {
     use super::*;
 
     fn release(tag: &str) -> Release {
-        Release {
-            tag: tag.into(),
-            url: format!("https://github.com/cebor/nuntio/releases/tag/{tag}"),
-        }
+        Release { tag: tag.into() }
     }
 
     #[test]
@@ -500,7 +489,10 @@ mod tests {
     fn only_newer_releases_are_updates() {
         let newer = Update::against(&release("v0.1.6"), "0.1.5", Build::Release).unwrap();
         assert_eq!(newer.version, "0.1.6");
-        assert_eq!(newer.url, release("v0.1.6").url);
+        assert_eq!(
+            newer.url,
+            "https://github.com/cebor/nuntio/releases/tag/v0.1.6"
+        );
         assert_eq!(
             Update::against(&release("v0.1.5"), "0.1.5", Build::Release),
             None
@@ -516,28 +508,9 @@ mod tests {
     }
 
     #[test]
-    fn foreign_release_urls_are_replaced() {
-        let page = "https://github.com/cebor/nuntio/releases/tag/v0.1.6";
-        for url in [
-            "ms-msdt:/x",
-            "file:///C:/x.exe",
-            "https://github.com.evil.example/cebor/nuntio/releases/x",
-            "https://github.com/other/repo/releases/tag/v0.1.6",
-            "",
-        ] {
-            let r = Release {
-                tag: "v0.1.6".into(),
-                url: url.into(),
-            };
-            let update = Update::against(&r, "0.1.5", Build::Release).unwrap();
-            assert_eq!(update.url, page, "{url}");
-        }
-        let r = Release {
-            tag: "v0.1.6-../../x?y".into(),
-            url: "file:///x".into(),
-        };
+    fn release_pages_are_built_from_the_tag() {
         assert_eq!(
-            r.page_url(),
+            release("v0.1.6-../../x?y").page_url(),
             "https://github.com/cebor/nuntio/releases/tag/v0.1.6-..%2F..%2Fx%3Fy"
         );
     }
