@@ -8,7 +8,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::sync::FairMutex;
@@ -118,14 +118,22 @@ impl IoLoop {
             return;
         }
         let mut events = Events::with_capacity(NonZeroUsize::new(1024).expect("non-zero"));
+        // A read pass that stopped at `MAX_LOCKED_READ` may have left output
+        // behind. On Windows no further event announces it (alacritty's pipe
+        // reader only wakes the poller once it was found empty), so the next
+        // pass reads without waiting.
+        let mut more_output = false;
 
         loop {
             // Wake up when a synchronized update (DEC 2026) times out.
-            let timeout = self
-                .parser
-                .sync_timeout()
-                .sync_timeout()
-                .map(|t| t.saturating_duration_since(Instant::now()));
+            let timeout = if more_output {
+                Some(Duration::ZERO)
+            } else {
+                self.parser
+                    .sync_timeout()
+                    .sync_timeout()
+                    .map(|t| t.saturating_duration_since(Instant::now()))
+            };
             events.clear();
             if let Err(err) = poll.wait(&mut events, timeout) {
                 if err.kind() == ErrorKind::Interrupted {
@@ -154,7 +162,7 @@ impl IoLoop {
                 break;
             }
 
-            if events.is_empty() && !received {
+            if events.is_empty() && !received && !more_output {
                 self.parser.stop_sync(&mut *self.term.lock());
                 self.listener.send_event(Event::Wakeup);
                 continue;
@@ -162,7 +170,7 @@ impl IoLoop {
 
             // alacritty's event keys are private; the child event check
             // doesn't block, so it runs on every pass.
-            let (mut readable, mut writable) = (false, false);
+            let (mut readable, mut writable) = (more_output, false);
             for event in events.iter().filter(|e| !e.is_interrupt()) {
                 readable |= event.readable;
                 writable |= event.writable;
@@ -172,21 +180,27 @@ impl IoLoop {
                 if let Some(status) = status {
                     self.listener.send_event(Event::ChildExit(status));
                 }
-                let _ = self.pty_read(&mut buf);
+                while let Ok(true) = self.pty_read(&mut buf) {}
                 self.term.lock().exit();
                 self.listener.send_event(Event::Wakeup);
                 break;
             }
 
-            if readable && let Err(err) = self.pty_read(&mut buf) {
-                // On Linux, reading the master side fails with EIO once the
-                // client side hangs up; the exit event follows.
-                #[cfg(target_os = "linux")]
-                if err.raw_os_error() == Some(libc::EIO) {
-                    continue;
+            more_output = false;
+            if readable {
+                match self.pty_read(&mut buf) {
+                    Ok(capped) => more_output = capped,
+                    Err(err) => {
+                        // On Linux, reading the master side fails with EIO once
+                        // the client side hangs up; the exit event follows.
+                        #[cfg(target_os = "linux")]
+                        if err.raw_os_error() == Some(libc::EIO) {
+                            continue;
+                        }
+                        tracing::error!(%err, "reading from the PTY failed");
+                        break;
+                    }
                 }
-                tracing::error!(%err, "reading from the PTY failed");
-                break;
             }
 
             if writable && let Err(err) = self.pty_write() {
@@ -210,12 +224,14 @@ impl IoLoop {
     /// Read and parse the available output, holding the term lock for at
     /// most [`MAX_LOCKED_READ`] bytes. Inline images and cell size queries
     /// are taken out of the stream and handled here, in stream order.
-    fn pty_read(&mut self, buf: &mut [u8]) -> io::Result<()> {
+    /// Returns whether the pass stopped at the limit with output possibly left.
+    fn pty_read(&mut self, buf: &mut [u8]) -> io::Result<bool> {
         let term = self.term.clone();
         // Reserve the next term lock for the PTY thread.
         let mut lease = Some(term.lease());
         let mut guard = None;
         let mut processed = 0;
+        let mut capped = false;
         loop {
             let n = match self.pty.reader().read(buf) {
                 Ok(0) => break,
@@ -285,6 +301,7 @@ impl IoLoop {
             });
             processed += n;
             if processed >= MAX_LOCKED_READ {
+                capped = true;
                 break;
             }
         }
@@ -294,7 +311,7 @@ impl IoLoop {
         if processed > 0 && self.parser.sync_bytes_count() < processed {
             self.listener.send_event(Event::Wakeup);
         }
-        Ok(())
+        Ok(capped)
     }
 
     /// Write queued input until the PTY would block.

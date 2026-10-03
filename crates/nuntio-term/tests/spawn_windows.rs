@@ -20,6 +20,17 @@ const OPTIONS: TermOptions = TermOptions {
 
 fn spawn(program: &str, args: &[&str]) -> (TermHandle, mpsc::Receiver<TermEvent>) {
     let (tx, rx) = mpsc::channel();
+    let handle = spawn_with(program, args, move |event| {
+        let _ = tx.send(event);
+    });
+    (handle, rx)
+}
+
+fn spawn_with(
+    program: &str,
+    args: &[&str],
+    callback: impl Fn(TermEvent) + Send + Sync + 'static,
+) -> TermHandle {
     let options = SpawnOptions {
         shell: Some(Shell {
             program: program.into(),
@@ -32,11 +43,7 @@ fn spawn(program: &str, args: &[&str]) -> (TermHandle, mpsc::Receiver<TermEvent>
         env: vec![],
         window_id: None,
     };
-    let handle = TermHandle::spawn(options, SIZE, move |event| {
-        let _ = tx.send(event);
-    })
-    .expect("spawn");
-    (handle, rx)
+    TermHandle::spawn(options, SIZE, callback).expect("spawn")
 }
 
 /// ConPTY and PowerShell start slowly, hence the generous timeout.
@@ -107,4 +114,33 @@ fn resize_is_applied() {
     });
     wait_for_exit(&rx);
     assert!(screen_contains(&handle, "60"));
+}
+
+/// ConPTY passes an image through in one piece. When more of it waits than
+/// one read pass takes, output that follows later must still arrive without
+/// further input.
+#[test]
+fn large_output_is_read_without_input() {
+    // A slow listener lets the output pile up between read passes.
+    let handle = spawn_with(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-Command",
+            "[Console]::Write(\"$([char]27)]1337;File=inline=0:$('A' * 300000)$([char]7)\"); Start-Sleep -Seconds 1; [Console]::Write('END'); Start-Sleep -Seconds 30",
+        ],
+        |event| {
+            if event == TermEvent::Wakeup {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        },
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while !screen_contains(&handle, "END") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "output after the large sequence did not arrive"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
