@@ -32,6 +32,13 @@ const ICNS_SIZES: [u32; 7] = [16, 32, 64, 128, 256, 512, 1024];
 const LINUX_ICON_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
 /// AppStream component id, as in `assets/nuntio.metainfo.xml`.
 const METAINFO_ID: &str = "io.github.cebor.nuntio";
+/// Windows Terminal's ConPTY (NuGet package Microsoft.Windows.Console.ConPTY),
+/// shipped next to `nuntio.exe`: alacritty_terminal then loads its
+/// `conpty.dll` instead of the one built into Windows. The built-in one
+/// passes inline images (OSC 1337) through before the cursor moves that
+/// precede them, so omp's images land at the wrong place.
+const CONPTY_VERSION: &str = "1.25.260930003";
+const CONPTY_SHA256: &str = "02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -587,6 +594,7 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
     fresh_dir(&stage)?;
     copy(&binary, &stage.join(format!("{NAME}.exe")))?;
     copy(&helper_of(&binary), &stage.join(format!("{HELPER}.exe")))?;
+    bundle_conpty(&stage)?;
     copy_docs(&stage, &notices)?;
     let zip = dist.join(format!(
         "{NAME}-{version}-{}-windows.zip",
@@ -618,6 +626,58 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
         eprintln!("Inno Setup not found, skipping installer (winget install JRSoftware.InnoSetup)");
     }
     Ok(())
+}
+
+/// Copy `conpty.dll`, `OpenConsole.exe` and their license from the pinned
+/// ConPTY package into `stage`. The package is downloaded once into
+/// `target/` and checked against [`CONPTY_SHA256`].
+fn bundle_conpty(stage: &Path) -> Result<()> {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        arch => bail!("the ConPTY package has no build for {arch}"),
+    };
+    let target = root().join("target");
+    let package = target.join(format!("conpty-{CONPTY_VERSION}.nupkg"));
+    if !package.exists() {
+        let partial = package.with_extension("part");
+        run(Command::new("curl")
+            .args(["--fail", "--silent", "--show-error", "--location", "--output"])
+            .arg(&partial)
+            .arg(format!(
+                "https://www.nuget.org/api/v2/package/Microsoft.Windows.Console.ConPTY/{CONPTY_VERSION}"
+            )))?;
+        fs::rename(&partial, &package)?;
+    }
+    let hash = sha256(&package)?;
+    ensure!(
+        hash == CONPTY_SHA256,
+        "{} has SHA-256 {hash}, expected {CONPTY_SHA256}; delete it to download it again",
+        package.display()
+    );
+    let unpacked = target.join(format!("conpty-{CONPTY_VERSION}"));
+    fresh_dir(&unpacked)?;
+    let dll = format!("runtimes/win-{arch}/native/conpty.dll");
+    let console = format!("build/native/runtimes/{arch}/OpenConsole.exe");
+    // Windows' bsdtar unpacks zip archives, and a .nupkg is one.
+    run(Command::new("tar")
+        .arg("-xf")
+        .arg(&package)
+        .arg("-C")
+        .arg(&unpacked)
+        .args([&dll, &console]))?;
+    copy(&unpacked.join(&dll), &stage.join("conpty.dll"))?;
+    copy(&unpacked.join(&console), &stage.join("OpenConsole.exe"))?;
+    copy(
+        &root().join("assets/conpty/LICENSE"),
+        &stage.join("LICENSE-conpty.txt"),
+    )
+}
+
+fn sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(fs::read(path)?);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// The Inno Setup compiler: `$ISCC`, `ISCC.exe` on PATH, or the default

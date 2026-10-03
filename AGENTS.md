@@ -68,3 +68,4 @@ Keep pure logic (tabs, pane tree, tab bar layout, key/mouse encoding, config par
 - WSLg's Weston crashes on winit's client-side decorations. nuntio detects WSLg and runs undecorated; the tab bar then provides window dragging, resize edges and min/max/close buttons.
 - If nuntio "crashes" under WSLg, check `/mnt/wslg/stderr.log` for a Weston segfault first.
 - Started without a terminal, logs go to `~/.cache/nuntio/nuntio.log` (`~/Library/Caches/nuntio/nuntio.log` on macOS).
+- On Windows, nuntio uses Windows Terminal's ConPTY only if `conpty.dll` and `OpenConsole.exe` sit next to the exe (packages ship them; the log says "Using conpty.dll"). `cargo run` and `drive` get the ConPTY built into Windows, which puts inline images at the wrong place in TUIs like omp. To test with the bundled one, copy both files from `target/package/nuntio-<version>/` (after `cargo xtask package`) into `target/debug` or `target/release`.

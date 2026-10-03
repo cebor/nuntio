@@ -123,7 +123,7 @@ cargo xtask icons     # regenerate assets/icons/ after editing assets/icon.svg
 
 - Linux: `.tar.gz`, plus `.deb` if [`cargo-deb`](https://github.com/kornelski/cargo-deb) is installed and an AppImage if `appimagetool` is on the `PATH` (or `$APPIMAGETOOL` points to it).
 - macOS: a universal `.app` (Intel + Apple Silicon) in a `.dmg`; needs both Rust targets (`rustup target add x86_64-apple-darwin aarch64-apple-darwin`).
-- Windows: a `.zip` with `nuntio.exe` and `nuntio-config.exe`, plus an Inno Setup installer (`.exe`) if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed (`winget install JRSoftware.InnoSetup`).
+- Windows: a `.zip` with `nuntio.exe` and `nuntio-config.exe`, plus an Inno Setup installer (`.exe`) if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed (`winget install JRSoftware.InnoSetup`). Both also ship Windows Terminal's ConPTY (`conpty.dll`, `OpenConsole.exe`), whose version and SHA-256 are pinned in `xtask/src/main.rs`; the package is downloaded once into `target/` with `curl`. The ConPTY built into Windows passes inline images through before the cursor moves that precede them.
 
 `cargo xtask package` also needs [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) (`cargo install cargo-about --locked --features cli`); it writes `THIRD-PARTY-LICENSES.html` into every package.
 

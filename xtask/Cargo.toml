@@ -11,6 +11,8 @@ ico = "0.5"
 icns = "0.5"
 # `drive`: the debug server's protocol, and PNGs of its frames.
 serde_json.workspace = true
+# `package`: checks the downloaded ConPTY package on Windows.
+sha2 = "0.10"
 tiny-skia = "0.12"
 
 [target.'cfg(windows)'.dependencies]
