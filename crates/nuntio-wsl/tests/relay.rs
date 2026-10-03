@@ -155,6 +155,28 @@ fn closing_stdin_ends_the_session() {
 }
 
 #[test]
+fn closing_stdin_ends_a_program_that_closed_its_terminal() {
+    let mut helper = Helper::start(&["--", "sh", "-c", "exec sleep 30 </dev/null >/dev/null 2>&1"]);
+    helper.resize(80, 24);
+    helper.wait_for(READY, 0);
+    // Until the master hangs up.
+    std::thread::sleep(Duration::from_millis(200));
+    helper.stdin = None;
+    let started = Instant::now();
+    helper.finish();
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn the_pty_is_utf8() {
+    let mut helper = Helper::start(&["--", "sh", "-c", "stty -a"]);
+    helper.resize(80, 24);
+    assert_eq!(helper.finish(), 0);
+    assert!(find(&helper.output, b"-iutf8").is_none());
+    assert!(find(&helper.output, b"iutf8").is_some());
+}
+
+#[test]
 fn data_before_the_size_is_an_error() {
     let mut helper = Helper::start(&["--", "sh"]);
     helper.data(b"echo hi\n");

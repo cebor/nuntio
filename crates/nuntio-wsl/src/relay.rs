@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use crate::proto::{Decoder, Frame, READY, Size};
 
 const CHUNK: usize = 64 * 1024;
+/// Output read after the shell exited; background jobs may keep writing forever.
+const POST_EXIT_DRAIN: usize = 0x10_0000;
 
 /// The write end of the SIGCHLD self-pipe, or -1 before it exists.
 static WAKE_FD: AtomicI32 = AtomicI32::new(-1);
@@ -176,6 +178,15 @@ fn open_pty(size: Size) -> io::Result<(OwnedFd, OwnedFd)> {
             libc::F_SETFL,
             flags | libc::O_NONBLOCK,
         ))?;
+    }
+    // Backspace in canonical mode erases whole UTF-8 characters, as alacritty sets it up.
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    // SAFETY: `termios` is a valid out-pointer and initialized by a successful call.
+    unsafe {
+        cvt(libc::tcgetattr(master.as_raw_fd(), termios.as_mut_ptr()))?;
+        let mut termios = termios.assume_init();
+        termios.c_iflag |= libc::IUTF8;
+        cvt(libc::tcsetattr(master.as_raw_fd(), libc::TCSANOW, &termios))?;
     }
     Ok((master, slave))
 }
@@ -359,10 +370,12 @@ fn event_loop(
             if unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid {
                 reaped = Some(status);
                 // Output the shell wrote before it exited, even if background jobs still
-                // hold the PTY open.
-                while let Ok(n) = read_fd(master_fd, &mut buf) {
-                    if n == 0 || write_all(1, &buf[..n]).is_err() {
-                        break;
+                // hold the PTY open, but not forever.
+                let mut left = POST_EXIT_DRAIN;
+                while left > 0 {
+                    match read_fd(master_fd, &mut buf[..CHUNK.min(left)]) {
+                        Ok(n) if n > 0 && write_all(1, &buf[..n]).is_ok() => left -= n,
+                        _ => break,
                     }
                 }
                 break 'session;
@@ -370,7 +383,7 @@ fn event_loop(
         }
     }
 
-    let status = reaped.or_else(|| wait_blocking(pid));
+    let status = reaped.or_else(|| wait_for_exit(pid, wake));
     match status.map(ExitStatus::from_raw) {
         Some(status) => status
             .code()
@@ -380,15 +393,50 @@ fn event_loop(
     }
 }
 
-fn wait_blocking(pid: libc::pid_t) -> Option<libc::c_int> {
+/// Waits for the program after its terminal closed, still reading stdin: nuntio closing the
+/// pane hangs up the session. `None` if nuntio went away first.
+fn wait_for_exit(pid: libc::pid_t, wake: &OwnedFd) -> Option<libc::c_int> {
     loop {
         let mut status = 0;
         // SAFETY: `status` is a valid out-pointer.
-        if unsafe { libc::waitpid(pid, &mut status, 0) } == pid {
+        if unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid {
             return Some(status);
         }
-        if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+        let mut fds = [
+            libc::pollfd {
+                fd: 0,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: wake.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        // SAFETY: `fds` is a valid array of the given length.
+        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) } < 0 {
+            if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
             return None;
+        }
+        if fds[1].revents & libc::POLLIN != 0 {
+            drain(wake.as_raw_fd());
+        }
+        if fds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+            // There is no terminal left to write the input to.
+            match read_fd(0, &mut [0u8; 4096]) {
+                Ok(0) => {
+                    hang_up(pid, 0);
+                    return None;
+                }
+                Err(err) if !is_retry(&err) => {
+                    hang_up(pid, 0);
+                    return None;
+                }
+                _ => {}
+            }
         }
     }
 }
