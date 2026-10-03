@@ -194,10 +194,13 @@ impl fmt::Display for KeyCombo {
             KeyName::Char('+') => f.write_str("Plus"),
             KeyName::Char('-') => f.write_str("Minus"),
             KeyName::Char(c) => {
-                // Only a single-character uppercase form parses back (`ß` -> `SS` doesn't).
+                // Only an uppercase form that lowercases back parses as the
+                // same key (`ß` -> `SS`, `ı` -> `I` -> `i` don't).
                 let mut upper = c.to_uppercase();
                 match (upper.next(), upper.next()) {
-                    (Some(u), None) => write!(f, "{u}"),
+                    (Some(u), None) if u.to_lowercase().eq(std::iter::once(c)) => {
+                        write!(f, "{u}")
+                    }
                     _ => write!(f, "{c}"),
                 }
             }
@@ -330,6 +333,11 @@ mod tests {
         assert_eq!(combo(&combo("Ctrl+Alt+,").to_string()), combo("Ctrl+Alt+,"));
         assert_eq!(combo("Ctrl+ß").to_string(), "Ctrl+ß");
         assert_eq!(combo(&combo("Ctrl+ß").to_string()), combo("Ctrl+ß"));
+        assert_eq!(combo("Ctrl+ı").to_string(), "Ctrl+ı");
+        assert_eq!(combo("Ctrl+ς").to_string(), "Ctrl+ς");
+        for key in ["Ctrl+ı", "Ctrl+ς", "Ctrl+µ"] {
+            assert_eq!(combo(&combo(key).to_string()), combo(key), "{key}");
+        }
     }
 
     #[test]
