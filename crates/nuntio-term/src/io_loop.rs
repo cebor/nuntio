@@ -4,19 +4,24 @@
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind};
 use std::num::NonZeroUsize;
+use std::sync::atomic::AtomicU32;
+#[cfg(windows)]
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Term, TermMode};
-use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
+#[cfg(windows)]
+use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Processor;
 use polling::{Events, PollMode, Poller};
 
+use crate::backend::{Backend, BackendEvent};
 use crate::image::{self, CellGeometry, ImageKey, ImageStore, TermImage};
 use crate::image_scan::{ImageRequest, ImageScanner, ScanEvent};
 use crate::osc_cwd::{CwdScanner, ReportedDir};
@@ -30,6 +35,9 @@ const MAX_LOCKED_READ: usize = u16::MAX as usize;
 /// How long the PTY thread waits for messages between checks whether an
 /// image is decoded.
 const DECODE_POLL: Duration = Duration::from_millis(5);
+/// Shown in a WSL pane whose nuntio-wsl didn't start.
+#[cfg(windows)]
+const FALLBACK_NOTICE: &[u8] = b"\r\n\x1b[33mnuntio-wsl did not start; this pane runs through ConPTY, without inline images.\x1b[m\r\n";
 
 /// A message to the PTY thread.
 pub(crate) enum Msg {
@@ -57,7 +65,12 @@ impl LoopSender {
 
 pub(crate) struct IoLoop {
     poll: Arc<Poller>,
-    pty: tty::Pty,
+    pty: Backend,
+    /// The pid of the process behind `pty`, shared with the pane; 0 if unknown.
+    child_pid: Arc<AtomicU32>,
+    /// For a WSL pane: the same shell through ConPTY, if nuntio-wsl fails.
+    #[cfg(windows)]
+    fallback: Option<tty::Options>,
     rx: mpsc::Receiver<Msg>,
     tx: mpsc::Sender<Msg>,
     term: Arc<FairMutex<Term<Listener>>>,
@@ -77,16 +90,21 @@ pub(crate) struct IoLoop {
 
 impl IoLoop {
     pub(crate) fn new(
-        pty: tty::Pty,
+        pty: Backend,
+        #[cfg(windows)] fallback: Option<tty::Options>,
         term: Arc<FairMutex<Term<Listener>>>,
         listener: Listener,
         reported_dir: Arc<Mutex<Option<ReportedDir>>>,
         images: Arc<Mutex<ImageStore>>,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
+        let child_pid = Arc::new(AtomicU32::new(pty.pid().unwrap_or(0)));
         Ok(Self {
             poll: Arc::new(Poller::new()?),
             pty,
+            child_pid,
+            #[cfg(windows)]
+            fallback,
             rx,
             tx,
             term,
@@ -107,6 +125,12 @@ impl IoLoop {
             tx: self.tx.clone(),
             poller: self.poll.clone(),
         }
+    }
+
+    /// The pid of the process behind the pane, which changes when a WSL
+    /// pane falls back to ConPTY; 0 if unknown.
+    pub(crate) fn child_pid(&self) -> Arc<AtomicU32> {
+        self.child_pid.clone()
     }
 
     pub(crate) fn spawn(self) -> JoinHandle<()> {
@@ -157,7 +181,7 @@ impl IoLoop {
                     // An empty write would keep the PTY registered as writable.
                     Msg::Input(bytes) if bytes.is_empty() => {}
                     Msg::Input(bytes) => self.write_list.push_back(bytes),
-                    Msg::Resize(size) => self.pty.on_resize(size),
+                    Msg::Resize(size) => self.pty.resize(size),
                     Msg::Shutdown => {
                         shutdown = true;
                         break;
@@ -182,14 +206,29 @@ impl IoLoop {
                 writable |= event.writable;
             }
 
-            if let Some(ChildEvent::Exited(status)) = self.pty.next_child_event() {
-                if let Some(status) = status {
-                    self.listener.send_event(Event::ChildExit(status));
+            match self.pty.next_event() {
+                Some(BackendEvent::Exited(status)) => {
+                    if let Some(status) = status {
+                        self.listener.send_event(Event::ChildExit(status));
+                    }
+                    while let Ok(true) = self.pty_read(&mut buf) {}
+                    self.term.lock().exit();
+                    self.listener.send_event(Event::Wakeup);
+                    break;
                 }
-                while let Ok(true) = self.pty_read(&mut buf) {}
-                self.term.lock().exit();
-                self.listener.send_event(Event::Wakeup);
-                break;
+                #[cfg(windows)]
+                Some(BackendEvent::HelperFailed(status)) => {
+                    while let Ok(true) = self.pty_read(&mut buf) {}
+                    tracing::warn!(?status, "nuntio-wsl did not start, falling back to ConPTY");
+                    if self.fall_back(&poll, interest) {
+                        more_output = false;
+                        continue;
+                    }
+                    self.term.lock().exit();
+                    self.listener.send_event(Event::Wakeup);
+                    break;
+                }
+                None => {}
             }
 
             more_output = false;
@@ -243,7 +282,7 @@ impl IoLoop {
         let mut processed = 0;
         let mut capped = false;
         loop {
-            let n = match self.pty.reader().read(buf) {
+            let n = match self.pty.read(buf) {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(err)
@@ -352,11 +391,42 @@ impl IoLoop {
     fn pty_write(&mut self) -> io::Result<()> {
         write_pending(&mut self.pty, &mut self.write_list, &mut self.written)
     }
+
+    /// Replace a failed nuntio-wsl with the same shell through ConPTY.
+    /// Returns false if there is no fallback or it didn't start either.
+    #[cfg(windows)]
+    fn fall_back(&mut self, poll: &Arc<Poller>, interest: polling::Event) -> bool {
+        {
+            let mut term = self.term.lock();
+            self.parser.advance(&mut *term, FALLBACK_NOTICE);
+        }
+        self.listener.send_event(Event::Wakeup);
+        let _ = self.pty.deregister(poll);
+        let Some(options) = self.fallback.take() else {
+            return false;
+        };
+        let pty = match tty::new(&options, self.listener.window_size(), 0) {
+            Ok(pty) => pty,
+            Err(err) => {
+                tracing::error!(%err, "starting the ConPTY fallback failed");
+                return false;
+            }
+        };
+        self.pty = Backend::Pty(pty);
+        // SAFETY: as for the first registration in `run`.
+        if let Err(err) = unsafe { self.pty.register(poll, interest, PollMode::Level) } {
+            tracing::error!(%err, "registering the ConPTY fallback failed");
+            return false;
+        }
+        self.child_pid
+            .store(self.pty.pid().unwrap_or(0), Ordering::Relaxed);
+        true
+    }
 }
 
 /// The parts of the loop that keep working while an image decodes.
 struct PtyInput<'a> {
-    pty: &'a mut tty::Pty,
+    pty: &'a mut Backend,
     rx: &'a mpsc::Receiver<Msg>,
     write_list: &'a mut VecDeque<Cow<'static, [u8]>>,
     written: &'a mut usize,
@@ -365,12 +435,12 @@ struct PtyInput<'a> {
 
 /// Write the queued input to the PTY until it would block.
 fn write_pending(
-    pty: &mut tty::Pty,
+    pty: &mut Backend,
     write_list: &mut VecDeque<Cow<'static, [u8]>>,
     written: &mut usize,
 ) -> io::Result<()> {
     while let Some(front) = write_list.front() {
-        match pty.writer().write(&front[*written..]) {
+        match pty.write(&front[*written..]) {
             Ok(0) => break,
             Ok(n) => {
                 *written += n;
@@ -418,7 +488,7 @@ fn decode_serving(
                     match msg {
                         Msg::Input(bytes) if bytes.is_empty() => {}
                         Msg::Input(bytes) => input.write_list.push_back(bytes),
-                        Msg::Resize(size) => input.pty.on_resize(size),
+                        Msg::Resize(size) => input.pty.resize(size),
                         Msg::Shutdown => *input.shutdown_requested = true,
                     }
                     // A failure shows again when the loop writes next.

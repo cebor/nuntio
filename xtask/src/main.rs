@@ -11,6 +11,8 @@
 //!   Zola into `site/public/`, or serve it locally with live reload.
 //! - `drive <command>`: start nuntio with its debug server and remote-control
 //!   it: screenshots, screen text, keys, mouse, frame recordings.
+//! - `wsl-helper [--release]`: cross-build the Linux helper `nuntio-wsl`
+//!   (musl, static) next to `nuntio.exe` in `target/debug` or `target/release`.
 
 mod drive;
 
@@ -32,13 +34,6 @@ const ICNS_SIZES: [u32; 7] = [16, 32, 64, 128, 256, 512, 1024];
 const LINUX_ICON_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
 /// AppStream component id, as in `assets/nuntio.metainfo.xml`.
 const METAINFO_ID: &str = "io.github.cebor.nuntio";
-/// Windows Terminal's ConPTY (NuGet package Microsoft.Windows.Console.ConPTY),
-/// shipped next to `nuntio.exe`: alacritty_terminal then loads its
-/// `conpty.dll` instead of the one built into Windows. The built-in one
-/// passes inline images (OSC 1337) through before the cursor moves that
-/// precede them, so omp's images land at the wrong place.
-const CONPTY_VERSION: &str = "1.25.260930003";
-const CONPTY_SHA256: &str = "02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,13 +42,18 @@ fn main() -> Result<()> {
         Some("package") => package(),
         Some("site") => site(args.get(1).is_some_and(|a| a == "serve")),
         Some("drive") => drive::main(&args[1..]),
+        Some("wsl-helper") => {
+            let release = args.get(1).is_some_and(|a| a == "--release");
+            let profile = if release { "release" } else { "debug" };
+            build_wsl_helper(&root().join("target").join(profile), release)
+        }
         Some("changelog") => {
             print!("{}", changelog(args.get(1).map_or("HEAD", String::as_str))?);
             Ok(())
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <icons|package|changelog [<range>]|site [serve]|drive <command>>"
+                "usage: cargo xtask <icons|package|changelog [<range>]|site [serve]|drive <command>|wsl-helper [--release]>"
             );
             std::process::exit(2);
         }
@@ -594,7 +594,7 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
     fresh_dir(&stage)?;
     copy(&binary, &stage.join(format!("{NAME}.exe")))?;
     copy(&helper_of(&binary), &stage.join(format!("{HELPER}.exe")))?;
-    bundle_conpty(&stage)?;
+    build_wsl_helper(&stage, true)?;
     copy_docs(&stage, &notices)?;
     let zip = dist.join(format!(
         "{NAME}-{version}-{}-windows.zip",
@@ -628,56 +628,55 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Copy `conpty.dll`, `OpenConsole.exe` and their license from the pinned
-/// ConPTY package into `stage`. The package is downloaded once into
-/// `target/` and checked against [`CONPTY_SHA256`].
-fn bundle_conpty(stage: &Path) -> Result<()> {
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        arch => bail!("the ConPTY package has no build for {arch}"),
+/// Cross-build `nuntio-wsl` for the Linux of WSL (static musl, linked with
+/// the `rust-lld` that ships with Rust) and copy it into `dest_dir`. WSL
+/// panes run it to get a Linux PTY instead of Windows' ConPTY.
+fn build_wsl_helper(dest_dir: &Path, release: bool) -> Result<()> {
+    let triple = match std::env::consts::ARCH {
+        "x86_64" => "x86_64-unknown-linux-musl",
+        "aarch64" => "aarch64-unknown-linux-musl",
+        arch => bail!("no nuntio-wsl build for {arch}"),
     };
-    let target = root().join("target");
-    let package = target.join(format!("conpty-{CONPTY_VERSION}.nupkg"));
-    if !package.exists() {
-        let partial = package.with_extension("part");
-        run(Command::new("curl")
-            .args(["--fail", "--silent", "--show-error", "--location", "--output"])
-            .arg(&partial)
-            .arg(format!(
-                "https://www.nuget.org/api/v2/package/Microsoft.Windows.Console.ConPTY/{CONPTY_VERSION}"
-            )))?;
-        fs::rename(&partial, &package)?;
+    let installed = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .context("failed to run rustup")?;
+    if !String::from_utf8_lossy(&installed.stdout)
+        .lines()
+        .any(|line| line.trim() == triple)
+    {
+        bail!("the Rust target {triple} is missing: rustup target add {triple}");
     }
-    let hash = sha256(&package)?;
-    ensure!(
-        hash == CONPTY_SHA256,
-        "{} has SHA-256 {hash}, expected {CONPTY_SHA256}; delete it to download it again",
-        package.display()
+    let linker = format!(
+        "CARGO_TARGET_{}_LINKER",
+        triple.to_uppercase().replace('-', "_")
     );
-    let unpacked = target.join(format!("conpty-{CONPTY_VERSION}"));
-    fresh_dir(&unpacked)?;
-    let dll = format!("runtimes/win-{arch}/native/conpty.dll");
-    let console = format!("build/native/runtimes/{arch}/OpenConsole.exe");
-    // Windows' bsdtar unpacks zip archives, and a .nupkg is one.
-    run(Command::new("tar")
-        .arg("-xf")
-        .arg(&package)
-        .arg("-C")
-        .arg(&unpacked)
-        .args([&dll, &console]))?;
-    copy(&unpacked.join(&dll), &stage.join("conpty.dll"))?;
-    copy(&unpacked.join(&console), &stage.join("OpenConsole.exe"))?;
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(root())
+        .env(linker, "rust-lld")
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "nuntio-wsl",
+            "--bin",
+            "nuntio-wsl",
+        ])
+        .args(["--target", triple]);
+    if release {
+        command.arg("--release");
+    }
+    run(&mut command)?;
+    let profile = if release { "release" } else { "debug" };
     copy(
-        &root().join("assets/conpty/LICENSE"),
-        &stage.join("LICENSE-conpty.txt"),
+        &root()
+            .join("target")
+            .join(triple)
+            .join(profile)
+            .join("nuntio-wsl"),
+        &dest_dir.join("nuntio-wsl"),
     )
-}
-
-fn sha256(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(fs::read(path)?);
-    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// The Inno Setup compiler: `$ISCC`, `ISCC.exe` on PATH, or the default

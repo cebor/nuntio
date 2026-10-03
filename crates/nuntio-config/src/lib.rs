@@ -114,10 +114,22 @@ pub struct Shell {
     pub wsl_user: Option<String>,
 }
 
+/// Run by `/bin/sh -c` inside the distro: `$0` is the Windows path of
+/// nuntio-wsl, which `wslpath` turns into a Linux path under any automount
+/// root. If that fails, nuntio-wsl never reports ready and nuntio falls back
+/// to ConPTY.
+const WSL_HELPER_SCRIPT: &str = r#"exec "$(wslpath -u "$0")" "$@""#;
+
 impl Shell {
     /// Program and arguments to spawn. With `wsl`, the shell starts in
-    /// `wsl_dir` (`~` or an absolute Linux path), at home without it.
-    pub fn command(&self, wsl_dir: Option<&str>) -> (String, Vec<String>) {
+    /// `wsl_dir` (`~` or an absolute Linux path), at home without it. With
+    /// `wsl_helper` (the Windows path of nuntio-wsl), the distro runs the
+    /// helper, which starts the shell in its own Linux PTY.
+    pub fn command(
+        &self,
+        wsl_dir: Option<&str>,
+        wsl_helper: Option<&str>,
+    ) -> (String, Vec<String>) {
         let Some(distro) = &self.wsl else {
             let program = self.program.clone().unwrap_or_default();
             return (program, self.args.clone());
@@ -127,7 +139,13 @@ impl Shell {
             args.extend(["-u".to_owned(), user.clone()]);
         }
         args.extend(["--cd".to_owned(), wsl_dir.unwrap_or("~").to_owned()]);
-        if let Some(program) = &self.program {
+        if let Some(helper) = wsl_helper {
+            args.extend(["--exec", "/bin/sh", "-c", WSL_HELPER_SCRIPT, helper].map(str::to_owned));
+            if let Some(program) = &self.program {
+                args.extend(["--".to_owned(), program.clone()]);
+                args.extend(self.args.iter().cloned());
+            }
+        } else if let Some(program) = &self.program {
             args.extend(["--exec".to_owned(), program.clone()]);
             args.extend(self.args.iter().cloned());
         }
@@ -717,11 +735,11 @@ action = "split_horizontal"
     #[test]
     fn shell_command() {
         assert_eq!(
-            shell(r#"shell = { program = "fish", args = ["-l"] }"#).command(None),
+            shell(r#"shell = { program = "fish", args = ["-l"] }"#).command(None, None),
             ("fish".to_owned(), vec!["-l".to_owned()])
         );
         assert_eq!(
-            shell(r#"shell = { wsl = "Ubuntu" }"#).command(None),
+            shell(r#"shell = { wsl = "Ubuntu" }"#).command(None, None),
             (
                 "wsl.exe".to_owned(),
                 ["-d", "Ubuntu", "--cd", "~"].map(String::from).to_vec()
@@ -729,21 +747,61 @@ action = "split_horizontal"
         );
         assert_eq!(
             shell(r#"shell = { wsl = "Ubuntu", wsl_user = "root" }"#)
-                .command(None)
+                .command(None, None)
                 .1,
             ["-d", "Ubuntu", "-u", "root", "--cd", "~"]
         );
         assert_eq!(
             shell(r#"shell = { wsl = "Debian", program = "fish", args = ["-l"] }"#)
-                .command(None)
+                .command(None, None)
                 .1,
             ["-d", "Debian", "--cd", "~", "--exec", "fish", "-l"]
         );
         assert_eq!(
             shell(r#"shell = { wsl = "Ubuntu" }"#)
-                .command(Some("/home/me/My Files"))
+                .command(Some("/home/me/My Files"), None)
                 .1,
             ["-d", "Ubuntu", "--cd", "/home/me/My Files"]
+        );
+        let helper = r"C:\Program Files\nuntio\nuntio-wsl";
+        assert_eq!(
+            shell(r#"shell = { wsl = "Ubuntu" }"#)
+                .command(None, Some(helper))
+                .1,
+            [
+                "-d",
+                "Ubuntu",
+                "--cd",
+                "~",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                WSL_HELPER_SCRIPT,
+                helper
+            ]
+        );
+        assert_eq!(
+            shell(
+                r#"shell = { wsl = "Debian", wsl_user = "root", program = "fish", args = ["-l"] }"#
+            )
+            .command(None, Some(helper))
+            .1,
+            [
+                "-d",
+                "Debian",
+                "-u",
+                "root",
+                "--cd",
+                "~",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                WSL_HELPER_SCRIPT,
+                helper,
+                "--",
+                "fish",
+                "-l"
+            ]
         );
     }
 

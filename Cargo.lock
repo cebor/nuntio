@@ -2252,10 +2252,18 @@ dependencies = [
  "base64 0.22.1",
  "image",
  "libc",
+ "nuntio-wsl",
  "percent-encoding",
  "polling",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "nuntio-wsl"
+version = "0.1.9"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -5447,7 +5455,6 @@ dependencies = [
  "ico",
  "resvg",
  "serde_json",
- "sha2",
  "tiny-skia 0.12.0",
  "windows-sys 0.61.2",
 ]

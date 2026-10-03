@@ -39,7 +39,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **New tabs and panes open in the current directory** of the focused pane (Linux and macOS).
 - **Find bar** with incremental search, a match count and a regex mode (<kbd>Alt</kbd>+<kbd>R</kbd>). It starts with the selected text, if there is one.
 - **Drag and drop**: drop files onto a pane to type their paths, escaped for the shell.
-- **Inline images** with iTerm2's protocol (OSC 1337 `File=`): PNG, JPEG, GIF, WebP and BMP, stored in the grid so they scroll, clear and get overwritten like text. omp shows images inline on its own, also in WSL.
+- **Inline images** with iTerm2's protocol (OSC 1337 `File=`): PNG, JPEG, GIF, WebP and BMP, stored in the grid so they scroll, clear and get overwritten like text. omp shows images inline on its own, also in WSL on Windows, where nuntio runs WSL panes through its helper `nuntio-wsl` in a Linux PTY instead of ConPTY. In cmd and PowerShell panes omp shows text instead.
 - **Clickable URLs**: hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on macOS) and click. While hovering, the address the link leads to is shown, and links to programs are not opened.
 - **Themes**: twenty built in, your own as TOML or iTerm2 `.itermcolors`, and a light/dark pair that follows the OS appearance.
 - **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.
@@ -178,9 +178,10 @@ In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>
 | [`crates/nuntio`](crates/nuntio) | The binary: winit event loop, window and layout, tabs, split tree, key and mouse encoding, shortcuts, tab bar, find bar and banners |
 | [`crates/nuntio-term`](crates/nuntio-term) | Wrapper around `alacritty_terminal`: a PTY and IO thread per pane, inline images, snapshots of the visible screen, palette, search, URL detection, foreground process info |
 | [`crates/nuntio-render`](crates/nuntio-render) | wgpu renderer: instanced quads for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases), inline images and UI; procedural box drawing |
+| [`crates/nuntio-wsl`](crates/nuntio-wsl) | `nuntio-wsl`, the Linux helper that gives WSL panes on Windows their own Linux PTY, connected to nuntio over plain pipes |
 | [`crates/nuntio-config`](crates/nuntio-config) | Config schema, loading and validation, editing in place, themes (built-in TOML and `.itermcolors`), file watcher |
 | [`crates/nuntio-config-tui`](crates/nuntio-config-tui) | The `nuntio-config` editor: a ratatui terminal UI built on the schema |
-| [`xtask`](xtask) | Icons, packaging, changelog, the website build (`site`) and the debug driver (`drive`) |
+| [`xtask`](xtask) | Icons, packaging, changelog, the website build (`site`), the debug driver (`drive`) and the cross-build of `nuntio-wsl` (`wsl-helper`) |
 
 PTY threads send events through the winit event loop proxy. The main thread takes a snapshot of each visible pane, holding the terminal lock only for the copy, and hands one frame to the renderer. It redraws only when something changed.
 

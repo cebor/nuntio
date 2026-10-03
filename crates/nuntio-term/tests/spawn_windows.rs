@@ -3,7 +3,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nuntio_term::{Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize};
+use nuntio_term::{Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize, Transport};
 
 const SIZE: TermSize = TermSize {
     columns: 40,
@@ -31,19 +31,51 @@ fn spawn_with(
     args: &[&str],
     callback: impl Fn(TermEvent) + Send + Sync + 'static,
 ) -> TermHandle {
+    spawn_via(program, args, Transport::Pty, callback)
+}
+
+fn spawn_via(
+    program: &str,
+    args: &[&str],
+    transport: Transport,
+    callback: impl Fn(TermEvent) + Send + Sync + 'static,
+) -> TermHandle {
     let options = SpawnOptions {
-        shell: Some(Shell {
-            program: program.into(),
-            args: args.iter().map(|&a| a.into()).collect(),
-        }),
+        shell: Some(shell(program, args)),
         login_shell: false,
         working_directory: None,
         term: OPTIONS,
         palette: Default::default(),
         env: vec![],
         window_id: None,
+        transport,
     };
     TermHandle::spawn(options, SIZE, callback).expect("spawn")
+}
+
+fn shell(program: &str, args: &[&str]) -> Shell {
+    Shell {
+        program: program.into(),
+        args: args.iter().map(|&a| a.into()).collect(),
+    }
+}
+
+/// Like [`spawn`], over the pipes nuntio-wsl uses.
+fn spawn_helper(
+    program: &str,
+    args: &[&str],
+    fallback: Shell,
+) -> (TermHandle, mpsc::Receiver<TermEvent>) {
+    let (tx, rx) = mpsc::channel();
+    let handle = spawn_via(
+        program,
+        args,
+        Transport::WslHelper { fallback },
+        move |event| {
+            let _ = tx.send(event);
+        },
+    );
+    (handle, rx)
 }
 
 /// ConPTY and PowerShell start slowly, hence the generous timeout.
@@ -173,4 +205,46 @@ fn large_output_is_read_without_input() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// A stand-in for nuntio-wsl that reports ready and prints: its output
+/// reaches the grid without the marker, and its exit closes the pane.
+#[test]
+fn helper_output_reaches_the_grid() {
+    let (handle, rx) = spawn_helper(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-Command",
+            "[Console]::Out.Write(\"$([char]27)]nuntio-wsl;ready$([char]7)hello\")",
+        ],
+        shell("cmd.exe", &["/c", "echo wrong-fallback"]),
+    );
+    wait_for_exit(&rx);
+    assert!(screen_contains(&handle, "hello"));
+    assert!(!screen_contains(&handle, "nuntio-wsl"));
+    assert!(!screen_contains(&handle, "wrong-fallback"));
+}
+
+/// A helper that exits without reporting ready hands the pane to ConPTY.
+#[test]
+fn failed_helper_falls_back_to_conpty() {
+    let (handle, rx) = spawn_helper(
+        "cmd.exe",
+        &["/c", "exit 1"],
+        shell("cmd.exe", &["/c", "echo via-conpty"]),
+    );
+    wait_for_exit(&rx);
+    assert!(screen_contains(&handle, "nuntio-wsl did not start"));
+    assert!(screen_contains(&handle, "via-conpty"));
+}
+
+/// ConPTY panes don't ask omp for images: Windows' ConPTY would misplace them.
+/// The variable is blanked, so one inherited from a nuntio pane is gone too.
+#[test]
+fn conpty_panes_get_no_image_protocol() {
+    let (handle, rx) = spawn("cmd.exe", &["/c", "echo [%PI_FORCE_IMAGE_PROTOCOL%]"]);
+    wait_for_exit(&rx);
+    assert!(screen_contains(&handle, "["));
+    assert!(!screen_contains(&handle, "iterm2"));
 }

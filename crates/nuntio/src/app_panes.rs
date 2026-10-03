@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
-use nuntio_term::{Shell, SpawnOptions, TermHandle, TermSize};
+use nuntio_term::{Shell, SpawnOptions, TermHandle, TermSize, Transport};
 
 use super::{CONFIRM_REPEAT, Core, INITIAL_GRID, Startup, term_options};
 use crate::banner::{Banner, Severity};
@@ -15,6 +15,23 @@ use crate::shells::{self, Launch, ShellChoice};
 use crate::tabs::Placement;
 use crate::window::{Pane, TabContent, WindowState};
 use crate::wsl::Distro;
+
+/// The Windows path of nuntio-wsl for a pane that runs `shell` in WSL, if
+/// the helper is there: the pane then gets a Linux PTY instead of ConPTY.
+#[cfg(windows)]
+fn wsl_helper(shell: &nuntio_config::Shell) -> Option<String> {
+    shell.wsl.as_ref()?;
+    let Some(helper) = crate::wsl::helper() else {
+        tracing::debug!("nuntio-wsl not found next to the executable, WSL panes use ConPTY");
+        return None;
+    };
+    helper.to_str().map(str::to_owned)
+}
+
+#[cfg(not(windows))]
+fn wsl_helper(_shell: &nuntio_config::Shell) -> Option<String> {
+    None
+}
 
 /// Title of the banner that asks to confirm a close.
 const CLOSE_BANNER: &str = "Close";
@@ -102,6 +119,7 @@ impl Core {
             }
             _ => None,
         };
+        let mut transport = Transport::Pty;
         let shell = match launch {
             Launch::Command(mut argv) => Some(Shell {
                 program: argv.remove(0),
@@ -117,8 +135,16 @@ impl Core {
                     Some(StartDir::Wsl(dir)) => Some(dir.as_str()),
                     _ => None,
                 };
-                let (program, args) = s.command(wsl_dir);
-                Some(Shell { program, args })
+                let (program, args) = s.command(wsl_dir, None);
+                let conpty = Shell { program, args };
+                match wsl_helper(&s) {
+                    Some(helper) => {
+                        let (program, args) = s.command(wsl_dir, Some(&helper));
+                        transport = Transport::WslHelper { fallback: conpty };
+                        Some(Shell { program, args })
+                    }
+                    None => Some(conpty),
+                }
             }
         };
         let options = SpawnOptions {
@@ -133,6 +159,7 @@ impl Core {
             palette: self.palette.clone(),
             env: crate::pane_env::pane_env(self.config_path.as_deref(), distro.is_some()),
             window_id: self.window_id,
+            transport,
         };
         let term = TermHandle::spawn(options, size, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));

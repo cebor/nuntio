@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
@@ -14,6 +14,7 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Rgb;
 use thiserror::Error;
 
+use crate::backend::Backend;
 use crate::image::{ImageStore, crop_columns, strip_image_text};
 use crate::io_loop::{IoLoop, LoopSender, Msg};
 use crate::osc_cwd::ReportedDir;
@@ -22,6 +23,8 @@ use crate::process;
 use crate::search::{self, Search};
 use crate::snapshot::Snapshot;
 use crate::url::{self, Link};
+#[cfg(windows)]
+use crate::wsl_pipe::WslPipe;
 
 #[derive(Debug, Error)]
 pub enum SpawnError {
@@ -54,6 +57,18 @@ pub struct Shell {
     pub args: Vec<String>,
 }
 
+/// How the shell is connected to the pane.
+#[derive(Debug, Clone, Default)]
+pub enum Transport {
+    /// A pseudoterminal: the Unix PTY, or ConPTY on Windows.
+    #[default]
+    Pty,
+    /// Windows: `shell` is `wsl.exe` running `nuntio-wsl`, which owns a Linux PTY and
+    /// speaks `nuntio_wsl::proto` over plain pipes, so output arrives byte for byte.
+    /// If nuntio-wsl doesn't start, the pane runs `fallback` through ConPTY.
+    WslHelper { fallback: Shell },
+}
+
 /// Terminal options that can also change while a pane runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TermOptions {
@@ -83,6 +98,7 @@ pub struct SpawnOptions {
     /// The X11 window id the pane lives in, for programs that read `$WINDOWID`.
     /// `None` on Wayland, macOS and Windows: the variable is then empty.
     pub window_id: Option<u64>,
+    pub transport: Transport,
 }
 
 /// Terminal grid size plus the cell size in physical pixels.
@@ -268,12 +284,14 @@ pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
     listener: Listener,
     sender: LoopSender,
-    /// The process nuntio started: the shell, or `login` running it.
-    child_pid: Option<u32>,
+    /// The process nuntio started: the shell, `login` running it, or
+    /// `wsl.exe`; 0 if unknown. Changes when a WSL pane falls back to ConPTY.
+    child_pid: Arc<AtomicU32>,
     /// `child_pid` is `login`; the shell is its child.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     via_login: bool,
-    /// The shell's pid, once known.
+    /// The shell's pid behind `login`, once known.
+    #[cfg(target_os = "macos")]
     shell_pid: OnceLock<u32>,
     shell_name: String,
     /// The pane runs a one-off command, not a shell.
@@ -324,10 +342,17 @@ impl TermHandle {
                 "TERM_PROGRAM_VERSION".into(),
                 env!("CARGO_PKG_VERSION").into(),
             ),
-            // omp/pi pick an image protocol only from variables of terminals
-            // they know; nuntio speaks iTerm2's OSC 1337.
-            ("PI_FORCE_IMAGE_PROTOCOL".into(), "iterm2".into()),
         ]);
+        // omp/pi pick an image protocol only from variables of terminals they
+        // know; nuntio speaks iTerm2's OSC 1337. Not in ConPTY panes: the
+        // ConPTY built into Windows passes OSC 1337 ahead of the cursor moves
+        // before it, so omp stays with its text fallback there. Empty rather
+        // than absent, so a value inherited from a nuntio pane doesn't win.
+        let images = cfg!(not(windows)) || matches!(options.transport, Transport::WslHelper { .. });
+        env.insert(
+            "PI_FORCE_IMAGE_PROTOCOL".into(),
+            if images { "iterm2" } else { "" }.into(),
+        );
         // alacritty sets both to the window id it is given and offers no way to
         // unset them; `Options::env` is applied last, so empty values win. Empty
         // is the closest to unset: `[ -n "$WINDOWID" ]` behaves as if it were.
@@ -370,29 +395,52 @@ impl TermHandle {
         let via_login = cfg!(target_os = "macos") && (options.shell.is_none() || login.is_some());
         let runs_command = options.shell.is_some() && !options.login_shell;
         let shell = login.or(options.shell);
-        let pty_options = tty::Options {
-            shell: shell.map(|s| tty::Shell::new(s.program, s.args)),
-            working_directory: options.working_directory,
-            drain_on_exit: true,
-            env,
-            #[cfg(target_os = "windows")]
-            escape_args: true,
-        };
-        let pty = tty::new(
-            &pty_options,
-            size.window_size(),
-            options.window_id.unwrap_or(0),
-        )
-        .map_err(SpawnError::Pty)?;
-        #[cfg(unix)]
-        let child_pid = Some(pty.child().id());
         #[cfg(windows)]
-        let child_pid = pty.child_watcher().pid().map(|pid| pid.get());
+        let mut fallback = None;
+        let pty = match options.transport {
+            Transport::Pty => {
+                let pty_options = tty_options(shell, options.working_directory, env);
+                let pty = tty::new(
+                    &pty_options,
+                    size.window_size(),
+                    options.window_id.unwrap_or(0),
+                )
+                .map_err(SpawnError::Pty)?;
+                Backend::Pty(pty)
+            }
+            #[cfg(windows)]
+            Transport::WslHelper { fallback: conpty } => {
+                let helper = shell.unwrap_or_default();
+                let mut helper_env = env.clone();
+                // wsl.exe writes its own messages in UTF-8 instead of UTF-16.
+                helper_env.insert("WSL_UTF8".into(), "1".into());
+                let pipe = WslPipe::spawn(
+                    &helper.program,
+                    &helper.args,
+                    &helper_env,
+                    size.window_size(),
+                )
+                .map_err(SpawnError::Pty)?;
+                let mut env = env;
+                env.insert("PI_FORCE_IMAGE_PROTOCOL".into(), String::new());
+                fallback = Some(tty_options(Some(conpty), options.working_directory, env));
+                Backend::Wsl(pipe)
+            }
+            #[cfg(not(windows))]
+            Transport::WslHelper { .. } => {
+                return Err(SpawnError::Pty(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WSL panes exist only on Windows",
+                )));
+            }
+        };
 
         let reported_dir = Arc::new(Mutex::new(None));
         let images = Arc::new(Mutex::new(ImageStore::default()));
         let io_loop = IoLoop::new(
             pty,
+            #[cfg(windows)]
+            fallback,
             term.clone(),
             listener.clone(),
             reported_dir.clone(),
@@ -400,6 +448,7 @@ impl TermHandle {
         )
         .map_err(SpawnError::EventLoop)?;
         let sender = io_loop.sender();
+        let child_pid = io_loop.child_pid();
         let _ = listener.inner.sender.set(sender.clone());
         io_loop.spawn();
 
@@ -409,6 +458,7 @@ impl TermHandle {
             sender,
             child_pid,
             via_login,
+            #[cfg(target_os = "macos")]
             shell_pid: OnceLock::new(),
             shell_name,
             runs_command,
@@ -420,22 +470,22 @@ impl TermHandle {
     /// The shell's pid. Behind `login`, that's `login` itself until it
     /// has started the shell.
     fn shell_pid(&self) -> Option<u32> {
-        if let Some(&pid) = self.shell_pid.get() {
-            return Some(pid);
-        }
-        let child = self.child_pid?;
+        let child = Some(self.child_pid.load(Ordering::Relaxed)).filter(|&pid| pid != 0)?;
         #[cfg(target_os = "macos")]
-        let shell = if self.via_login {
-            process::login_child(child)
-        } else {
-            Some(child)
-        };
-        #[cfg(not(target_os = "macos"))]
-        let shell = Some(child);
-        match shell {
-            Some(pid) => Some(*self.shell_pid.get_or_init(|| pid)),
-            None => Some(child),
+        {
+            if let Some(&pid) = self.shell_pid.get() {
+                return Some(pid);
+            }
+            let shell = if self.via_login {
+                process::login_child(child)
+            } else {
+                Some(child)
+            };
+            if let Some(pid) = shell {
+                return Some(*self.shell_pid.get_or_init(|| pid));
+            }
         }
+        Some(child)
     }
 
     /// Send typed or pasted input to the shell; jumps back to the bottom.
@@ -884,6 +934,22 @@ fn exec_as_login(shell: &Shell) -> String {
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// alacritty's options for a pseudoterminal running `shell`.
+fn tty_options(
+    shell: Option<Shell>,
+    working_directory: Option<PathBuf>,
+    env: HashMap<String, String>,
+) -> tty::Options {
+    tty::Options {
+        shell: shell.map(|s| tty::Shell::new(s.program, s.args)),
+        working_directory,
+        drain_on_exit: true,
+        env,
+        #[cfg(target_os = "windows")]
+        escape_args: true,
+    }
 }
 
 /// `WSLENV` that also passes our terminal variables into WSL, keeping

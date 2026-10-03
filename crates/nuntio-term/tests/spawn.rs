@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use nuntio_term::{
     GridPoint, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
-    TermOptions, TermSize,
+    TermOptions, TermSize, Transport,
 };
 
 const SIZE: TermSize = TermSize {
@@ -52,6 +52,7 @@ fn options(script: &str, env: Vec<(String, String)>, term: TermOptions) -> Spawn
         palette: Default::default(),
         env,
         window_id: None,
+        transport: Transport::Pty,
     }
 }
 
@@ -313,6 +314,7 @@ fn login_shell_is_seen_behind_login() {
         palette: Default::default(),
         env: Vec::new(),
         window_id: None,
+        transport: Transport::Pty,
     };
     let handle = TermHandle::spawn(options, SIZE, move |event| {
         let _ = tx.send(event);

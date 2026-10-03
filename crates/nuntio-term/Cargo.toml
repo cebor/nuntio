@@ -19,5 +19,9 @@ tracing.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# The protocol to nuntio-wsl, which runs WSL panes without ConPTY.
+nuntio-wsl.workspace = true
+
 [lints]
 workspace = true

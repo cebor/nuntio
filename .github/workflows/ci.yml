@@ -117,7 +117,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: stable
-          targets: ${{ runner.os == 'macOS' && 'x86_64-apple-darwin,aarch64-apple-darwin' || '' }}
+          targets: ${{ runner.os == 'macOS' && 'x86_64-apple-darwin,aarch64-apple-darwin' || runner.os == 'Windows' && 'x86_64-unknown-linux-musl' || '' }}
       - name: Install Linux dependencies and appimagetool
         if: runner.os == 'Linux'
         run: |

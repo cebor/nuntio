@@ -171,6 +171,15 @@ fn query_home(_distro: &str, _user: Option<&str>) -> Option<String> {
     None
 }
 
+/// nuntio-wsl, the Linux helper that gives WSL panes their own Linux PTY,
+/// if it sits next to the executable. Not canonicalized: `wslpath` can't
+/// read `\\?\` paths.
+#[cfg(windows)]
+pub fn helper() -> Option<std::path::PathBuf> {
+    let helper = std::env::current_exe().ok()?.parent()?.join("nuntio-wsl");
+    helper.is_file().then_some(helper)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
