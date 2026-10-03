@@ -123,7 +123,7 @@ cargo xtask icons     # regenerate assets/icons/ after editing assets/icon.svg
 
 - Linux: `.tar.gz`, plus `.deb` if [`cargo-deb`](https://github.com/kornelski/cargo-deb) is installed and an AppImage if `appimagetool` is on the `PATH` (or `$APPIMAGETOOL` points to it).
 - macOS: a universal `.app` (Intel + Apple Silicon) in a `.dmg`; needs both Rust targets (`rustup target add x86_64-apple-darwin aarch64-apple-darwin`).
-- Windows: a `.zip` with `nuntio.exe`, `nuntio-config.exe` and the Linux helper `nuntio-wsl`, plus an Inno Setup installer (`.exe`) if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed (`winget install JRSoftware.InnoSetup`). WSL panes run `nuntio-wsl`, which owns a Linux PTY, instead of the ConPTY built into Windows, which passes inline images through before the cursor moves that precede them. Build it alone with `cargo xtask wsl-helper [--release]`; it needs `rustup target add x86_64-unknown-linux-musl`.
+- Windows: a `.zip` with `nuntio.exe`, `nuntio-config.exe` and the Linux helper `nuntio-wsl`, plus an Inno Setup installer (`.exe`) if [Inno Setup](https://jrsoftware.org/isinfo.php) is installed (`winget install JRSoftware.InnoSetup`). WSL panes run `nuntio-wsl`, which owns a Linux PTY, instead of the ConPTY built into Windows, which passes inline images through before the cursor moves that precede them. On Windows, `cargo build` builds `nuntio-wsl` next to `nuntio.exe` when the musl target is installed (`rustup target add x86_64-unknown-linux-musl`); without it, the build only warns and packaging fails.
 
 `cargo xtask package` also needs [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) (`cargo install cargo-about --locked --features cli`); it writes `THIRD-PARTY-LICENSES.html` into every package.
 

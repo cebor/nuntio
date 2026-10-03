@@ -320,14 +320,6 @@ fn start(args: &mut Args) -> Result<()> {
         build.arg("--release");
     }
     run(&mut build)?;
-    if cfg!(windows) {
-        let target = root()
-            .join("target")
-            .join(if release { "release" } else { "debug" });
-        if let Err(err) = crate::build_wsl_helper(&target, release) {
-            eprintln!("nuntio-wsl not built ({err:#}); WSL panes use ConPTY");
-        }
-    }
 
     let dir = dir();
     fs::create_dir_all(&dir)?;

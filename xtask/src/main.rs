@@ -11,8 +11,6 @@
 //!   Zola into `site/public/`, or serve it locally with live reload.
 //! - `drive <command>`: start nuntio with its debug server and remote-control
 //!   it: screenshots, screen text, keys, mouse, frame recordings.
-//! - `wsl-helper [--release]`: cross-build the Linux helper `nuntio-wsl`
-//!   (musl, static) next to `nuntio.exe` in `target/debug` or `target/release`.
 
 mod drive;
 
@@ -42,18 +40,13 @@ fn main() -> Result<()> {
         Some("package") => package(),
         Some("site") => site(args.get(1).is_some_and(|a| a == "serve")),
         Some("drive") => drive::main(&args[1..]),
-        Some("wsl-helper") => {
-            let release = args.get(1).is_some_and(|a| a == "--release");
-            let profile = if release { "release" } else { "debug" };
-            build_wsl_helper(&root().join("target").join(profile), release)
-        }
         Some("changelog") => {
             print!("{}", changelog(args.get(1).map_or("HEAD", String::as_str))?);
             Ok(())
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <icons|package|changelog [<range>]|site [serve]|drive <command>|wsl-helper [--release]>"
+                "usage: cargo xtask <icons|package|changelog [<range>]|site [serve]|drive <command>>"
             );
             std::process::exit(2);
         }
@@ -594,7 +587,12 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
     fresh_dir(&stage)?;
     copy(&binary, &stage.join(format!("{NAME}.exe")))?;
     copy(&helper_of(&binary), &stage.join(format!("{HELPER}.exe")))?;
-    build_wsl_helper(&stage, true)?;
+    let wsl_helper = binary.with_file_name("nuntio-wsl");
+    ensure!(
+        wsl_helper.is_file(),
+        "nuntio-wsl was not built; it needs `rustup target add x86_64-unknown-linux-musl`"
+    );
+    copy(&wsl_helper, &stage.join("nuntio-wsl"))?;
     copy_docs(&stage, &notices)?;
     let zip = dist.join(format!(
         "{NAME}-{version}-{}-windows.zip",
@@ -626,57 +624,6 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
         eprintln!("Inno Setup not found, skipping installer (winget install JRSoftware.InnoSetup)");
     }
     Ok(())
-}
-
-/// Cross-build `nuntio-wsl` for the Linux of WSL (static musl, linked with
-/// the `rust-lld` that ships with Rust) and copy it into `dest_dir`. WSL
-/// panes run it to get a Linux PTY instead of Windows' ConPTY.
-fn build_wsl_helper(dest_dir: &Path, release: bool) -> Result<()> {
-    let triple = match std::env::consts::ARCH {
-        "x86_64" => "x86_64-unknown-linux-musl",
-        "aarch64" => "aarch64-unknown-linux-musl",
-        arch => bail!("no nuntio-wsl build for {arch}"),
-    };
-    let installed = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .context("failed to run rustup")?;
-    if !String::from_utf8_lossy(&installed.stdout)
-        .lines()
-        .any(|line| line.trim() == triple)
-    {
-        bail!("the Rust target {triple} is missing: rustup target add {triple}");
-    }
-    let linker = format!(
-        "CARGO_TARGET_{}_LINKER",
-        triple.to_uppercase().replace('-', "_")
-    );
-    let mut command = Command::new(env!("CARGO"));
-    command
-        .current_dir(root())
-        .env(linker, "rust-lld")
-        .args([
-            "build",
-            "--locked",
-            "-p",
-            "nuntio-wsl",
-            "--bin",
-            "nuntio-wsl",
-        ])
-        .args(["--target", triple]);
-    if release {
-        command.arg("--release");
-    }
-    run(&mut command)?;
-    let profile = if release { "release" } else { "debug" };
-    copy(
-        &root()
-            .join("target")
-            .join(triple)
-            .join(profile)
-            .join("nuntio-wsl"),
-        &dest_dir.join("nuntio-wsl"),
-    )
 }
 
 /// The Inno Setup compiler: `$ISCC`, `ISCC.exe` on PATH, or the default
