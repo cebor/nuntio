@@ -63,10 +63,13 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     let report_events = mode.contains(TermMode::REPORT_EVENT_TYPES);
     let all_keys = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
 
-    // A dead key types nothing by itself; the composed character follows as
-    // text. Windows reports it with its character as `unmodified`, which
-    // would send "CSI 94u" and leave a stray "^" before "ê".
-    if !all_keys && matches!(input.key, Key::Dead(_)) {
+    // A dead key alone or with AltGr types nothing by itself; the composed
+    // character follows as text. Windows reports it with its character as
+    // `unmodified`, which would send "CSI 94u" and leave a stray "^" before
+    // "ê". With Ctrl or Alt nothing composes, so it is reported as a key.
+    let altgr_held = cfg!(windows) && input.ctrl && input.meta;
+    let composes = (!input.ctrl && !input.meta) || altgr_held;
+    if !all_keys && composes && matches!(input.key, Key::Dead(_)) {
         return None;
     }
     let event = match input.event {
@@ -647,6 +650,8 @@ mod tests {
         assert_eq!(dead().encode(DISAMBIGUATE | ALTERNATES | TEXT), None);
         assert_eq!(dead().sends(ALL_KEYS), "\x1b[94u");
         assert_eq!(dead().sends(ALL_KEYS | TEXT), "\x1b[94u");
+        assert_eq!(dead().ctrl().sends(DISAMBIGUATE), "\x1b[94;5u");
+        assert_eq!(dead().meta().sends(DISAMBIGUATE), "\x1b[94;3u");
     }
 
     #[cfg(not(windows))]
