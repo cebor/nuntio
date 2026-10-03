@@ -593,6 +593,11 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
         "nuntio-wsl was not built; it needs `rustup target add x86_64-unknown-linux-musl`"
     );
     copy(&wsl_helper, &stage.join("nuntio-wsl"))?;
+    // nuntio-wsl links Rust's bundled musl statically.
+    copy(
+        &root().join("assets/musl/COPYRIGHT"),
+        &stage.join("LICENSE-musl.txt"),
+    )?;
     copy_docs(&stage, &notices)?;
     let zip = dist.join(format!(
         "{NAME}-{version}-{}-windows.zip",
