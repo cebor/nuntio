@@ -35,8 +35,8 @@ const MAX_LOCKED_READ: usize = u16::MAX as usize;
 /// How long the PTY thread waits for messages between checks whether an
 /// image is decoded.
 const DECODE_POLL: Duration = Duration::from_millis(5);
-/// Length of the escape that begins a synchronized update (DEC 2026).
-const BSU_LEN: usize = b"\x1b[?2026h".len();
+/// The escape that begins a synchronized update (DEC 2026).
+const BSU: &[u8] = b"\x1b[?2026h";
 /// Read passes after the program exited: 2 MiB, more than WslPipe buffers
 /// (`MAX_BUFFERED` + one read), but bounded for processes that outlive it
 /// and keep writing.
@@ -309,6 +309,8 @@ impl IoLoop {
         let mut capped = false;
         // Output reached the grid, even if a synchronized update is open now.
         let mut applied = false;
+        // Text was parsed outside a synchronized update.
+        let mut outside_text = false;
         loop {
             let n = match self.pty.read(buf) {
                 Ok(0) => break,
@@ -343,15 +345,13 @@ impl IoLoop {
                     let syncing = parser.sync_timeout().sync_timeout().is_some();
                     // Output reached the grid although an update is open now:
                     // a frame ended (even if the next one began), or text came
-                    // before a BSU, which isn't buffered itself. Text outside
-                    // an update counts only if none is open at the end of the
-                    // pass: the scanner splits escapes, and a lone ESC or the
-                    // first half of a BSU changes nothing.
-                    applied |= if was_sync {
-                        parser.sync_bytes_count() < before + bytes.len()
-                    } else {
-                        syncing && parser.sync_bytes_count() + BSU_LEN < bytes.len()
-                    };
+                    // before a BSU. The scanner splits escapes, so a lone ESC
+                    // or the first part of a BSU isn't text.
+                    if was_sync {
+                        applied |= parser.sync_bytes_count() < before + bytes.len();
+                    } else if !syncing && !BSU.starts_with(bytes) {
+                        outside_text = true;
+                    }
                 }
                 ScanEvent::CellSizeQuery => {
                     let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
@@ -430,9 +430,11 @@ impl IoLoop {
         drop(guard);
         drop(lease);
         // Redraw, but not in the middle of a synchronized update unless a
-        // frame was applied: its end, or its timeout in `run`, wakes the
-        // main thread.
-        if processed > 0 && (applied || self.parser.sync_timeout().sync_timeout().is_none()) {
+        // frame or text before it was applied: its end, or its timeout in
+        // `run`, wakes the main thread.
+        if processed > 0
+            && (applied || outside_text || self.parser.sync_timeout().sync_timeout().is_none())
+        {
             self.listener.send_event(Event::Wakeup);
         }
         Ok(capped)
@@ -569,7 +571,7 @@ fn with_flushed_sync(
     if parser.sync_timeout().sync_timeout().is_some() {
         parser.stop_sync(term);
         action(term);
-        parser.advance(term, b"\x1b[?2026h");
+        parser.advance(term, BSU);
     } else {
         action(term);
     }
