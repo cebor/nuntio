@@ -39,6 +39,7 @@ struct Instance {
     pos: [f32; 2],
     size: [f32; 2],
     uv: [f32; 4],
+    /// Images: their atlas region (x0, y0, x1, y1), normalized.
     color: [f32; 4],
     kind: u32,
     _pad: [u32; 3],
@@ -873,7 +874,7 @@ impl Renderer {
                 pos: [x, y],
                 size: [piece.columns as f32 * cw, ch],
                 uv: image_uv(region, self.image_atlas.size(), piece),
-                color: [1.0; 4],
+                color: image_bounds(region, self.image_atlas.size()),
                 kind: if region.width as usize == piece.image.columns * m.width as usize
                     && region.height as usize == piece.image.lines * m.height as usize
                 {
@@ -1340,9 +1341,32 @@ fn image_uv(region: AtlasRegion, atlas_size: u32, piece: &ImagePiece) -> [f32; 4
     ]
 }
 
+/// An image's whole atlas region, normalized: x0, y0, x1, y1. Scaled
+/// sampling stays inside it.
+fn image_bounds(region: AtlasRegion, atlas_size: u32) -> [f32; 4] {
+    let size = atlas_size as f32;
+    [
+        region.x as f32 / size,
+        region.y as f32 / size,
+        (region.x + region.width) as f32 / size,
+        (region.y + region.height) as f32 / size,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_bounds_are_the_normalized_region() {
+        let region = AtlasRegion {
+            x: 10,
+            y: 20,
+            width: 30,
+            height: 40,
+        };
+        assert_eq!(image_bounds(region, 100), [0.1, 0.2, 0.4, 0.6]);
+    }
 
     #[test]
     fn base_color_matches_the_clear() {

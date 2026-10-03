@@ -67,7 +67,7 @@ pub struct TermImage {
     /// arrived, unless scaled down.
     pub width: u32,
     pub height: u32,
-    /// Straight (not premultiplied) RGBA, row by row.
+    /// Premultiplied RGBA, row by row.
     pub rgba: Box<[u8]>,
 }
 
@@ -366,11 +366,11 @@ pub(crate) fn decode(
     })
 }
 
-/// `image` scaled to `size`. Transparent pixels are averaged premultiplied,
-/// so the color of fully transparent ones doesn't bleed into the edges.
+/// `image` scaled to `size`, averaged and kept premultiplied, so the color
+/// of fully transparent pixels doesn't bleed into the edges and the GPU can
+/// filter it again without darkening them.
 fn scale(mut image: RgbaImage, size: (u32, u32)) -> RgbaImage {
-    let translucent = image.pixels().any(|p| p.0[3] < 255);
-    if translucent {
+    if image.pixels().any(|p| p.0[3] < 255) {
         premultiply(&mut image);
     }
     // Shrinking by area averaging is cheap and doesn't alias; only the
@@ -383,9 +383,6 @@ fn scale(mut image: RgbaImage, size: (u32, u32)) -> RgbaImage {
     if image.dimensions() != size {
         image = imageops::resize(&image, size.0, size.1, FilterType::Triangle);
     }
-    if translucent {
-        unpremultiply(&mut image);
-    }
     image
 }
 
@@ -395,19 +392,6 @@ fn premultiply(image: &mut RgbaImage) {
         let a = pixel.0[3] as u32;
         for c in &mut pixel.0[..3] {
             *c = ((*c as u32 * a + 127) / 255) as u8;
-        }
-    }
-}
-
-/// Undo [`premultiply`], rounding.
-fn unpremultiply(image: &mut RgbaImage) {
-    for pixel in image.pixels_mut() {
-        let a = pixel.0[3] as u32;
-        if a == 0 || a == 255 {
-            continue;
-        }
-        for c in &mut pixel.0[..3] {
-            *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
         }
     }
 }
@@ -1096,7 +1080,10 @@ mod tests {
             GEOMETRY,
         );
         let pixel = &image.rgba[..4];
-        assert!(pixel[0] >= 250, "red survived: {pixel:?}");
+        assert!(
+            (126..=130).contains(&pixel[0]),
+            "premultiplied red: {pixel:?}"
+        );
         assert!(
             (127..=129).contains(&pixel[3]),
             "half transparent: {pixel:?}"

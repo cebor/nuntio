@@ -28,6 +28,7 @@ struct Instance {
     // Atlas region, normalized to 0..1: x, y, width, height. Rounded
     // rectangles keep their corner radius in pixels in x.
     @location(2) uv: vec4<f32>,
+    // Images: their atlas region (x0, y0, x1, y1), normalized.
     @location(3) color: vec4<f32>,
     @location(4) kind: u32,
 }
@@ -87,11 +88,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             let alpha = rounded_box(in.local, in.shape.xy, in.shape.z);
             return vec4<f32>(in.color.rgb, in.color.a * alpha);
         }
+        // Images are stored premultiplied, so filtering doesn't darken
+        // their transparent edges; blending wants straight alpha.
         case KIND_IMAGE: {
-            return textureSampleLevel(image_atlas, atlas_sampler, in.uv, 0.0);
+            let c = textureSampleLevel(image_atlas, atlas_sampler, in.uv, 0.0);
+            return vec4<f32>(c.rgb / max(c.a, 1e-6), c.a);
         }
         case KIND_IMAGE_SCALED: {
-            return textureSampleLevel(image_atlas, image_sampler, in.uv, 0.0);
+            // Within half a texel of the region's edge, filtering would
+            // read the atlas padding or a neighbouring image.
+            let half = 0.5 / vec2<f32>(textureDimensions(image_atlas));
+            let uv = clamp(in.uv, in.color.xy + half, in.color.zw - half);
+            let c = textureSampleLevel(image_atlas, image_sampler, uv, 0.0);
+            return vec4<f32>(c.rgb / max(c.a, 1e-6), c.a);
         }
         default: {
             return in.color;
