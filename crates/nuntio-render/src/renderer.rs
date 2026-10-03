@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::ops::Range;
 use std::rc::Rc;
@@ -157,6 +157,8 @@ pub struct Renderer {
     image_atlas: Atlas,
     /// Where each uploaded image is, by [`TermImage::uid`](nuntio_term::TermImage::uid).
     image_regions: HashMap<u64, AtlasRegion>,
+    /// Scratch: the uids of the images in the frame being prepared.
+    image_uids: HashSet<u64>,
     glyphs: HashMap<GlyphKey, Rc<[Sprite]>>,
     /// Glyphs of characters with combining marks, by text and a slot for
     /// each size/bold/italic combination.
@@ -288,6 +290,7 @@ impl Renderer {
             color_atlas,
             image_atlas,
             image_regions: HashMap::new(),
+            image_uids: HashSet::new(),
             glyphs: HashMap::new(),
             clusters: HashMap::new(),
             cluster_text: String::new(),
@@ -576,6 +579,14 @@ impl Renderer {
             self.image_overflow = false;
             return;
         }
+        self.image_uids.clear();
+        self.image_uids.extend(
+            frame
+                .panes
+                .iter()
+                .flat_map(|p| &p.snapshot.images)
+                .map(|piece| piece.image.uid),
+        );
         let mut cleared = false;
         'pass: loop {
             let mut skipped = false;
@@ -595,9 +606,15 @@ impl Renderer {
                 let max = self.image_atlas.max_size();
                 if image.width + 1 > max || image.height + 1 > max {
                     skipped = true;
-                } else if !cleared {
-                    // Probably full of images no longer on screen: start over
-                    // before spending more memory.
+                } else if !cleared
+                    && self
+                        .image_regions
+                        .keys()
+                        .any(|uid| !self.image_uids.contains(uid))
+                {
+                    // Images no longer on screen hold space: start over
+                    // before spending more memory. Without any, clearing
+                    // would re-upload the same images every frame.
                     self.image_atlas.clear();
                     self.image_regions.clear();
                     cleared = true;

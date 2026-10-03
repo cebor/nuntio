@@ -108,9 +108,13 @@ impl WindowState {
             corner_radius,
         };
         let result = draw(&mut self.renderer, &frame);
-        // The buffers go back for the next frame.
-        self.shot_pool
-            .extend(shots.into_iter().map(|shot| shot.snapshot));
+        // The buffers go back for the next frame, without the images: a
+        // closed pane's must not stay alive.
+        self.shot_pool.extend(shots.into_iter().map(|shot| {
+            let mut snapshot = shot.snapshot;
+            snapshot.images.clear();
+            snapshot
+        }));
         Some(result)
     }
 
