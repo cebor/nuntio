@@ -116,6 +116,36 @@ fn resize_is_applied() {
     assert!(screen_contains(&handle, "60"));
 }
 
+#[test]
+fn inline_image_passes_through_conpty() {
+    use base64::Engine;
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let (handle, rx) = spawn(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "[Console]::Write(\"$([char]27)]1337;File=inline=1;width=2;height=1:{data}$([char]7)X\")"
+            ),
+        ],
+    );
+    wait_for_exit(&rx);
+
+    let snapshot = handle.snapshot();
+    let [image] = snapshot.images.as_slice() else {
+        panic!("expected one image, got {}", snapshot.images.len());
+    };
+    assert_eq!(image.columns, 2);
+    // ConPTY may move output below a clear, so the line is wherever the image landed.
+    assert_eq!(snapshot.cell(image.column + 2, image.line).c, 'X');
+}
+
 /// ConPTY passes an image through in one piece. When more of it waits than
 /// one read pass takes, output that follows later must still arrive without
 /// further input.

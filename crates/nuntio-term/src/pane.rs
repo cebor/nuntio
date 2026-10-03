@@ -324,6 +324,9 @@ impl TermHandle {
                 "TERM_PROGRAM_VERSION".into(),
                 env!("CARGO_PKG_VERSION").into(),
             ),
+            // omp/pi pick an image protocol only from variables of terminals
+            // they know; nuntio speaks iTerm2's OSC 1337.
+            ("PI_FORCE_IMAGE_PROTOCOL".into(), "iterm2".into()),
         ]);
         // alacritty sets both to the window id it is given and offers no way to
         // unset them; `Options::env` is applied last, so empty values win. Empty
@@ -338,11 +341,6 @@ impl TermHandle {
                     .unwrap_or_default(),
             ),
             ("ALACRITTY_WINDOW_ID".into(), String::new()),
-            // omp/pi pick an image protocol only from variables of terminals
-            // they know; nuntio speaks iTerm2's OSC 1337. Not on Windows:
-            // whether ConPTY passes OSC 1337 through is unverified, and omp
-            // would show nothing instead of its text fallback.
-            ("PI_FORCE_IMAGE_PROTOCOL".into(), "iterm2".into()),
         ]);
         env.extend(options.env);
         #[cfg(windows)]
@@ -885,7 +883,13 @@ fn wslenv(existing: Option<&str>) -> String {
         .split(':')
         .filter(|e| !e.is_empty())
         .collect();
-    for var in ["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"] {
+    for var in [
+        "TERM",
+        "COLORTERM",
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "PI_FORCE_IMAGE_PROTOCOL",
+    ] {
         // Entries may carry flags, like `TERM/u`.
         if !entries.iter().any(|e| e.split('/').next() == Some(var)) {
             entries.push(var);
@@ -972,13 +976,13 @@ mod tests {
 
     #[test]
     fn wslenv_keeps_user_entries() {
-        let all = "TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION";
+        let all = "TERM:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION:PI_FORCE_IMAGE_PROTOCOL";
         assert_eq!(wslenv(None), all);
         assert_eq!(wslenv(Some("")), all);
         assert_eq!(wslenv(Some("GOPATH/l")), format!("GOPATH/l:{all}"));
         assert_eq!(
             wslenv(Some("TERM/u:FOO")),
-            "TERM/u:FOO:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION"
+            "TERM/u:FOO:COLORTERM:TERM_PROGRAM:TERM_PROGRAM_VERSION:PI_FORCE_IMAGE_PROTOCOL"
         );
     }
 

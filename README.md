@@ -39,7 +39,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **New tabs and panes open in the current directory** of the focused pane (Linux and macOS).
 - **Find bar** with incremental search, a match count and a regex mode (<kbd>Alt</kbd>+<kbd>R</kbd>). It starts with the selected text, if there is one.
 - **Drag and drop**: drop files onto a pane to type their paths, escaped for the shell.
-- **Inline images** with iTerm2's protocol (OSC 1337 `File=`): PNG, JPEG, GIF, WebP and BMP, stored in the grid so they scroll, clear and get overwritten like text. On Linux and macOS, omp shows images inline on its own.
+- **Inline images** with iTerm2's protocol (OSC 1337 `File=`): PNG, JPEG, GIF, WebP and BMP, stored in the grid so they scroll, clear and get overwritten like text. omp shows images inline on its own, also in WSL.
 - **Clickable URLs**: hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on macOS) and click. While hovering, the address the link leads to is shown, and links to programs are not opened.
 - **Themes**: twenty built in, your own as TOML or iTerm2 `.itermcolors`, and a light/dark pair that follows the OS appearance.
 - **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.
