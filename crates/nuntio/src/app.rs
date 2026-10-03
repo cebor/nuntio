@@ -1205,6 +1205,12 @@ impl Core {
                     p.term.answer_color_queries();
                 }
             }
+            #[cfg(windows)]
+            TermEvent::HelperFailed => self.notify(Banner::new(
+                Severity::Warning,
+                "WSL",
+                vec!["nuntio-wsl did not start; this pane runs through ConPTY, without inline images".into()],
+            )),
         }
     }
 

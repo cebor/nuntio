@@ -35,9 +35,6 @@ const MAX_LOCKED_READ: usize = u16::MAX as usize;
 /// How long the PTY thread waits for messages between checks whether an
 /// image is decoded.
 const DECODE_POLL: Duration = Duration::from_millis(5);
-/// Shown in a WSL pane whose nuntio-wsl didn't start.
-#[cfg(windows)]
-const FALLBACK_NOTICE: &[u8] = b"\r\n\x1b[33mnuntio-wsl did not start; this pane runs through ConPTY, without inline images.\x1b[m\r\n";
 
 /// A message to the PTY thread.
 pub(crate) enum Msg {
@@ -396,11 +393,6 @@ impl IoLoop {
     /// Returns false if there is no fallback or it didn't start either.
     #[cfg(windows)]
     fn fall_back(&mut self, poll: &Arc<Poller>, interest: polling::Event) -> bool {
-        {
-            let mut term = self.term.lock();
-            self.parser.advance(&mut *term, FALLBACK_NOTICE);
-        }
-        self.listener.send_event(Event::Wakeup);
         let _ = self.pty.deregister(poll);
         let Some(options) = self.fallback.take() else {
             return false;
@@ -420,6 +412,8 @@ impl IoLoop {
         }
         self.child_pid
             .store(self.pty.pid().unwrap_or(0), Ordering::Relaxed);
+        // Not written into the grid: ConPTY may clear the screen at startup.
+        self.listener.helper_failed();
         true
     }
 }

@@ -226,7 +226,8 @@ fn helper_output_reaches_the_grid() {
     assert!(!screen_contains(&handle, "wrong-fallback"));
 }
 
-/// A helper that exits without reporting ready hands the pane to ConPTY.
+/// A helper that exits without reporting ready hands the pane to ConPTY and
+/// says so.
 #[test]
 fn failed_helper_falls_back_to_conpty() {
     let (handle, rx) = spawn_helper(
@@ -234,8 +235,8 @@ fn failed_helper_falls_back_to_conpty() {
         &["/c", "exit 1"],
         shell("cmd.exe", &["/c", "echo via-conpty"]),
     );
-    wait_for_exit(&rx);
-    assert!(screen_contains(&handle, "nuntio-wsl did not start"));
+    let events = wait_for_exit(&rx);
+    assert!(events.contains(&TermEvent::HelperFailed));
     assert!(screen_contains(&handle, "via-conpty"));
 }
 

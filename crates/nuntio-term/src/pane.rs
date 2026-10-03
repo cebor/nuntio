@@ -49,6 +49,10 @@ pub enum TermEvent {
     /// A program asked for a color (OSC 4/10/11/12); answer with
     /// [`TermHandle::answer_color_queries`].
     ColorQuery,
+    /// Windows: nuntio-wsl didn't start, so the pane runs its shell through
+    /// ConPTY, without inline images.
+    #[cfg(windows)]
+    HelperFailed,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -177,6 +181,12 @@ impl Listener {
     /// Write a reply to the program, in order with pending color queries.
     pub(crate) fn reply(&self, text: String) {
         self.inner.reply(text);
+    }
+
+    /// Report that nuntio-wsl failed and the pane fell back to ConPTY.
+    #[cfg(windows)]
+    pub(crate) fn helper_failed(&self) {
+        (self.inner.callback)(TermEvent::HelperFailed);
     }
 }
 
