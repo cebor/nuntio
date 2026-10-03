@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::cell::Flags;
@@ -6,6 +8,7 @@ use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
+use crate::image::{ImagePiece, ImageStore, image_cell_ref};
 use crate::palette::{Palette, dim};
 
 const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -100,6 +103,8 @@ pub struct Snapshot {
     pub cursor: Option<SnapshotCursor>,
     pub background: Rgb,
     pub foreground: Rgb,
+    /// Image runs on the visible screen, row by row.
+    pub images: Vec<ImagePiece>,
 }
 
 impl Snapshot {
@@ -115,6 +120,7 @@ impl Snapshot {
         &mut self,
         term: &Term<T>,
         palette: &Palette,
+        images: &ImageStore,
         matches: &[Match],
         current: Option<&Match>,
     ) {
@@ -134,6 +140,7 @@ impl Snapshot {
             underline_color: None,
         };
         self.cells.clear();
+        self.images.clear();
         self.cells.resize(columns * lines, blank);
         let offset = content.display_offset as i32;
         let selection = content.selection;
@@ -173,11 +180,17 @@ impl Snapshot {
                     (fg, bg) = (BLACK, palette.search_match);
                 }
             }
-            let hidden = flags.contains(Flags::HIDDEN)
+            let column = indexed.point.column.0;
+            let image_ref = image_cell_ref(cell);
+            if let Some((id, image_line, image_column)) = image_ref {
+                self.push_image(images, id, line as usize, column, image_line, image_column);
+            }
+            let hidden = image_ref.is_some()
+                || flags.contains(Flags::HIDDEN)
                 || flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
             let spacer = flags.contains(Flags::WIDE_CHAR_SPACER);
 
-            self.cells[line as usize * columns + indexed.point.column.0] = SnapshotCell {
+            self.cells[line as usize * columns + column] = SnapshotCell {
                 c: if hidden { ' ' } else { cell.c },
                 zerowidth: if hidden {
                     None
@@ -236,6 +249,39 @@ impl Snapshot {
         self.background = background;
         self.foreground = foreground;
     }
+
+    /// Add an image cell: extends the previous run if it continues it.
+    fn push_image(
+        &mut self,
+        images: &ImageStore,
+        id: u32,
+        line: usize,
+        column: usize,
+        image_line: usize,
+        image_column: usize,
+    ) {
+        let Some(image) = images.get(id) else {
+            return;
+        };
+        if let Some(last) = self.images.last_mut()
+            && last.line == line
+            && last.column + last.columns == column
+            && Arc::ptr_eq(&last.image, image)
+            && last.image_line == image_line
+            && last.image_column + last.columns == image_column
+        {
+            last.columns += 1;
+            return;
+        }
+        self.images.push(ImagePiece {
+            line,
+            column,
+            columns: 1,
+            image: image.clone(),
+            image_column,
+            image_line,
+        });
+    }
 }
 
 fn resolve_fg(color: Color, flags: Flags, palette: &Palette, overrides: &Colors) -> Rgb {
@@ -249,9 +295,12 @@ fn resolve_fg(color: Color, flags: Flags, palette: &Palette, overrides: &Colors)
 
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::event::{VoidListener, WindowSize};
     use alacritty_terminal::term::Config;
     use alacritty_terminal::vte::ansi::Processor;
+
+    use crate::image::{CellGeometry, ImageKey, TermImage, place};
+    use crate::image_scan::ImageRequest;
 
     use super::*;
 
@@ -266,7 +315,13 @@ mod tests {
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, input.as_bytes());
         let mut snapshot = Snapshot::default();
-        snapshot.refresh(&term, &Palette::default(), &[], None);
+        snapshot.refresh(
+            &term,
+            &Palette::default(),
+            &ImageStore::default(),
+            &[],
+            None,
+        );
         snapshot
     }
 
@@ -305,19 +360,114 @@ mod tests {
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, b"hello");
         let mut s = Snapshot::default();
-        s.refresh(&term, &Palette::default(), &[], None);
+        s.refresh(
+            &term,
+            &Palette::default(),
+            &ImageStore::default(),
+            &[],
+            None,
+        );
         let (ptr, capacity) = (s.cells.as_ptr(), s.cells.capacity());
         assert_eq!(s.cell(0, 0).c, 'h');
 
         parser.advance(&mut term, b"\r\nworld");
-        s.refresh(&term, &Palette::default(), &[], None);
+        s.refresh(
+            &term,
+            &Palette::default(),
+            &ImageStore::default(),
+            &[],
+            None,
+        );
         assert_eq!((s.cells.as_ptr(), s.cells.capacity()), (ptr, capacity));
         assert_eq!(s.cell(0, 1).c, 'w');
 
         let small = size(5, 1);
         let term = Term::new(Config::default(), &small, VoidListener);
-        s.refresh(&term, &Palette::default(), &[], None);
+        s.refresh(
+            &term,
+            &Palette::default(),
+            &ImageStore::default(),
+            &[],
+            None,
+        );
         assert_eq!(s.columns * s.lines, s.cells.len());
         assert_eq!(s.cells.len(), 5);
+    }
+
+    /// A 10×3 terminal with "ab" and a 3×2 image after it, stored if
+    /// `stored`.
+    fn with_image(stored: bool) -> (Term<VoidListener>, Processor, ImageStore) {
+        let size = crate::TermSize {
+            columns: 10,
+            lines: 3,
+            cell_width: 1,
+            cell_height: 1,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"ab");
+        let image = || TermImage {
+            uid: 0,
+            columns: 3,
+            lines: 2,
+            width: 3,
+            height: 2,
+            rgba: vec![0; 24].into_boxed_slice(),
+        };
+        let mut store = ImageStore::default();
+        let id = if stored {
+            let key = ImageKey::new(
+                &ImageRequest {
+                    args: Vec::new(),
+                    payload: Vec::new(),
+                },
+                CellGeometry::from(WindowSize {
+                    num_lines: 3,
+                    num_cols: 10,
+                    cell_width: 1,
+                    cell_height: 1,
+                }),
+            );
+            store.insert(key, image())
+        } else {
+            5
+        };
+        place(&mut term, id, &image());
+        (term, parser, store)
+    }
+
+    /// `(line, column, columns, image_line, image_column)` of each run.
+    fn runs(s: &Snapshot) -> Vec<(usize, usize, usize, usize, usize)> {
+        s.images
+            .iter()
+            .map(|p| (p.line, p.column, p.columns, p.image_line, p.image_column))
+            .collect()
+    }
+
+    #[test]
+    fn image_runs() {
+        let (mut term, mut parser, store) = with_image(true);
+        let mut s = Snapshot::default();
+        s.refresh(&term, &Palette::default(), &store, &[], None);
+        assert_eq!(runs(&s), [(0, 2, 3, 0, 0), (1, 2, 3, 1, 0)]);
+        assert!((2..5).all(|c| s.cell(c, 0).is_blank() && s.cell(c, 1).is_blank()));
+        assert_eq!(s.cell(1, 0).c, 'b');
+
+        parser.advance(&mut term, b"\x1b[1;4HX");
+        s.refresh(&term, &Palette::default(), &store, &[], None);
+        assert_eq!(
+            runs(&s),
+            [(0, 2, 1, 0, 0), (0, 4, 1, 0, 2), (1, 2, 3, 1, 0)]
+        );
+        assert_eq!(s.cell(3, 0).c, 'X');
+    }
+
+    #[test]
+    fn unknown_image_has_no_runs() {
+        let (term, _, store) = with_image(false);
+        let mut s = Snapshot::default();
+        s.refresh(&term, &Palette::default(), &store, &[], None);
+        assert!(s.images.is_empty());
+        assert!(s.cell(2, 0).is_blank());
     }
 }

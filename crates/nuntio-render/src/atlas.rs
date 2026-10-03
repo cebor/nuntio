@@ -74,6 +74,11 @@ impl Atlas {
         self.size
     }
 
+    /// Largest side length the atlas can grow to.
+    pub fn max_size(&self) -> u32 {
+        self.max_size
+    }
+
     pub fn view(&self) -> &wgpu::TextureView {
         &self.view
     }

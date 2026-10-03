@@ -1,23 +1,22 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
-use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{self, Term, viewport_to_point};
-use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
+use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::Rgb;
-use polling::{PollMode, Poller};
 use thiserror::Error;
 
-use crate::osc_cwd::{CwdScanner, ReportedDir};
+use crate::image::{ImageStore, strip_image_text};
+use crate::io_loop::{IoLoop, LoopSender, Msg};
+use crate::osc_cwd::ReportedDir;
 use crate::palette::Palette;
 use crate::process;
 use crate::search::{self, Search};
@@ -145,14 +144,30 @@ enum Reply {
 /// through the main thread, which can read the runtime overrides (OSC
 /// 4/10/11/12): alacritty asks while the PTY thread holds the term lock.
 #[derive(Clone)]
-struct Listener {
+pub(crate) struct Listener {
     inner: Arc<ListenerInner>,
+}
+
+impl Listener {
+    /// The current grid and cell size.
+    pub(crate) fn window_size(&self) -> WindowSize {
+        *self
+            .inner
+            .size
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Write a reply to the program, in order with pending color queries.
+    pub(crate) fn reply(&self, text: String) {
+        self.inner.reply(text);
+    }
 }
 
 struct ListenerInner {
     callback: Box<Callback>,
     /// Set once the event loop exists; replies are written back through it.
-    sender: OnceLock<EventLoopSender>,
+    sender: OnceLock<LoopSender>,
     palette: RwLock<Palette>,
     size: Mutex<WindowSize>,
     /// Coalesces wakeups: only one is in flight until the next snapshot.
@@ -170,7 +185,7 @@ struct ListenerInner {
 impl ListenerInner {
     fn write(&self, text: String) {
         if let Some(sender) = self.sender.get() {
-            let _ = sender.send(Msg::Input(Cow::Owned(text.into_bytes())));
+            sender.send(Msg::Input(Cow::Owned(text.into_bytes())));
         }
     }
 
@@ -252,7 +267,7 @@ pub struct ForegroundInfo {
 pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
     listener: Listener,
-    sender: EventLoopSender,
+    sender: LoopSender,
     /// The process nuntio started: the shell, or `login` running it.
     child_pid: Option<u32>,
     /// `child_pid` is `login`; the shell is its child.
@@ -265,6 +280,8 @@ pub struct TermHandle {
     runs_command: bool,
     /// The directory the shell last reported (OSC 7, OSC 9;9).
     reported_dir: Arc<Mutex<Option<ReportedDir>>>,
+    /// The pane's inline images; locked after the term.
+    images: Arc<Mutex<ImageStore>>,
 }
 
 impl TermHandle {
@@ -321,6 +338,11 @@ impl TermHandle {
                     .unwrap_or_default(),
             ),
             ("ALACRITTY_WINDOW_ID".into(), String::new()),
+            // omp/pi pick an image protocol only from variables of terminals
+            // they know; nuntio speaks iTerm2's OSC 1337. Not on Windows:
+            // whether ConPTY passes OSC 1337 through is unverified, and omp
+            // would show nothing instead of its text fallback.
+            ("PI_FORCE_IMAGE_PROTOCOL".into(), "iterm2".into()),
         ]);
         env.extend(options.env);
         #[cfg(windows)]
@@ -370,16 +392,18 @@ impl TermHandle {
         let child_pid = pty.child_watcher().pid().map(|pid| pid.get());
 
         let reported_dir = Arc::new(Mutex::new(None));
-        let pty = TeePty {
+        let images = Arc::new(Mutex::new(ImageStore::default()));
+        let io_loop = IoLoop::new(
             pty,
-            scanner: CwdScanner::default(),
-            reported: reported_dir.clone(),
-        };
-        let event_loop = EventLoop::new(term.clone(), listener.clone(), pty, true, false)
-            .map_err(SpawnError::EventLoop)?;
-        let sender = event_loop.channel();
+            term.clone(),
+            listener.clone(),
+            reported_dir.clone(),
+            images.clone(),
+        )
+        .map_err(SpawnError::EventLoop)?;
+        let sender = io_loop.sender();
         let _ = listener.inner.sender.set(sender.clone());
-        event_loop.spawn();
+        io_loop.spawn();
 
         Ok(Self {
             term,
@@ -391,6 +415,7 @@ impl TermHandle {
             shell_name,
             runs_command,
             reported_dir,
+            images,
         })
     }
 
@@ -423,7 +448,7 @@ impl TermHandle {
         }
         // Typing jumps back to the bottom, like every terminal does.
         self.term.lock().scroll_display(Scroll::Bottom);
-        let _ = self.sender.send(Msg::Input(bytes));
+        self.sender.send(Msg::Input(bytes));
     }
 
     /// Send machine-generated input (reports) without moving the view.
@@ -432,7 +457,7 @@ impl TermHandle {
         if bytes.is_empty() {
             return;
         }
-        let _ = self.sender.send(Msg::Input(bytes));
+        self.sender.send(Msg::Input(bytes));
     }
 
     /// Paste text, wrapped in bracketed-paste markers if the app asked for them.
@@ -486,6 +511,7 @@ impl TermHandle {
         self.term
             .lock()
             .selection_to_string()
+            .map(strip_image_text)
             .filter(|s| !s.is_empty())
     }
 
@@ -498,7 +524,7 @@ impl TermHandle {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = size.window_size();
         self.term.lock().resize(size);
-        let _ = self.sender.send(Msg::Resize(size.window_size()));
+        self.sender.send(Msg::Resize(size.window_size()));
     }
 
     /// Name of the foreground process, or the shell's name if unknown.
@@ -602,7 +628,8 @@ impl TermHandle {
             .palette
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        out.refresh(&term, &palette, &[], None);
+        let images = self.images.lock().unwrap_or_else(PoisonError::into_inner);
+        out.refresh(&term, &palette, &images, &[], None);
     }
 
     /// Answer the color queries programs sent (see
@@ -660,7 +687,8 @@ impl TermHandle {
             .palette
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        out.refresh(&term, &palette, &matches, search.current_in(&term));
+        let images = self.images.lock().unwrap_or_else(PoisonError::into_inner);
+        out.refresh(&term, &palette, &images, &matches, search.current_in(&term));
     }
 
     /// Select the next match upwards (older output) or downwards and scroll
@@ -689,74 +717,9 @@ impl TermHandle {
     }
 }
 
-/// The PTY, with its output scanned for the directory the shell reports.
-struct TeePty {
-    pty: tty::Pty,
-    scanner: CwdScanner,
-    reported: Arc<Mutex<Option<ReportedDir>>>,
-}
-
-impl io::Read for TeePty {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.pty.reader().read(buf)?;
-        if let Some(dir) = self.scanner.feed(&buf[..n]) {
-            *self.reported.lock().unwrap_or_else(PoisonError::into_inner) = Some(dir);
-        }
-        Ok(n)
-    }
-}
-
-impl EventedReadWrite for TeePty {
-    type Reader = Self;
-    type Writer = <tty::Pty as EventedReadWrite>::Writer;
-
-    unsafe fn register(
-        &mut self,
-        poll: &Arc<Poller>,
-        interest: polling::Event,
-        mode: PollMode,
-    ) -> io::Result<()> {
-        // SAFETY: the PTY lives in `self`, as long as its registration.
-        unsafe { self.pty.register(poll, interest, mode) }
-    }
-
-    fn reregister(
-        &mut self,
-        poll: &Arc<Poller>,
-        interest: polling::Event,
-        mode: PollMode,
-    ) -> io::Result<()> {
-        self.pty.reregister(poll, interest, mode)
-    }
-
-    fn deregister(&mut self, poll: &Arc<Poller>) -> io::Result<()> {
-        self.pty.deregister(poll)
-    }
-
-    fn reader(&mut self) -> &mut Self {
-        self
-    }
-
-    fn writer(&mut self) -> &mut Self::Writer {
-        self.pty.writer()
-    }
-}
-
-impl EventedPty for TeePty {
-    fn next_child_event(&mut self) -> Option<ChildEvent> {
-        self.pty.next_child_event()
-    }
-}
-
-impl OnResize for TeePty {
-    fn on_resize(&mut self, window_size: WindowSize) {
-        self.pty.on_resize(window_size);
-    }
-}
-
 impl Drop for TermHandle {
     fn drop(&mut self) {
-        let _ = self.sender.send(Msg::Shutdown);
+        self.sender.send(Msg::Shutdown);
     }
 }
 

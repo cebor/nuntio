@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use bytemuck::{Pod, Zeroable};
-use nuntio_term::{CursorStyle, Rgb, Snapshot, SnapshotCell, UnderlineStyle};
+use nuntio_term::{CursorStyle, ImagePiece, Rgb, Snapshot, SnapshotCell, UnderlineStyle};
 use unicode_width::UnicodeWidthChar;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
@@ -18,6 +18,7 @@ const KIND_SOLID: u32 = 0;
 const KIND_MASK: u32 = 1;
 const KIND_COLOR: u32 = 2;
 const KIND_ROUNDED: u32 = 3;
+const KIND_IMAGE: u32 = 4;
 /// Upper bound for the mask atlas: 16 MiB at one byte per texel.
 const MAX_MASK_ATLAS_SIZE: u32 = 4096;
 /// Starting size of the mask atlas (1 MiB); enough for ASCII plus some
@@ -26,6 +27,10 @@ const INITIAL_MASK_ATLAS_SIZE: u32 = 1024;
 /// Starting size of the color atlas (1 MiB at four bytes per texel); stays
 /// that small unless emoji show up.
 const INITIAL_COLOR_ATLAS_SIZE: u32 = 512;
+/// Starting size of the image atlas (4 MiB); grows up to
+/// `MAX_IMAGE_ATLAS_SIZE` (256 MiB) when inline images need it.
+const INITIAL_IMAGE_ATLAS_SIZE: u32 = 1024;
+const MAX_IMAGE_ATLAS_SIZE: u32 = 8192;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -147,6 +152,10 @@ pub struct Renderer {
     fonts: Fonts,
     mask_atlas: Atlas,
     color_atlas: Atlas,
+    /// Inline images, straight RGBA.
+    image_atlas: Atlas,
+    /// Where each uploaded image is, by [`TermImage::uid`](nuntio_term::TermImage::uid).
+    image_regions: HashMap<u64, AtlasRegion>,
     glyphs: HashMap<GlyphKey, Rc<[Sprite]>>,
     /// Glyphs of characters with combining marks, by text and a slot for
     /// each size/bold/italic combination.
@@ -178,6 +187,9 @@ pub struct Renderer {
     font_warning: Option<String>,
     /// The last frame didn't fit into the glyph atlas (already warned).
     atlas_overflow: bool,
+    /// The last frame's images didn't fit into the image atlas (already
+    /// warned).
+    image_overflow: bool,
 }
 
 impl Renderer {
@@ -218,6 +230,16 @@ impl Renderer {
             INITIAL_COLOR_ATLAS_SIZE,
             MIN_ATLAS_SIZE,
         );
+        let image_atlas = Atlas::new(
+            device,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "image atlas",
+            INITIAL_IMAGE_ATLAS_SIZE,
+            device
+                .limits()
+                .max_texture_dimension_2d
+                .clamp(MIN_ATLAS_SIZE, MAX_IMAGE_ATLAS_SIZE),
+        );
         // Glyphs are drawn 1:1; nearest sampling keeps them sharp even when
         // a quad lands on a fractional position.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -244,6 +266,7 @@ impl Renderer {
             &uniforms,
             &mask_atlas,
             &color_atlas,
+            &image_atlas,
             &sampler,
         );
 
@@ -252,6 +275,8 @@ impl Renderer {
             fonts,
             mask_atlas,
             color_atlas,
+            image_atlas,
+            image_regions: HashMap::new(),
             glyphs: HashMap::new(),
             clusters: HashMap::new(),
             cluster_text: String::new(),
@@ -270,6 +295,7 @@ impl Renderer {
             cutout_start: 0,
             font_warning,
             atlas_overflow: false,
+            image_overflow: false,
         })
     }
 
@@ -358,6 +384,7 @@ impl Renderer {
             &self.uniforms,
             &self.mask_atlas,
             &self.color_atlas,
+            &self.image_atlas,
             &self.sampler,
         );
         true
@@ -467,6 +494,7 @@ impl Renderer {
 
     /// Lay out the frame's instances and upload them with the uniforms.
     fn prepare(&mut self, frame: &Frame) {
+        self.upload_images(frame);
         let mut cleared = false;
         loop {
             let Err(full) = self.build_instances(frame) else {
@@ -516,6 +544,57 @@ impl Renderer {
             0,
             bytemuck::cast_slice(&self.instances),
         );
+    }
+
+    /// Upload the frame's inline images that aren't in the image atlas yet.
+    fn upload_images(&mut self, frame: &Frame) {
+        let mut cleared = false;
+        'pass: loop {
+            let mut skipped = false;
+            for piece in frame.panes.iter().flat_map(|p| &p.snapshot.images) {
+                let image = &piece.image;
+                if self.image_regions.contains_key(&image.uid) {
+                    continue;
+                }
+                let queue = &self.gpu.queue;
+                if let Some(region) =
+                    self.image_atlas
+                        .insert(queue, image.width, image.height, &image.rgba)
+                {
+                    self.image_regions.insert(image.uid, region);
+                    continue;
+                }
+                let max = self.image_atlas.max_size();
+                if image.width + 1 > max || image.height + 1 > max {
+                    skipped = true;
+                } else if self.image_atlas.grow(&self.gpu.device) {
+                    self.image_regions.clear();
+                    self.bind_group = create_bind_group(
+                        &self.gpu.device,
+                        &self.bind_group_layout,
+                        &self.uniforms,
+                        &self.mask_atlas,
+                        &self.color_atlas,
+                        &self.image_atlas,
+                        &self.sampler,
+                    );
+                    continue 'pass;
+                } else if !cleared {
+                    // Full of images no longer on screen: start over.
+                    self.image_atlas.clear();
+                    self.image_regions.clear();
+                    cleared = true;
+                    continue 'pass;
+                } else {
+                    skipped = true;
+                }
+            }
+            if skipped && !self.image_overflow {
+                tracing::warn!("inline images do not fit into the image atlas");
+            }
+            self.image_overflow = skipped;
+            break;
+        }
     }
 
     /// Record the render pass of a `prepare`d frame into `view`.
@@ -744,6 +823,22 @@ impl Renderer {
                     self.instances.push(Instance::solid(x, y, width, ch, bg));
                 }
             }
+        }
+
+        // Images cover the background, below the cursor and text.
+        for piece in &snapshot.images {
+            let Some(&region) = self.image_regions.get(&piece.image.uid) else {
+                continue;
+            };
+            let (x, y) = origin(piece.column, piece.line);
+            self.instances.push(Instance {
+                pos: [x, y],
+                size: [piece.columns as f32 * cw, ch],
+                uv: image_uv(region, self.image_atlas.size(), piece),
+                color: [1.0; 4],
+                kind: KIND_IMAGE,
+                _pad: [0; 3],
+            });
         }
 
         // Cursor shapes sit on top of the background, below the text.
@@ -1053,6 +1148,7 @@ fn create_pipelines(
             },
             texture_entry(1),
             texture_entry(2),
+            texture_entry(4),
             wgpu::BindGroupLayoutEntry {
                 binding: 3,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -1143,6 +1239,7 @@ fn create_bind_group(
     uniforms: &wgpu::Buffer,
     mask_atlas: &Atlas,
     color_atlas: &Atlas,
+    image_atlas: &Atlas,
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1165,8 +1262,27 @@ fn create_bind_group(
                 binding: 3,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(image_atlas.view()),
+            },
         ],
     })
+}
+
+/// The atlas coordinates of the part of an image a piece shows, normalized:
+/// x, y, width, height.
+fn image_uv(region: AtlasRegion, atlas_size: u32, piece: &ImagePiece) -> [f32; 4] {
+    let image = &piece.image;
+    let sx = region.width as f32 / image.columns as f32;
+    let sy = region.height as f32 / image.lines as f32;
+    let size = atlas_size as f32;
+    [
+        (region.x as f32 + piece.image_column as f32 * sx) / size,
+        (region.y as f32 + piece.image_line as f32 * sy) / size,
+        piece.columns as f32 * sx / size,
+        sy / size,
+    ]
 }
 
 #[cfg(test)]
@@ -1180,6 +1296,38 @@ mod tests {
         assert_eq!(base_color(red, 0.5, true, false), [1.0, 0.0, 0.0, 0.5]);
         assert_eq!(base_color(red, 0.5, false, true), [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(base_color(red, 2.0, true, true), [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn image_pieces_map_to_their_part_of_the_region() {
+        let image = std::sync::Arc::new(nuntio_term::TermImage {
+            uid: 1,
+            columns: 4,
+            lines: 2,
+            width: 40,
+            height: 40,
+            rgba: Box::new([]),
+        });
+        let piece = ImagePiece {
+            line: 0,
+            column: 0,
+            columns: 3,
+            image,
+            image_column: 1,
+            image_line: 1,
+        };
+        let region = AtlasRegion {
+            x: 10,
+            y: 20,
+            width: 40,
+            height: 40,
+        };
+        let uv = image_uv(region, 100, &piece);
+        let expected = [0.2, 0.4, 0.3, 0.2];
+        assert!(
+            uv.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-6),
+            "{uv:?}"
+        );
     }
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {

@@ -1,5 +1,8 @@
 //! Thin wrapper around `alacritty_terminal` and the PTY of a pane.
 
+mod image;
+mod image_scan;
+mod io_loop;
 mod osc_cwd;
 mod palette;
 mod pane;
@@ -8,6 +11,7 @@ mod search;
 mod snapshot;
 mod url;
 
+pub use crate::image::{ImagePiece, TermImage};
 pub use alacritty_terminal::term::TermMode;
 pub use alacritty_terminal::vte::ansi::Rgb;
 pub use osc_cwd::ReportedDir;

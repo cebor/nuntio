@@ -81,6 +81,7 @@ mod tests {
             }),
             background: Rgb::default(),
             foreground: Rgb::default(),
+            images: Vec::new(),
         }
     }
 

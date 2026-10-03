@@ -1,5 +1,6 @@
-// Instanced quads: solid and rounded rectangles, coverage-mask glyphs and
-// color glyphs. A second pipeline (fs_cutout) rounds the window's corners.
+// Instanced quads: solid and rounded rectangles, coverage-mask glyphs,
+// color glyphs and inline images. A second pipeline (fs_cutout) rounds the
+// window's corners.
 
 struct Uniforms {
     screen_size: vec2<f32>,
@@ -10,11 +11,13 @@ struct Uniforms {
 @group(0) @binding(1) var mask_atlas: texture_2d<f32>;
 @group(0) @binding(2) var color_atlas: texture_2d<f32>;
 @group(0) @binding(3) var atlas_sampler: sampler;
+@group(0) @binding(4) var image_atlas: texture_2d<f32>;
 
 const KIND_SOLID: u32 = 0u;
 const KIND_MASK: u32 = 1u;
 const KIND_COLOR: u32 = 2u;
 const KIND_ROUNDED: u32 = 3u;
+const KIND_IMAGE: u32 = 4u;
 
 struct Instance {
     @location(0) pos: vec2<f32>,
@@ -80,6 +83,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         case KIND_ROUNDED: {
             let alpha = rounded_box(in.local, in.shape.xy, in.shape.z);
             return vec4<f32>(in.color.rgb, in.color.a * alpha);
+        }
+        case KIND_IMAGE: {
+            return textureSampleLevel(image_atlas, atlas_sampler, in.uv, 0.0);
         }
         default: {
             return in.color;

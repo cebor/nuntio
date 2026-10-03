@@ -109,6 +109,38 @@ fn environment_and_size() {
 }
 
 #[test]
+fn omp_is_told_to_use_inline_images() {
+    let (handle, rx) = spawn("printf \"$PI_FORCE_IMAGE_PROTOCOL\"");
+    wait_for_exit(&rx);
+
+    assert_eq!(line_text(&handle, 0), "iterm2");
+}
+
+#[test]
+fn inline_image_is_placed_at_the_cursor() {
+    use base64::Engine;
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let (handle, rx) = spawn(&format!(
+        "printf '\\033]1337;File=inline=1;width=2;height=1:%s\\007X' '{data}'"
+    ));
+    wait_for_exit(&rx);
+
+    let snapshot = handle.snapshot();
+    let pieces: Vec<_> = snapshot
+        .images
+        .iter()
+        .map(|p| (p.line, p.column, p.columns))
+        .collect();
+    assert_eq!(pieces, [(0, 0, 2)]);
+    assert_eq!(snapshot.cell(2, 0).c, 'X');
+}
+
+#[test]
 fn extra_environment() {
     let env = vec![
         ("NUNTIO_CONFIG".to_owned(), "/tmp/x.toml".to_owned()),
@@ -413,6 +445,17 @@ fn replies_keep_the_order_of_the_queries() {
         "stty raw -echo; printf '\\033]11;#102030\\007\\033]11;?\\007\\033[c'; \
          r=$(dd bs=1 count=29 2>/dev/null); stty sane; \
          case \"$r\" in *1010/2020/3030*'[?6c') printf OK;; *) printf NO;; esac",
+    );
+    answer_queries_until_exit(&handle, &rx);
+    assert!(screen_contains(&handle, "OK"));
+}
+
+#[test]
+fn cell_size_is_reported_in_order() {
+    let (handle, rx) = spawn(
+        "stty raw -echo; printf '\\033[c\\033[16t'; \
+         r=$(dd bs=1 count=14 2>/dev/null); stty sane; \
+         case \"$r\" in *'[?6c'*'[6;16;8t') printf OK;; *) printf NO;; esac",
     );
     answer_queries_until_exit(&handle, &rx);
     assert!(screen_contains(&handle, "OK"));
