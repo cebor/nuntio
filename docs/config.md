@@ -95,7 +95,7 @@ kitty_keyboard = true
 # One theme name…
 theme = "iTerm2 Default"
 # …or a pair that follows the OS appearance (replace the line above):
-# theme = { light = "Solarized Light", dark = "Tokyo Night" }
+# theme = { light = "Tokyo Night Day", dark = "Tokyo Night" }
 
 [font]
 # Any installed font. Default: the system's monospace font.
