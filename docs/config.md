@@ -445,7 +445,7 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | Action | Description |
 |---|---|
 | `copy` | Copy the selection |
-| `paste` | Paste from the clipboard |
+| `paste` | Paste from the clipboard (an image is saved as a PNG file and its path pasted) |
 | `new_tab` | Open a new tab (in the focused pane's directory with `tabs.inherit_directory`) |
 | `close_tab` | Close the current tab with all its panes |
 | `close_pane` | Close the focused pane (and the tab, if it was the last pane) |

@@ -56,7 +56,7 @@ fontdb = "0.23"
 ratatui = "0.30"
 etagere = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "network"] }
 starship-battery = "0.11"

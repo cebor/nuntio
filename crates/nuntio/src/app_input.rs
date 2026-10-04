@@ -9,11 +9,13 @@ use nuntio_config::{OptionAsMeta, StatusItem};
 use nuntio_term::{GridPoint, SelectionKind, TermMode};
 use winit::dpi::PhysicalPosition;
 use winit::event::{Modifiers, MouseButton};
-use winit::keyboard::{Key, ModifiersKeyState, ModifiersState, NamedKey};
+use winit::keyboard::{
+    Key, KeyCode, KeyLocation, ModifiersKeyState, ModifiersState, NamedKey, PhysicalKey,
+};
 use winit::window::{CursorIcon, ResizeDirection, Window};
 
 use super::app_panes::CloseTarget;
-use super::{CONFIRM_REPEAT, Core};
+use super::{CONFIRM_REPEAT, ClipboardImage, Core};
 use crate::actions::Action;
 use crate::actions_menu::{MenuKind, Step};
 use crate::banner::{Banner, Severity};
@@ -64,6 +66,30 @@ fn alt_is_meta(mods: &Modifiers, option_as_meta: OptionAsMeta) -> bool {
         OptionAsMeta::Left => left,
         OptionAsMeta::Right => right,
         OptionAsMeta::Both => left || right,
+    }
+}
+
+/// Send Ctrl+V as if pressed, for programs that read clipboard images
+/// themselves.
+fn send_ctrl_v(state: &mut WindowState) {
+    let mut press = KeyPress {
+        logical: Key::Character("v".into()),
+        unmodified: Key::Character("v".into()),
+        text: None,
+        location: KeyLocation::Standard,
+        physical: PhysicalKey::Code(KeyCode::KeyV),
+        kind: KeyEventKind::Press,
+    };
+    let mode = state.term().mode();
+    let encode = |press: &KeyPress| {
+        input::encode_key(&KeyInput::new(press, ModifiersState::CONTROL, false), mode)
+    };
+    if let Some(bytes) = encode(&press) {
+        state.type_bytes(bytes);
+    }
+    press.kind = KeyEventKind::Release;
+    if let Some(bytes) = encode(&press) {
+        state.term().send(bytes);
     }
 }
 
@@ -227,12 +253,32 @@ impl Core {
     }
 
     fn paste_clipboard(&mut self, state: &mut WindowState) {
-        let Some(text) = self.clipboard_text() else {
+        if let Some(text) = self.clipboard_text().filter(|text| !text.is_empty()) {
+            // Pasting into the find bar extends the query.
+            if !state.search_append(text.lines().next().unwrap_or("")) {
+                self.paste(state, text);
+            }
             return;
-        };
-        // Pasting into the find bar extends the query.
-        if !state.search_append(text.lines().next().unwrap_or("")) {
-            self.paste(state, text);
+        }
+        // An image can't go into the find bar.
+        if state.search_and_term().is_some() {
+            return;
+        }
+        match self.clipboard_image() {
+            ClipboardImage::None => {}
+            // Pasted like a dropped file: AI CLIs attach image paths.
+            ClipboardImage::Image(image) => match self.pasted_images.save(&image) {
+                Ok(path) => {
+                    let pane = state.content().focused_pane();
+                    let syntax = PathSyntax::of(pane.wsl.is_some(), &pane.term.process_name());
+                    self.paste(state, dropped_path(&path.to_string_lossy(), syntax));
+                }
+                Err(err) => {
+                    tracing::warn!("failed to save the clipboard image: {err:#}");
+                    send_ctrl_v(state);
+                }
+            },
+            ClipboardImage::Unreadable => send_ctrl_v(state),
         }
     }
 

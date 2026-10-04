@@ -38,6 +38,7 @@ tracing-subscriber.workspace = true
 winit.workspace = true
 lexopt.workspace = true
 arboard.workspace = true
+image.workspace = true
 unicode-width.workspace = true
 open.workspace = true
 gethostname.workspace = true

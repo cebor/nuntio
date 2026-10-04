@@ -326,6 +326,8 @@ struct Core {
     /// A newer release, once a check found one.
     update: Option<Update>,
     clipboard: Option<arboard::Clipboard>,
+    /// Clipboard images pasted as files; removed at exit.
+    pasted_images: crate::pasted_images::PastedImages,
     /// Current font size in points; changed by zoom shortcuts.
     font_size: f32,
     next_pane_id: u64,
@@ -427,6 +429,7 @@ impl Core {
             update_checker: None,
             update: None,
             clipboard,
+            pasted_images: crate::pasted_images::PastedImages::new(),
             next_pane_id: 0,
             wsl_homes: Default::default(),
             shell_choices: Vec::new(),
@@ -876,6 +879,20 @@ impl Core {
             .get_text()
             .inspect_err(|err| tracing::debug!("failed to read clipboard: {err}"))
             .ok()
+    }
+
+    fn clipboard_image(&mut self) -> ClipboardImage {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return ClipboardImage::None;
+        };
+        match clipboard.get_image() {
+            Ok(image) => ClipboardImage::Image(image),
+            Err(arboard::Error::ConversionFailure) => ClipboardImage::Unreadable,
+            Err(err) => {
+                tracing::debug!("failed to read a clipboard image: {err}");
+                ClipboardImage::None
+            }
+        }
     }
 
     /// Put text into the primary selection, for middle-click paste. Only
@@ -1340,7 +1357,19 @@ fn set_pane_title(
     }
 }
 
+/// What the clipboard holds besides text.
+enum ClipboardImage {
+    None,
+    Image(arboard::ImageData<'static>),
+    /// An image nuntio can't decode; the program may read it itself.
+    Unreadable,
+}
+
 impl ApplicationHandler<UserEvent> for App {
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.core.pasted_images.remove_all();
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.core.exit_requested {
             event_loop.exit();

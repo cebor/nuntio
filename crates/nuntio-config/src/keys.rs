@@ -216,7 +216,10 @@ const fn action(value: &'static str, help: &'static str) -> Variant {
 /// Every action name `[[keybindings]]` accepts.
 pub static ACTIONS: &[Variant] = &[
     action("copy", "Copy the selection"),
-    action("paste", "Paste from the clipboard"),
+    action(
+        "paste",
+        "Paste from the clipboard (an image is saved as a PNG file and its path pasted)",
+    ),
     action(
         "new_tab",
         "Open a new tab (in the focused pane's directory with `tabs.inherit_directory`)",
