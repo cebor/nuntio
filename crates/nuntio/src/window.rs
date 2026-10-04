@@ -479,6 +479,7 @@ impl WindowState {
                 left_inset: left_inset as f32,
                 min_height: min_height as f32,
                 window_controls: self.chrome == Chrome::Undecorated,
+                drag_area: self.chrome != Chrome::System,
                 update_badge: self.update_badge,
             },
         ))

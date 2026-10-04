@@ -25,6 +25,9 @@ const CLOSE_RADIUS: f64 = 4.0;
 /// Window control button size in logical pixels (Windows' caption buttons).
 const CONTROL_WIDTH: f64 = 46.0;
 const CONTROL_ICON: f64 = 10.0;
+/// Free space the tabs always leave after the "+" button to drag the
+/// window by, when the bar is the window's title bar, in logical pixels.
+const DRAG_AREA: f64 = 48.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Slot {
@@ -89,6 +92,9 @@ pub struct TabBarOptions {
     pub min_height: f32,
     /// Minimize, maximize and close at the right edge.
     pub window_controls: bool,
+    /// The bar is the window's title bar: keep `DRAG_AREA` free after the
+    /// tabs to move the window by.
+    pub drag_area: bool,
     /// The badge for a newer release, left of the window controls.
     pub update_badge: bool,
 }
@@ -101,6 +107,7 @@ impl TabBar {
             left_inset,
             min_height,
             window_controls,
+            drag_area,
             update_badge,
         } = options;
         let (cell, scale) = (metrics.cell, metrics.scale);
@@ -118,8 +125,15 @@ impl TabBar {
         let gap = 2.0 * (logical(PILL_GAP) / 2.0).floor();
         let new_tab_width = height - 2.0 * inset + gap;
         let badge_width = if update_badge { new_tab_width } else { 0.0 };
-        let available =
-            (width - start - inset - 3.0 * control_width - new_tab_width - badge_width).max(0.0);
+        let drag_width = if drag_area { logical(DRAG_AREA) } else { 0.0 };
+        let available = (width
+            - start
+            - inset
+            - 3.0 * control_width
+            - new_tab_width
+            - badge_width
+            - drag_width)
+            .max(0.0);
         let tab_width = (available / count.max(1) as f32)
             .min(MAX_TAB_CELLS * cell.width as f32)
             .floor();
@@ -595,6 +609,25 @@ mod tests {
         assert_eq!(bar.hit(930.0, 10.0), Some(BarHit::Maximize));
         assert_eq!(bar.hit(999.0, 10.0), Some(BarHit::CloseWindow));
         assert_eq!(bar.hit(861.0, 10.0), Some(BarHit::Empty));
+    }
+
+    #[test]
+    fn full_bar_keeps_a_drag_area() {
+        // Without the reserve, 27px tabs push the "+" button up to 844px.
+        let bar = TabBar::new(
+            1000.0,
+            30,
+            METRICS,
+            TabBarOptions {
+                window_controls: true,
+                drag_area: true,
+                ..TabBarOptions::default()
+            },
+        );
+        let drag = DRAG_AREA as f32;
+        assert_eq!(bar.hit(bar.controls_x() - drag, 10.0), Some(BarHit::Empty));
+        assert_eq!(bar.hit(bar.controls_x() - 1.0, 10.0), Some(BarHit::Empty));
+        assert_eq!(bar.hit(bar.new_tab_x() - 1.0, 10.0), Some(BarHit::Tab(29)));
     }
 
     #[test]
