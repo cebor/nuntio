@@ -496,6 +496,13 @@ impl Core {
                 "messages": b.messages,
             })
         });
+        let tab_bar = state.tab_bar(config).map(|bar| {
+            let visible = bar.visible_tabs();
+            json!({
+                "visible": [visible.start, visible.end],
+                "tab_list_x": bar.overflows().then(|| bar.tab_list_x()),
+            })
+        });
         json!({
             "window": {
                 "width": size.width,
@@ -510,12 +517,14 @@ impl Core {
             "cell": { "width": cell.width, "height": cell.height },
             "font_size": self.font_size,
             "tabs": tabs,
+            "tab_bar": tab_bar,
             "search": state.search.as_ref().map(|bar| json!({ "query": bar.query(), "regex": bar.regex() })),
             "banner": banner,
             "actions_menu": state.actions_menu.as_ref().map(|menu| json!({
                 "kind": match menu.kind() {
                     MenuKind::Actions => "actions",
                     MenuKind::Shells => "shells",
+                    MenuKind::Tabs => "tabs",
                 },
                 "selected": menu.selected_label(),
                 "entries": menu.labels(),

@@ -415,8 +415,8 @@ impl Core {
             }
             _ => {
                 let latin = input::latin_key(&event.unmodified, event.physical);
-                let opens =
-                    self.lookup_binding(&event.unmodified, latin.as_ref(), mods) == Some(opener);
+                let opens = opener.is_some()
+                    && self.lookup_binding(&event.unmodified, latin.as_ref(), mods) == opener;
                 if opens {
                     state.close_actions_menu();
                 }
@@ -688,6 +688,9 @@ impl Core {
             }
             BarHit::Close(index) => self.request_close_tab(state, index),
             BarHit::NewTab => self.new_tab(state, self.default_launch(), Placement::End),
+            BarHit::ScrollLeft => state.scroll_tabs(-1),
+            BarHit::ScrollRight => state.scroll_tabs(1),
+            BarHit::TabList => state.open_tab_menu(&self.config),
             BarHit::Empty => {
                 // Double click maximizes, like a title bar.
                 let now = Instant::now();

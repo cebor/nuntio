@@ -1,7 +1,8 @@
 //! The menus that open from the status bar: the menu of all actions that
 //! the `actions` item opens, a list with a heading per category, each entry
-//! with its shortcut, and the menu of shells for a new tab. They are laid
-//! out in the cells of the small UI font (`UiMetrics::small`).
+//! with its shortcut, and the menu of shells for a new tab. Also the list of
+//! all tabs that the tab bar's ⌄ button opens. They are laid out in the
+//! cells of the small UI font (`UiMetrics::small`).
 
 use nuntio_config::StatusItem;
 use nuntio_render::{Rect, UiRect, UiText};
@@ -10,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::actions::{Action, Bindings};
 use crate::pane_tree::Direction::{Down, Left, Right, Up};
-use crate::style::{UiMetrics, framed_box, hairline, mix};
+use crate::style::{UiMetrics, framed_box, hairline, mix, truncate};
 
 /// Space above the first and below the last row, in logical pixels.
 const PADDING: f64 = 4.0;
@@ -20,6 +21,8 @@ const ROW_PADDING: f64 = 2.0;
 const MARGIN: f64 = 2.0;
 /// Space between label and shortcut, in cells.
 const GAP_CELLS: usize = 3;
+/// Longest tab title the tab list shows, in cells.
+const TAB_MENU_CELLS: usize = 48;
 
 /// Every action the actions menu offers, by category. `select_tab_1` …
 /// `select_tab_9` are left out (the tab bar has the tabs) and so is the
@@ -89,22 +92,26 @@ const MENU: &[(&str, &[(&str, Action)])] = &[
 pub enum MenuKind {
     Actions,
     Shells,
+    Tabs,
 }
 
 impl MenuKind {
-    /// The action that opens (and, pressed again, closes) the menu.
-    pub fn opener(self) -> Action {
+    /// The action that opens (and, pressed again, closes) the menu. The tab
+    /// list has none: only the tab bar's ⌄ button opens it.
+    pub fn opener(self) -> Option<Action> {
         match self {
-            Self::Actions => Action::OpenActionsMenu,
-            Self::Shells => Action::OpenShellMenu,
+            Self::Actions => Some(Action::OpenActionsMenu),
+            Self::Shells => Some(Action::OpenShellMenu),
+            Self::Tabs => None,
         }
     }
 
     /// The status bar item shown pressed while it is open.
-    pub fn status_item(self) -> StatusItem {
+    pub fn status_item(self) -> Option<StatusItem> {
         match self {
-            Self::Actions => StatusItem::Actions,
-            Self::Shells => StatusItem::Shell,
+            Self::Actions => Some(StatusItem::Actions),
+            Self::Shells => Some(StatusItem::Shell),
+            Self::Tabs => None,
         }
     }
 }
@@ -137,6 +144,8 @@ enum Row {
         label: String,
         action: Action,
         shortcut: Option<String>,
+        /// The active tab, marked in the tab list.
+        current: bool,
     },
 }
 
@@ -216,6 +225,7 @@ impl ActionsMenu {
                     label: label.to_owned(),
                     action,
                     shortcut: bindings.shortcut(action),
+                    current: false,
                 });
             }
         }
@@ -235,8 +245,25 @@ impl ActionsMenu {
             } else {
                 None
             },
+            current: false,
         }));
         Self::with_rows(MenuKind::Shells, anchor, rows)
+    }
+
+    /// The list of all tabs: entry `i` runs `Action::SelectTab(i)`. The
+    /// active tab is marked, selected and scrolled into view.
+    pub fn tabs(anchor: Anchor, titles: &[String], active: usize, view: View) -> Self {
+        let mut rows = vec![Row::Heading("Tabs")];
+        rows.extend(titles.iter().enumerate().map(|(i, title)| Row::Entry {
+            label: truncate(title, TAB_MENU_CELLS),
+            action: Action::SelectTab(i),
+            shortcut: None,
+            current: i == active,
+        }));
+        let mut menu = Self::with_rows(MenuKind::Tabs, anchor, rows);
+        menu.selected = Some(active + 1);
+        menu.reveal(view);
+        menu
     }
 
     fn with_rows(kind: MenuKind, anchor: Anchor, rows: Vec<Row>) -> Self {
@@ -446,11 +473,17 @@ impl ActionsMenu {
                     texts.push(UiText::new(x, y, title.to_uppercase(), muted).small());
                 }
                 Row::Entry {
-                    label, shortcut, ..
+                    label,
+                    shortcut,
+                    current,
+                    ..
                 } => {
                     let selected = self.selected == Some(geometry.first + n);
                     if selected {
                         rects.push(UiRect::fill(row_rect, highlight));
+                    }
+                    if *current {
+                        texts.push(UiText::new(x, y, "•", text_color).small());
                     }
                     let label_x = x + geometry.cell_width;
                     texts.push(UiText::new(label_x, y, label.clone(), text_color).small());
@@ -701,5 +734,40 @@ mod tests {
         }
         let shortcuts = texts.iter().filter(|t| t.text.contains('+')).count();
         assert_eq!(shortcuts, 1, "{strings:?}");
+    }
+
+    #[test]
+    fn the_tab_list_marks_and_selects_the_active_tab() {
+        let anchor = Anchor {
+            x: 10.0,
+            y: 34.0,
+            opens_up: false,
+            centered: false,
+        };
+        let titles: Vec<String> = (0..100)
+            .map(|i| {
+                if i == 0 {
+                    "x".repeat(100)
+                } else {
+                    format!("tab {i}")
+                }
+            })
+            .collect();
+        let view = view(1000.0, 300.0);
+        let menu = ActionsMenu::tabs(anchor, &titles, 60, view);
+        assert_eq!(menu.kind(), MenuKind::Tabs);
+        assert_eq!(
+            entries(&menu),
+            (0..100).map(Action::SelectTab).collect::<Vec<_>>()
+        );
+        assert_eq!(menu.selected_action(), Some(Action::SelectTab(60)));
+        let geometry = menu.geometry(view);
+        assert!((geometry.first..geometry.first + geometry.visible).contains(&61));
+        let (_, texts) = menu.draw(view, BLACK, WHITE);
+        assert_eq!(texts.iter().filter(|t| t.text == "•").count(), 1);
+        let Row::Entry { label, .. } = &menu.rows[1] else {
+            panic!("row 1 is an entry");
+        };
+        assert!(label.width() <= TAB_MENU_CELLS, "{label}");
     }
 }

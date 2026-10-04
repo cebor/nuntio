@@ -335,6 +335,8 @@ pub struct WindowState {
     title: String,
     /// A newer release exists: the tab bar shows a badge.
     pub update_badge: bool,
+    /// First tab the tab bar shows when not all fit.
+    pub tab_scroll: usize,
 }
 
 impl WindowState {
@@ -371,6 +373,7 @@ impl WindowState {
             status_drawn: None,
             title: String::new(),
             update_badge: false,
+            tab_scroll: 0,
         }
     }
 
@@ -461,9 +464,11 @@ impl WindowState {
 
     /// The tab bar, if shown.
     pub fn tab_bar(&self, config: &Config) -> Option<TabBar> {
-        if !self.bar_visible(config) {
-            return None;
-        }
+        self.bar_visible(config).then(|| self.tab_layout())
+    }
+
+    /// The tab bar as it is laid out when shown.
+    fn tab_layout(&self) -> TabBar {
         // macOS hides the window buttons in full screen.
         let (left_inset, min_height) = match self.chrome {
             Chrome::TitlebarInset { left } if left > 0.0 && self.window.fullscreen().is_none() => {
@@ -471,7 +476,7 @@ impl WindowState {
             }
             _ => (0.0, 0.0),
         };
-        Some(TabBar::new(
+        TabBar::new(
             self.window.inner_size().width as f32,
             self.tabs.len(),
             self.ui_metrics(),
@@ -481,8 +486,37 @@ impl WindowState {
                 window_controls: self.chrome == Chrome::Undecorated,
                 drag_area: self.chrome != Chrome::System,
                 update_badge: self.update_badge,
+                scroll: self.tab_scroll,
             },
-        ))
+        )
+    }
+
+    /// Scroll the tab bar so it shows the active tab.
+    pub fn reveal_active_tab(&mut self) {
+        let bar = self.tab_layout();
+        let first = bar.reveal(self.tabs.active_index());
+        if first != bar.visible_tabs().start {
+            self.window.request_redraw();
+        }
+        // Also normalizes a value beyond the last possible first tab.
+        self.tab_scroll = first;
+    }
+
+    /// Scroll the tab bar by `tabs`, positive towards the last tab.
+    pub fn scroll_tabs(&mut self, tabs: isize) {
+        let bar = self.tab_layout();
+        let first = bar.scroll_target(tabs);
+        if first == bar.visible_tabs().start {
+            return;
+        }
+        self.tab_scroll = first;
+        // Other content moved under the pointer.
+        let bar = self.tab_layout();
+        self.mouse.hovered_bar = self
+            .mouse
+            .position
+            .and_then(|pos| bar.hit(pos.x as f32, pos.y as f32));
+        self.window.request_redraw();
     }
 
     /// Top edge and height of the status bar, if shown.
@@ -511,7 +545,7 @@ impl WindowState {
             shell,
             self.ui_metrics(),
         );
-        Some(bar.with_active(self.menu_kind().map(MenuKind::status_item)))
+        Some(bar.with_active(self.menu_kind().and_then(MenuKind::status_item)))
     }
 
     /// What the open menu lists.
@@ -588,6 +622,27 @@ impl WindowState {
             opens_up: false,
             centered: false,
         })
+    }
+
+    /// Open the list of all tabs below the tab bar's ⌄ button, if the bar
+    /// overflows.
+    pub fn open_tab_menu(&mut self, config: &Config) {
+        let Some(bar) = self.tab_bar(config).filter(TabBar::overflows) else {
+            return;
+        };
+        let titles: Vec<String> = self
+            .tab_labels(config)
+            .into_iter()
+            .map(|label| label.title)
+            .collect();
+        let anchor = Anchor {
+            x: bar.tab_list_x(),
+            y: bar.height,
+            opens_up: false,
+            centered: false,
+        };
+        let menu = ActionsMenu::tabs(anchor, &titles, self.tabs.active_index(), self.menu_view());
+        self.show_menu(menu);
     }
 
     /// Centered at the top of the terminal area.
@@ -754,6 +809,7 @@ impl WindowState {
                 }
             }
         }
+        self.reveal_active_tab();
     }
 
     /// The pointer is over the find bar.
@@ -937,15 +993,18 @@ impl WindowState {
 
     /// Switch tabs, telling applications that asked about focus changes.
     pub fn select_tab(&mut self, index: usize) {
-        if index == self.tabs.active_index() || index >= self.tabs.len() {
+        if index >= self.tabs.len() {
             return;
         }
-        self.send_focus(false);
-        self.tabs.select(index);
-        // A divider of the old tab can't be dragged on in the new one.
-        self.mouse.divider_drag = None;
-        self.send_focus(true);
-        self.reset_focus_state();
+        if index != self.tabs.active_index() {
+            self.send_focus(false);
+            self.tabs.select(index);
+            // A divider of the old tab can't be dragged on in the new one.
+            self.mouse.divider_drag = None;
+            self.send_focus(true);
+            self.reset_focus_state();
+        }
+        self.reveal_active_tab();
     }
 
     /// Move keyboard focus to another pane of the active tab.

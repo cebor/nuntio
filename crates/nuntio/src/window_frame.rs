@@ -232,7 +232,7 @@ impl WindowState {
     /// The labels of the tabs, and the window title from the active one.
     /// Titles look up the foreground process, so only the shown ones are
     /// computed: all with a tab bar, else the active one's.
-    fn tab_labels(&mut self, config: &Config) -> Vec<TabLabel> {
+    pub(super) fn tab_labels(&mut self, config: &Config) -> Vec<TabLabel> {
         let active = self.tabs.active_index();
         let bar_visible = self.bar_visible(config);
         let now = Instant::now();

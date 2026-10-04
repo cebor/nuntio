@@ -47,6 +47,8 @@ pub struct MouseState {
     /// Sub-line remainder of trackpad and high-resolution wheel scrolling,
     /// in pixels.
     pub scroll_pixels: f64,
+    /// Sub-tab remainder of scrolling the tab bar, in pixels.
+    pub bar_scroll_pixels: f64,
     /// Tab bar element under the pointer.
     pub hovered_bar: Option<BarHit>,
     /// Time of the last click on free tab bar space, to detect double clicks.
@@ -69,18 +71,23 @@ impl MouseState {
     }
 
     /// Whole lines to scroll for a wheel or trackpad movement of `pixels`.
-    /// High-resolution wheels and trackpads send fractions of a line; the
-    /// remainder is kept so they add up instead of rounding to 0.
     pub fn scroll_lines(&mut self, pixels: f64, line_height: f64) -> i32 {
-        // A leftover from the other direction must not eat this scroll.
-        if self.scroll_pixels * pixels < 0.0 {
-            self.scroll_pixels = 0.0;
-        }
-        self.scroll_pixels += pixels;
-        let lines = (self.scroll_pixels / line_height).trunc();
-        self.scroll_pixels -= lines * line_height;
-        lines as i32
+        whole_steps(&mut self.scroll_pixels, pixels, line_height)
     }
+}
+
+/// Whole steps of `step` pixels for a wheel or trackpad movement of
+/// `pixels`. High-resolution wheels and trackpads send fractions of a
+/// step; the remainder is kept so they add up instead of rounding to 0.
+fn whole_steps(remainder: &mut f64, pixels: f64, step: f64) -> i32 {
+    // A leftover from the other direction must not eat this scroll.
+    if *remainder * pixels < 0.0 {
+        *remainder = 0.0;
+    }
+    *remainder += pixels;
+    let steps = (*remainder / step).trunc();
+    *remainder -= steps * step;
+    steps as i32
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -279,6 +286,7 @@ impl WindowState {
             && target != drag.index
         {
             self.tabs.move_tab(drag.index, target);
+            self.reveal_active_tab();
             drag.index = target;
             self.window.request_redraw();
         }
@@ -321,6 +329,16 @@ impl WindowState {
     /// Scroll the pane under the pointer, as it would when focused; focus
     /// stays where it is.
     pub fn mouse_wheel(&mut self, config: &Config, delta: MouseScrollDelta) {
+        // Over an overflowing tab bar the wheel scrolls the tabs.
+        if self.actions_menu.is_none()
+            && let Some(pos) = self.mouse.position
+            && let Some(bar) = self.tab_bar(config)
+            && bar.overflows()
+            && (pos.y as f32) < bar.height
+        {
+            self.wheel_tab_bar(&bar, delta);
+            return;
+        }
         let cell_height = self.renderer.cell_metrics().height as f64;
         // Positive = scroll up (content moves down, towards older lines).
         let pixels = match delta {
@@ -376,6 +394,20 @@ impl WindowState {
             term.scroll(lines);
             self.window.request_redraw();
         }
+    }
+
+    /// Scroll the tabs of `bar` by a wheel or trackpad movement on either
+    /// axis: one notch or a tab's width of travel moves one tab.
+    fn wheel_tab_bar(&mut self, bar: &TabBar, delta: MouseScrollDelta) {
+        let step = f64::from(bar.tab_width().max(1.0));
+        let dominant = |x: f64, y: f64| if x.abs() > y.abs() { x } else { y };
+        let pixels = match delta {
+            MouseScrollDelta::LineDelta(x, y) => dominant(x.into(), y.into()) * step,
+            MouseScrollDelta::PixelDelta(p) => dominant(p.x, p.y),
+        };
+        let tabs = whole_steps(&mut self.mouse.bar_scroll_pixels, pixels, step);
+        // Positive values reveal what is left or above: earlier tabs.
+        self.scroll_tabs(-(tabs as isize));
     }
 
     /// Scroll a selection drag past the pane's edge one step further, if
