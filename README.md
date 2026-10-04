@@ -39,15 +39,17 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **New tabs and panes open in the current directory** of the focused pane (Linux and macOS).
 - **Find bar** with incremental search, a match count and a regex mode (<kbd>Alt</kbd>+<kbd>R</kbd>). It starts with the selected text, if there is one.
 - **Drag and drop**: drop files onto a pane to type their paths, escaped for the shell.
-- **Inline images** with iTerm2's protocol (OSC 1337 `File=`): PNG, JPEG, GIF, WebP and BMP, stored in the grid so they scroll, clear and get overwritten like text. omp shows images inline on its own, also in WSL on Windows, where nuntio runs WSL panes through its helper `nuntio-wsl` in a Linux PTY instead of ConPTY. In cmd and PowerShell panes omp shows text instead.
+- **Images**: programs show images inline with iTerm2's protocol (OSC 1337 `File=`): PNG, JPEG, GIF, WebP and BMP, stored in the grid so they scroll, clear and get overwritten like text. omp shows images inline on its own, also in WSL on Windows, where nuntio runs WSL panes through its helper `nuntio-wsl` in a Linux PTY instead of ConPTY; in cmd and PowerShell panes omp shows text instead. Pasting an image from the clipboard pastes the path of a temporary PNG file, which AI CLIs like Claude Code and omp attach to the prompt.
 - **Clickable URLs**: hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on macOS) and click. While hovering, the address the link leads to is shown, and links to programs are not opened.
 - **Themes**: twenty built in, your own as TOML or iTerm2 `.itermcolors`, and a light/dark pair that follows the OS appearance.
 - **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.
 - **Config editor**: run `nuntio-config` in a nuntio tab to change settings in a terminal UI that only offers valid values and previews every change live.
 - **Hot reload**: saving the config applies it right away. Mistakes show up as a banner in the window, and the previous settings stay active.
-- **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select. <kbd>Shift</kbd>+click extends a selection, and on Linux a middle click pastes the last selection. Pasting a clipboard image pastes the path of a temporary PNG file, which AI CLIs like Claude Code attach.
+- **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select. <kbd>Shift</kbd>+click extends a selection, and on Linux a middle click pastes the last selection.
 - **Status bar** (optional): live graphs of CPU, memory and network, the battery level and the time.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.
+
+![omp showing nuntio's icon inline next to Claude Code with a pasted screenshot attached as [Image #1]](assets/screenshots/images.png)
 
 ![The find bar searching for "tab" in git log, with four matches highlighted and a match count of 4/4](assets/screenshots/find-bar.png)
 
