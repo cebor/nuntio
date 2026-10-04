@@ -352,7 +352,7 @@ Themes are color schemes: each one sets the foreground, background, cursor and s
 
 `theme` is one name, or a pair `theme = { light = "…", dark = "…" }` that follows the OS appearance. Other keys inside `theme = { … }` are an error, not a warning.
 
-![The same window in Solarized Light and Tokyo Night, split diagonally](../assets/screenshots/themes.png)
+![The same window in Tokyo Night Day and Tokyo Night, split diagonally](../assets/screenshots/themes.png)
 
 ### Built-in themes
 

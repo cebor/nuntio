@@ -137,7 +137,7 @@ key = "Ctrl+Shift+N"
 action = "new_tab"
 ```
 
-![The same window in Solarized Light and Tokyo Night, split diagonally](assets/screenshots/themes.png)
+![The same window in Tokyo Night Day and Tokyo Night, split diagonally](assets/screenshots/themes.png)
 
 Changes apply as soon as you save the file. Or run `nuntio-config` in a nuntio tab and change settings in a terminal UI instead of editing TOML. The **[configuration reference](docs/config.md)** covers every option with its default, custom themes, and all keybinding actions.
 
