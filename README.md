@@ -126,7 +126,7 @@ size = 14.0
 
 # Follow the OS appearance
 [theme]
-light = "Solarized Light"
+light = "Tokyo Night Day"
 dark = "Tokyo Night"
 
 [panes]
