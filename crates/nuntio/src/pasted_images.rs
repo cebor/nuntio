@@ -83,14 +83,15 @@ impl PastedImages {
 
 /// Create only the leaf, readable by this user alone where that's
 /// possible: screenshots shouldn't be visible to others in a shared `/tmp`.
+#[cfg(unix)]
 fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
-    let mut builder = DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
+    use std::os::unix::fs::DirBuilderExt;
+    DirBuilder::new().mode(0o700).create(dir)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    DirBuilder::new().create(dir)
 }
 
 #[cfg(test)]
