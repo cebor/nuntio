@@ -28,7 +28,7 @@
 
 nuntio is one window with tabs and split panes, rendered on the GPU and configured with a single TOML file that reloads while you type. Terminal emulation comes from [`alacritty_terminal`](https://crates.io/crates/alacritty_terminal); everything around it (window, tabs, panes, rendering, config) is nuntio's own.
 
-![nuntio on macOS with two tabs, a split pane with git log and the nuntio-config editor, and the status bar](assets/screenshot.png)
+![nuntio on Linux with two tabs, a split pane with git log and the nuntio-config editor, and the status bar](assets/screenshot.png)
 
 ## Features
 
@@ -49,7 +49,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Status bar** (optional): live graphs of CPU, memory and network, the battery level and the time.
 - **Idle means idle**: nuntio only redraws when something changed, so an idle window uses close to 0% CPU.
 
-![The find bar searching for "tab" in git log, with five matches highlighted and a match count of 5/5](assets/screenshots/find-bar.png)
+![The find bar searching for "tab" in git log, with four matches highlighted and a match count of 4/4](assets/screenshots/find-bar.png)
 
 ## Installation
 

@@ -208,7 +208,7 @@ option_as_meta = "none"
 
 A bar with live system graphs and the date and time. It is off by default.
 
-![The status bar with CPU, memory and network graphs, the battery level and the date](../assets/screenshots/status-bar.png)
+![The status bar with CPU, memory and network graphs and the date](../assets/screenshots/status-bar.png)
 
 | Key | Type | Default | Description |
 |---|---|---|---|
