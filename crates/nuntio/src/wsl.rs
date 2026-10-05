@@ -61,24 +61,25 @@ pub struct Distro {
     pub user: Option<String>,
 }
 
-/// Where Windows sees `dir` (absolute) of `distro`: `/mnt/c/x` is `C:\x`,
-/// anything else is under `\\wsl.localhost\<distro>`.
-pub fn windows_path(dir: &str, distro: &str) -> String {
-    if let Some(rest) = dir.strip_prefix("/mnt/") {
-        let (drive, rest) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-        let mut chars = drive.chars();
-        if let (Some(letter), None) = (chars.next(), chars.next())
-            && letter.is_ascii_alphabetic()
-        {
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            return format!(
-                "{}:\\{}",
-                letter.to_ascii_uppercase(),
-                rest.replace('/', "\\")
-            );
-        }
+/// Where Windows sees `dir` (absolute) of a WSL distribution, if it is on a
+/// Windows drive: `/mnt/c/x` is `C:\x`. Directories inside the distribution
+/// (`\\wsl.localhost\…`) give `None`: a Windows shell is no use there.
+pub fn windows_path(dir: &str) -> Option<String> {
+    let rest = dir.strip_prefix("/mnt/")?;
+    let (drive, rest) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let mut chars = drive.chars();
+    let (Some(letter), None) = (chars.next(), chars.next()) else {
+        return None;
+    };
+    if !letter.is_ascii_alphabetic() {
+        return None;
     }
-    format!(r"\\wsl.localhost\{distro}{}", dir.replace('/', "\\"))
+    let rest = rest.strip_prefix('/').unwrap_or(rest);
+    Some(format!(
+        "{}:\\{}",
+        letter.to_ascii_uppercase(),
+        rest.replace('/', "\\")
+    ))
 }
 
 /// A Windows directory as a shell in `distro` sees it (see `wsl_path`);
@@ -219,18 +220,13 @@ mod tests {
     }
 
     #[test]
-    fn linux_paths_are_seen_from_windows() {
-        assert_eq!(windows_path("/mnt/c/Users/me", "Ubuntu"), r"C:\Users\me");
-        assert_eq!(windows_path("/mnt/c", "Ubuntu"), r"C:\");
-        assert_eq!(
-            windows_path("/home/me", "Ubuntu"),
-            r"\\wsl.localhost\Ubuntu\home\me"
-        );
-        assert_eq!(windows_path("/", "Ubuntu"), r"\\wsl.localhost\Ubuntu\");
-        assert_eq!(
-            windows_path("/mnt/wsl/x", "Ubuntu"),
-            r"\\wsl.localhost\Ubuntu\mnt\wsl\x"
-        );
+    fn only_drive_paths_are_seen_from_windows() {
+        assert_eq!(windows_path("/mnt/c/Users/me"), Some(r"C:\Users\me".into()));
+        assert_eq!(windows_path("/mnt/c"), Some(r"C:\".into()));
+        assert_eq!(windows_path("/home/me"), None);
+        assert_eq!(windows_path("~/code"), None);
+        assert_eq!(windows_path("/"), None);
+        assert_eq!(windows_path("/mnt/wsl/x"), None);
     }
 
     #[test]

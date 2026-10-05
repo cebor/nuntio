@@ -308,9 +308,10 @@ impl Core {
                 dir.map(StartDir::Wsl)
             }
             Some(_) => None,
+            // Only directories on a Windows drive; inside the distribution
+            // the new shell starts in `working_directory` or at home.
             None => {
-                let dir = self.wsl_absolute(&source, &dir)?;
-                let path = PathBuf::from(crate::wsl::windows_path(&dir, &source.name));
+                let path = PathBuf::from(crate::wsl::windows_path(&dir)?);
                 path.is_dir().then_some(StartDir::Local(path))
             }
         }

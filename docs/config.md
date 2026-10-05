@@ -344,7 +344,7 @@ wsl = "Debian"
 wsl_user = "root"
 ```
 
-With `tabs.inherit_directory`, the new tab starts in the focused pane's directory, translated between Windows and WSL (`C:\x` is `/mnt/c/x`, `/home/me` is `\\wsl.localhost\<distribution>\home\me`). From one WSL distribution to another, nothing is inherited.
+With `tabs.inherit_directory`, the new tab starts in the focused pane's directory, translated between Windows and WSL (`C:\x` is `/mnt/c/x` and back). A Windows shell opened from a directory inside a distribution (`/home/me`, not under `/mnt/<drive>`) starts in `working_directory` or at home instead of `\\wsl.localhost\…`. From one WSL distribution to another, nothing is inherited.
 
 ## Themes
 
