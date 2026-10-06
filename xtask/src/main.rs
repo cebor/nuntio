@@ -1,7 +1,9 @@
 //! Project automation: `cargo xtask <command>`.
 //!
 //! - `icons`: render `assets/icon.svg` into the PNG/ICO/ICNS icons that are
-//!   committed under `assets/icons/`.
+//!   committed under `assets/icons/`. The ICO is cropped to the rounded
+//!   square: Windows icons fill their canvas, macOS and Linux icons keep a
+//!   margin.
 //! - `package`: build a release and package it for the host platform into
 //!   `dist/`: tar.gz, .deb and AppImage on Linux, a universal .app in a .dmg
 //!   on macOS, a .zip and an Inno Setup installer on Windows.
@@ -250,13 +252,19 @@ fn site_plain_page(file: &str, markdown: &str, title: &str, description: &str) -
 
 // ---------------------------------------------------------------- icons
 
-/// Render the SVG at `size`×`size` as straight (non-premultiplied) RGBA.
-fn render_rgba(tree: &resvg::usvg::Tree, size: u32) -> Result<Vec<u8>> {
+/// Render the SVG region `area` (in SVG user units) onto a `size`×`size`
+/// pixmap as straight (non-premultiplied) RGBA.
+fn render_rgba(
+    tree: &resvg::usvg::Tree,
+    size: u32,
+    area: resvg::tiny_skia::Rect,
+) -> Result<Vec<u8>> {
     let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size).context("pixmap")?;
-    let scale = size as f32 / tree.size().width();
+    let scale = size as f32 / area.width();
     resvg::render(
         tree,
-        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        resvg::tiny_skia::Transform::from_scale(scale, scale)
+            .pre_translate(-area.left(), -area.top()),
         &mut pixmap.as_mut(),
     );
     Ok(pixmap
@@ -273,17 +281,32 @@ fn icons() -> Result<()> {
     let assets = root().join("assets");
     let svg = fs::read(assets.join("icon.svg"))?;
     let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())?;
+    let full =
+        resvg::tiny_skia::Rect::from_xywh(0.0, 0.0, tree.size().width(), tree.size().height())
+            .context("svg size")?;
+    // The rounded square including its outline stroke.
+    let artwork = tree.root().abs_stroke_bounding_box();
+    ensure!(
+        (artwork.width() - artwork.height()).abs() < 0.5,
+        "icon artwork must be square, is {}×{}",
+        artwork.width(),
+        artwork.height()
+    );
     let out = assets.join("icons");
     fs::create_dir_all(out.join("png"))?;
 
     let mut ico = ico::IconDir::new(ico::ResourceType::Icon);
     let mut icns = icns::IconFamily::new();
     for size in PNG_SIZES {
-        let rgba = render_rgba(&tree, size)?;
+        let rgba = render_rgba(&tree, size, full)?;
         let image = ico::IconImage::from_rgba_data(size, size, rgba.clone());
         image.write_png(fs::File::create(out.join(format!("png/{size}.png")))?)?;
         if ICO_SIZES.contains(&size) {
-            ico.add_entry(ico::IconDirEntry::encode(&image)?);
+            // Windows icons fill their whole canvas, so the ICO is cropped
+            // to the artwork instead of keeping the margin.
+            let cropped = render_rgba(&tree, size, artwork)?;
+            let cropped = ico::IconImage::from_rgba_data(size, size, cropped);
+            ico.add_entry(ico::IconDirEntry::encode(&cropped)?);
         }
         if ICNS_SIZES.contains(&size) {
             let image = icns::Image::from_data(icns::PixelFormat::RGBA, size, size, rgba)?;
