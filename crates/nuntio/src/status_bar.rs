@@ -345,13 +345,10 @@ impl StatusBar {
                 let Some(battery) = latest.battery else {
                     return;
                 };
-                self.battery_icon(out, x, battery.level, colors);
+                self.battery_icon(out, x, battery.level, battery.plugged_in, colors);
                 self.sparkline(out, graph_x, &stats.battery, 100.0, colors);
-                if battery.plugged_in {
-                    text(after_graph, "⚡".into(), colors.value, out);
-                }
                 let level = format!("{:.0}%", battery.level);
-                text(after_graph + 3, format!("{level:>4}"), colors.value, out);
+                text(after_graph, format!("{level:>4}"), colors.value, out);
             }
             StatusItem::Datetime => {
                 self.clock_icon(out, x, colors);
@@ -622,8 +619,9 @@ impl StatusBar {
         ));
     }
 
-    /// An outlined battery with a knob on the right, filled to `level`.
-    fn battery_icon(&self, out: &mut Output, x: f32, level: f32, colors: &Colors) {
+    /// An outlined battery with a knob on the right, filled to `level`,
+    /// with a bolt over the fill while `charging`.
+    fn battery_icon(&self, out: &mut Output, x: f32, level: f32, charging: bool, colors: &Colors) {
         let stroke = self.stroke();
         let cw = self.cell.width as f32;
         let (top, height) = self.graph_box();
@@ -643,12 +641,42 @@ impl StatusBar {
         let inner = 2.0 * stroke;
         let fill = ((body - 2.0 * inner) * level / 100.0).round();
         if fill > 0.0 {
+            let fill_color = if charging {
+                colors.graph_alt
+            } else {
+                colors.graph
+            };
             out.rects.push(rect(
                 x + inner,
                 top + inner,
                 fill,
                 height - 2.0 * inner,
-                colors.graph,
+                fill_color,
+            ));
+        }
+        if charging {
+            // A stepped bolt: the upper half leans right, the lower left,
+            // and the two overlap in the middle row.
+            let inner_h = height - 2.0 * inner;
+            let half = (inner_h / 2.0).round();
+            let w = (body * 0.22).round().max(2.0 * stroke);
+            let thick = (stroke * 2.0).max(1.0);
+            let cx = (x + body / 2.0).round();
+            let y0 = top + inner;
+            out.rects.push(rect(cx, y0, thick, half, colors.label));
+            out.rects.push(rect(
+                cx - w + thick,
+                y0 + half - thick,
+                w,
+                thick,
+                colors.label,
+            ));
+            out.rects.push(rect(
+                cx - w + thick,
+                y0 + half,
+                thick,
+                inner_h - half,
+                colors.label,
             ));
         }
     }
@@ -741,8 +769,8 @@ fn item_cells(item: StatusItem, datetime: &str, shell: &str, stats: &Stats) -> u
         StatusItem::Memory => CONTENT + GRAPH_CELLS + 1 + 5,
         // icon "↓1.2M " graph " ↑ 30K"
         StatusItem::Network => CONTENT + GRAPH_CELLS + 1 + 5 + 1 + 5,
-        // icon graph " ⚡ 100%"
-        StatusItem::Battery => CONTENT + GRAPH_CELLS + 1 + 2 + 1 + 4,
+        // icon graph " 100%"
+        StatusItem::Battery => CONTENT + GRAPH_CELLS + 1 + 4,
         // icon "Fri 25 Sep 10:50"
         StatusItem::Datetime => CONTENT + datetime.width(),
         // icon "Actions"
@@ -1135,7 +1163,7 @@ mod tests {
         );
         let (rects, texts) = bar.draw(&stats, "12:34", bg, fg, false);
         let texts: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
-        for expected in [" 50%", " 4.0G", "2.0K", "  0K", " 80%", "⚡", "12:34"] {
+        for expected in [" 50%", " 4.0G", "2.0K", "  0K", " 80%", "12:34"] {
             assert!(texts.contains(&expected), "{expected:?} in {texts:?}");
         }
         for r in &rects {
