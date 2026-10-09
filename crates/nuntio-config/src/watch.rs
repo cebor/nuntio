@@ -31,6 +31,10 @@ struct Targets {
     theme_dirs: Vec<PathBuf>,
     /// Parents of `config_files` and `theme_dirs`; sorted, no duplicates.
     wanted: Vec<PathBuf>,
+    /// Symlinked directories on the way, as given and with their parent
+    /// resolved (event paths may be canonical): retargeting one changes what
+    /// is loaded.
+    links: Vec<PathBuf>,
 }
 
 impl Targets {
@@ -44,42 +48,53 @@ impl Targets {
             .chain(theme_dirs.iter().cloned())
             .collect();
         // A symlinked directory on the way may be retargeted: the directory
-        // holding the link sees that.
+        // holding the link sees that. Links in the root (macOS: /var, /tmp)
+        // are left out, so `/` is never watched.
+        let mut links = Vec::new();
         for path in [Some(config_path), themes_dir].into_iter().flatten() {
             for ancestor in path.ancestors() {
                 if ancestor
                     .symlink_metadata()
                     .is_ok_and(|m| m.file_type().is_symlink())
                     && let Some(parent) = ancestor.parent()
-                    && !parent.as_os_str().is_empty()
+                    && parent.parent().is_some()
+                    && let Some(name) = ancestor.file_name()
                 {
                     wanted.push(parent.to_owned());
+                    links.push(ancestor.to_owned());
+                    if let Ok(resolved) = parent.canonicalize() {
+                        links.push(resolved.join(name));
+                    }
                 }
             }
         }
         wanted.sort();
         wanted.dedup();
+        links.sort();
+        links.dedup();
         Self {
             config_files,
             theme_dirs,
             wanted,
+            links,
         }
     }
 }
 
-/// Whether a theme file in `dir` (or `dir` itself) changed: only what
-/// `ThemeSet::load` reads counts, not an editor's swap and backup files.
-/// Emacs lock files (`.#x.toml`, dangling links) end in `.toml` too.
+/// Whether a theme file in `dir` changed: only what `ThemeSet::load` reads
+/// counts, not an editor's swap and backup files. Emacs lock files (`.#x.toml`,
+/// dangling links) end in `.toml` too. `dir` itself doesn't count: Windows
+/// reports it modified whenever a file in it changes, and its removal is
+/// caught as a watched directory gone.
 fn is_theme_path(path: &Path, dir: &Path) -> bool {
-    path == dir
-        || (path.parent() == Some(dir)
-            && !path
-                .file_name()
-                .is_some_and(|name| name.as_encoded_bytes().starts_with(b".#"))
-            && matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("toml" | "itermcolors")
-            ))
+    path.parent() == Some(dir)
+        && !path
+            .file_name()
+            .is_some_and(|name| name.as_encoded_bytes().starts_with(b".#"))
+        && matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("toml" | "itermcolors")
+        )
 }
 
 /// What an event means for the config.
@@ -116,10 +131,11 @@ fn classify(event: &Event, t: &Targets) -> Verdict {
         .paths
         .iter()
         .any(|path| t.wanted.iter().any(|dir| dir.starts_with(path)));
+    let link_changed = event.paths.iter().any(|path| t.links.contains(path));
     // Deleting a watched themes directory is both.
     Verdict {
-        changed: relevant || dir_gone,
-        rescan: on_the_way,
+        changed: relevant || dir_gone || link_changed,
+        rescan: on_the_way || link_changed,
     }
 }
 
@@ -658,10 +674,27 @@ mod tests {
         }
         assert!(changed(modify, "/c/themes/x.toml"));
         assert!(changed(modify, "/c/themes/y.itermcolors"));
+        // Windows: a file in it changed.
+        assert!(!changed(modify, "/c/themes"));
         assert!(changed(
             EventKind::Remove(notify::event::RemoveKind::Folder),
             "/c/themes"
         ));
+    }
+
+    #[test]
+    fn a_retargeted_link_counts_in_its_canonical_form() {
+        let mut t = Targets::resolve(Path::new("/c/cfg/nuntio/config.toml"), None);
+        t.links = vec![PathBuf::from("/private/c/cfg/nuntio")];
+        let rename = EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Any));
+        let verdict = classify(&event(rename, &[Path::new("/private/c/cfg/nuntio")]), &t);
+        assert_eq!(
+            verdict,
+            Verdict {
+                changed: true,
+                rescan: true
+            }
+        );
     }
 
     #[test]
@@ -756,7 +789,9 @@ mod tests {
         let path = link.join("config.toml");
 
         // The directory holding the link is watched too.
-        assert!(Targets::resolve(&path, None).wanted.contains(&cfg));
+        let targets = Targets::resolve(&path, None);
+        assert!(targets.wanted.contains(&cfg));
+        assert!(targets.links.contains(&link));
 
         let (tx, rx) = mpsc::channel();
         let _watcher = ConfigWatcher::new(&path, None, move || {
