@@ -16,6 +16,8 @@ use crate::proto::{Decoder, Frame, READY, Size};
 const CHUNK: usize = 64 * 1024;
 /// Output read after the shell exited; background jobs may keep writing forever.
 const POST_EXIT_DRAIN: usize = 0x10_0000;
+/// Input from nuntio waiting for the program to read it, before stdin is left unread.
+const MAX_PENDING_INPUT: usize = 1 << 20;
 
 /// The write end of the SIGCHLD self-pipe, or -1 before it exists.
 static WAKE_FD: AtomicI32 = AtomicI32::new(-1);
@@ -286,10 +288,18 @@ fn event_loop(
 
     'session: loop {
         let want_write = written < pending.len();
+        // The program doesn't read its input: stop reading ours, so the pipe
+        // fills up and nuntio sees the back-pressure. Resizes behind the
+        // paused input wait with it.
+        let paused = pending.len() - written >= MAX_PENDING_INPUT;
         let mut fds = [
             libc::pollfd {
                 fd: 0,
-                events: libc::POLLIN,
+                events: if paused {
+                    libc::POLLRDHUP
+                } else {
+                    libc::POLLIN
+                },
                 revents: 0,
             },
             libc::pollfd {
@@ -313,7 +323,12 @@ fn event_loop(
             return hang_up(pid, 1);
         }
 
-        if fds[0].revents & in_events != 0 {
+        if paused {
+            // nuntio closed the pipe or killed wsl.exe; the unread input is moot.
+            if fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLRDHUP) != 0 {
+                return hang_up(pid, 0);
+            }
+        } else if fds[0].revents & in_events != 0 {
             match read_fd(0, &mut buf) {
                 // nuntio is gone or closed the pane.
                 Ok(0) => return hang_up(pid, 0),

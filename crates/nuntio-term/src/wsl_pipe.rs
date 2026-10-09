@@ -11,6 +11,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::Duration;
 
@@ -37,10 +38,21 @@ pub(crate) struct WslPipe {
     shared: Arc<Shared>,
     /// Encoded frames for the input thread.
     frames: mpsc::Sender<Vec<u8>>,
+    /// Bytes in `frames` not yet written to `wsl.exe`.
+    queued: Arc<AtomicUsize>,
     pid: u32,
     /// wsl.exe, terminated when the pane goes away.
     process: OwnedHandle,
     reported: bool,
+}
+
+/// Queue `frame` for the input thread, counting its bytes in `queued`.
+fn send_frame(frames: &mpsc::Sender<Vec<u8>>, queued: &AtomicUsize, frame: Vec<u8>) {
+    let len = frame.len();
+    queued.fetch_add(len, Ordering::AcqRel);
+    if frames.send(frame).is_err() {
+        queued.fetch_sub(len, Ordering::AcqRel);
+    }
 }
 
 struct Shared {
@@ -178,15 +190,20 @@ impl WslPipe {
         });
 
         let (frames, frame_rx) = mpsc::channel::<Vec<u8>>();
+        let queued = Arc::new(AtomicUsize::new(0));
         // nuntio-wsl needs the size before it can open its PTY.
         let mut first = Vec::new();
         proto::encode_resize(proto_size(size), &mut first);
-        let _ = frames.send(first);
+        send_frame(&frames, &queued, first);
+        let written = queued.clone();
         spawn_named("nuntio-wsl input", move || {
+            let mut open = true;
+            // Keeps taking frames after a failed write, so the count falls.
             for frame in frame_rx {
-                if stdin.write_all(&frame).is_err() {
-                    break;
+                if open && stdin.write_all(&frame).is_err() {
+                    open = false;
                 }
+                written.fetch_sub(frame.len(), Ordering::AcqRel);
             }
         });
 
@@ -253,6 +270,7 @@ impl WslPipe {
         Ok(Self {
             shared,
             frames,
+            queued,
             pid,
             process,
             reported: false,
@@ -291,14 +309,21 @@ impl WslPipe {
     pub(crate) fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut frame = Vec::with_capacity(buf.len() + 5);
         proto::encode_data(buf, &mut frame);
-        let _ = self.frames.send(frame);
+        send_frame(&self.frames, &self.queued, frame);
         Ok(buf.len())
     }
 
     pub(crate) fn resize(&mut self, size: WindowSize) {
         let mut frame = Vec::new();
         proto::encode_resize(proto_size(size), &mut frame);
-        let _ = self.frames.send(frame);
+        send_frame(&self.frames, &self.queued, frame);
+    }
+
+    /// Bytes of frames queued for nuntio-wsl and not yet written to
+    /// `wsl.exe`. They pile up while the program doesn't read its input and
+    /// `wsl.exe`'s stdin pipe is full.
+    pub(crate) fn queued_bytes(&self) -> usize {
+        self.queued.load(Ordering::Acquire)
     }
 
     /// Once, after `wsl.exe` exited: the shell exited if nuntio-wsl had

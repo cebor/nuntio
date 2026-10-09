@@ -191,3 +191,36 @@ fn a_program_that_does_not_exist_exits_127_without_ready() {
     assert_eq!(helper.finish(), 127);
     assert!(find(&helper.output, READY).is_none());
 }
+
+#[test]
+fn input_is_not_buffered_without_limit() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Raw mode, so the terminal's input buffer fills up instead of dropping
+    // characters like a cooked mode line that never ends.
+    let mut helper = Helper::start(&["--", "sh", "-c", "stty raw -echo; echo ready; sleep 5"]);
+    helper.resize(80, 24);
+    helper.wait_for(b"ready", 0);
+    let mut stdin = helper.stdin.take().unwrap();
+    let sent = Arc::new(AtomicUsize::new(0));
+    let counter = sent.clone();
+    let writer = std::thread::spawn(move || {
+        let mut frame = Vec::new();
+        encode_data(&[b'x'; 64 * 1024], &mut frame);
+        // Blocks once the helper stops reading; fails when it is killed.
+        while stdin.write_all(&frame).is_ok() {
+            counter.fetch_add(64 * 1024, Ordering::Relaxed);
+        }
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    let before_kill = sent.load(Ordering::Relaxed);
+    // The helper holds 1 MiB, the pipe and the kernel's pty buffers a few
+    // more; without the limit, hundreds of MiB per second get through.
+    assert!(
+        before_kill < 8 << 20,
+        "{before_kill} bytes were accepted for a program that reads nothing"
+    );
+    helper.child.kill().unwrap();
+    writer.join().unwrap();
+}

@@ -1196,11 +1196,20 @@ impl Core {
                     }
                 }
             }
-            TermEvent::Title(title) => {
-                set_pane_title(state, &self.config, index, pane, Some(title));
+            TermEvent::TitleChanged => {
+                let title = state
+                    .panes()
+                    .find(|p| p.id == pane)
+                    .and_then(|p| p.term.take_title());
+                if let Some(title) = title {
+                    set_pane_title(state, &self.config, index, pane, title);
+                }
             }
-            TermEvent::ResetTitle => set_pane_title(state, &self.config, index, pane, None),
             TermEvent::Bell => {
+                // Further bells of a burst are reported once this is acked.
+                if let Some(p) = state.panes().find(|p| p.id == pane) {
+                    p.term.ack_bell();
+                }
                 if !active
                     && let Some(tab) = state.tabs.get_mut(index)
                     && !tab.bell

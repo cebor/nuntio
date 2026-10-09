@@ -90,6 +90,17 @@ impl Backend {
         }
     }
 
+    /// Bytes handed to the backend that haven't reached the program's side
+    /// yet and keep piling up while the program doesn't read: only the
+    /// WSL pipe queues them (a PTY blocks instead).
+    pub(crate) fn queued_bytes(&self) -> usize {
+        match self {
+            Self::Pty(_) => 0,
+            #[cfg(windows)]
+            Self::Wsl(pipe) => pipe.queued_bytes(),
+        }
+    }
+
     /// Doesn't block.
     pub(crate) fn next_event(&mut self) -> Option<BackendEvent> {
         match self {

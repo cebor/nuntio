@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::backend::Backend;
 use crate::image::{ImageStore, crop_columns, strip_image_text};
-use crate::io_loop::{IoLoop, LoopSender, Msg};
+use crate::io_loop::{IoLoop, LoopSender, Msg, ReplyBudget};
 use crate::osc_cwd::ReportedDir;
 use crate::palette::Palette;
 use crate::process;
@@ -39,8 +39,11 @@ pub enum SpawnError {
 pub enum TermEvent {
     /// New content is ready to be drawn.
     Wakeup,
-    Title(String),
-    ResetTitle,
+    /// The program set or reset its title; fetch it with
+    /// [`TermHandle::take_title`].
+    TitleChanged,
+    /// The program rang the bell. Further bells are not reported until
+    /// [`TermHandle::ack_bell`].
     Bell,
     /// The shell exited.
     Exit,
@@ -151,6 +154,10 @@ impl Dimensions for TermSize {
 type Callback = dyn Fn(TermEvent) + Send + Sync;
 type ColorFormat = Arc<dyn Fn(Rgb) -> String + Send + Sync>;
 
+/// Charge for a queued color reply: about the longest one,
+/// `ESC ] 11 ; rgb:ffff/ffff/ffff ESC \`.
+const COLOR_REPLY_BYTES: usize = 32;
+
 /// A reply to the program, in the order its queries came in.
 enum Reply {
     Text(String),
@@ -183,6 +190,10 @@ impl Listener {
         self.inner.reply(text);
     }
 
+    pub(crate) fn reply_budget(&self) -> &ReplyBudget {
+        &self.inner.reply_budget
+    }
+
     /// Report that nuntio-wsl failed and the pane fell back to ConPTY.
     #[cfg(windows)]
     pub(crate) fn helper_failed(&self) {
@@ -209,13 +220,27 @@ struct ListenerInner {
     /// sees the answers in query order (a DA1 sentinel after OSC 11 must not
     /// overtake it).
     replies: Mutex<Vec<Reply>>,
+    /// Bytes of replies queued here or at the PTY thread; a program that
+    /// doesn't read its input gets no more once the cap is reached.
+    reply_budget: ReplyBudget,
+    /// A [`TermEvent::Bell`] is out and not yet acknowledged with
+    /// [`TermHandle::ack_bell`].
+    bell_pending: AtomicBool,
+    /// The title change not yet taken with [`TermHandle::take_title`]:
+    /// `Some(None)` is a reset.
+    title: Mutex<Option<Option<String>>>,
 }
 
 impl ListenerInner {
+    /// Send a reply to the program, unless too many are already waiting.
     fn write(&self, text: String) {
-        if let Some(sender) = self.sender.get() {
-            sender.send(Msg::Input(Cow::Owned(text.into_bytes())));
+        let Some(sender) = self.sender.get() else {
+            return;
+        };
+        if !self.reply_budget.try_reserve(text.len()) {
+            return;
         }
+        sender.send(Msg::Reply(text.into_bytes()));
     }
 
     /// Write `text` now, or queue it behind pending color queries.
@@ -223,8 +248,22 @@ impl ListenerInner {
         let mut queue = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
         if queue.is_empty() {
             self.write(text);
-        } else {
+        } else if self.reply_budget.try_reserve(text.len()) {
             queue.push(Reply::Text(text));
+        }
+    }
+
+    /// Record a title change; only the first one since the last
+    /// [`TermHandle::take_title`] is announced.
+    fn set_title(&self, title: Option<String>) {
+        let was_idle = {
+            let mut slot = self.title.lock().unwrap_or_else(PoisonError::into_inner);
+            let was_idle = slot.is_none();
+            *slot = Some(title);
+            was_idle
+        };
+        if was_idle {
+            (self.callback)(TermEvent::TitleChanged);
         }
     }
 }
@@ -243,11 +282,16 @@ impl EventListener for Listener {
             // ConPTY announces the program's path as the title at startup;
             // that's no title of its own, so the tab keeps its fallback.
             Event::Title(title) if is_console_default_title(&title, &inner.shell_name) => {
-                TermEvent::ResetTitle
+                return inner.set_title(None);
             }
-            Event::Title(title) => TermEvent::Title(title),
-            Event::ResetTitle => TermEvent::ResetTitle,
-            Event::Bell => TermEvent::Bell,
+            Event::Title(title) => return inner.set_title(Some(title)),
+            Event::ResetTitle => return inner.set_title(None),
+            Event::Bell => {
+                if inner.bell_pending.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                TermEvent::Bell
+            }
             // `ChildExit` comes before the remaining output is drained;
             // `Exit` follows once the terminal is done.
             Event::Exit => TermEvent::Exit,
@@ -262,11 +306,20 @@ impl EventListener for Listener {
             Event::ClipboardStore(_, text) => TermEvent::ClipboardStore(text),
             Event::PtyWrite(text) => return inner.reply(text),
             Event::ColorRequest(index, format) => {
-                inner
-                    .replies
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(Reply::Color(index, format));
+                if !inner.reply_budget.try_reserve(COLOR_REPLY_BYTES) {
+                    return;
+                }
+                let first = {
+                    let mut queue = inner.replies.lock().unwrap_or_else(PoisonError::into_inner);
+                    let first = queue.is_empty();
+                    queue.push(Reply::Color(index, format));
+                    first
+                };
+                // A non-empty queue starts with a color query whose event
+                // is already out; one answer drains them all.
+                if !first {
+                    return;
+                }
                 TermEvent::ColorQuery
             }
             Event::TextAreaSizeRequest(format) => {
@@ -343,6 +396,9 @@ impl TermHandle {
                 output_generation: AtomicU64::new(0),
                 shell_name: shell_name.clone(),
                 replies: Mutex::new(Vec::new()),
+                reply_budget: ReplyBudget::default(),
+                bell_pending: AtomicBool::new(false),
+                title: Mutex::new(None),
             }),
         };
 
@@ -619,8 +675,20 @@ impl TermHandle {
     }
 
     /// Name and, if wanted, directory of the foreground process from one
-    /// lookup of its pid.
+    /// lookup of its pid. The directory is not checked on disk (a hung
+    /// network share would block the caller): it may be a deleted one. Use
+    /// [`working_directory`](Self::working_directory) for a directory to
+    /// start something in.
     pub fn foreground_info(&self, want_directory: bool) -> ForegroundInfo {
+        self.foreground(want_directory, None)
+    }
+
+    /// `check` decides whether a directory is usable; `None` accepts any.
+    fn foreground(
+        &self,
+        want_directory: bool,
+        check: Option<&dyn Fn(&Path) -> bool>,
+    ) -> ForegroundInfo {
         let found = self
             .shell_pid()
             .map(|pid| process::foreground(pid, want_directory));
@@ -628,7 +696,7 @@ impl TermHandle {
         ForegroundInfo {
             process_name: name.unwrap_or_else(|| self.shell_name.clone()),
             working_directory: if want_directory {
-                self.directory_or_reported(cwd)
+                pick_directory(cwd, self.reported_directory(), check)
             } else {
                 None
             },
@@ -646,23 +714,12 @@ impl TermHandle {
     }
 
     /// Working directory of the foreground process, if it can be
-    /// determined. Otherwise the one the shell reported, if it exists here.
+    /// determined. Otherwise the one the shell reported. Both must be
+    /// directories that exist here; a deleted one is skipped, because
+    /// `chdir` into it would fail silently.
     pub fn working_directory(&self) -> Option<PathBuf> {
-        self.foreground_info(true).working_directory
-    }
-
-    fn directory_or_reported(&self, cwd: Option<PathBuf>) -> Option<PathBuf> {
-        cwd
-            // A deleted directory; `chdir` into it would fail silently.
-            .filter(|path| path.is_dir())
-            .or_else(|| {
-                let path = match self.reported_directory()? {
-                    ReportedDir::Posix(path) if cfg!(unix) => path,
-                    ReportedDir::Windows(path) if cfg!(windows) && is_local(&path) => path,
-                    _ => return None,
-                };
-                Some(PathBuf::from(path)).filter(|path| path.is_dir())
-            })
+        self.foreground(true, Some(&|path: &Path| path.is_dir()))
+            .working_directory
     }
 
     /// The directory the shell last reported with OSC 7 or OSC 9;9.
@@ -733,12 +790,16 @@ impl TermHandle {
         }
         let palette = inner.palette.read().unwrap_or_else(PoisonError::into_inner);
         for reply in queue.drain(..) {
-            inner.write(match reply {
-                Reply::Text(text) => text,
-                Reply::Color(index, format) => {
-                    format(term.colors()[index].unwrap_or(palette.get(index)))
-                }
-            });
+            let (cost, text) = match reply {
+                Reply::Text(text) => (text.len(), text),
+                Reply::Color(index, format) => (
+                    COLOR_REPLY_BYTES,
+                    format(term.colors()[index].unwrap_or(palette.get(index))),
+                ),
+            };
+            // `write` charges the reply again, now as queued bytes.
+            inner.reply_budget.release(cost);
+            inner.write(text);
         }
     }
 
@@ -749,6 +810,26 @@ impl TermHandle {
             .inner
             .wakeup_pending
             .store(false, Ordering::Release);
+    }
+
+    /// Let the next bell be reported again. A burst of bells is one
+    /// [`TermEvent::Bell`] until this is called.
+    pub fn ack_bell(&self) {
+        self.listener
+            .inner
+            .bell_pending
+            .store(false, Ordering::Release);
+    }
+
+    /// The title the program set or reset since the last call, if any:
+    /// `Some(None)` is a reset. See [`TermEvent::TitleChanged`].
+    pub fn take_title(&self) -> Option<Option<String>> {
+        self.listener
+            .inner
+            .title
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// Like [`snapshot`](Self::snapshot), with the matches of `search`
@@ -1036,6 +1117,26 @@ fn is_console_default_title(title: &str, program: &str) -> bool {
     absolute && !program.is_empty() && stem.eq_ignore_ascii_case(program)
 }
 
+/// The working directory to report: the foreground process's `cwd`, else
+/// the directory the shell `reported` (a Windows path only on Windows, and
+/// only a local one). With a `check`, a directory must pass it; without
+/// one, no file system access happens.
+fn pick_directory(
+    cwd: Option<PathBuf>,
+    reported: Option<ReportedDir>,
+    check: Option<&dyn Fn(&Path) -> bool>,
+) -> Option<PathBuf> {
+    let ok = |path: &Path| check.is_none_or(|check| check(path));
+    cwd.filter(|path| ok(path)).or_else(|| {
+        let path = match reported? {
+            ReportedDir::Posix(path) if cfg!(unix) => path,
+            ReportedDir::Windows(path) if cfg!(windows) && is_local(&path) => path,
+            _ => return None,
+        };
+        Some(PathBuf::from(path)).filter(|path| ok(path))
+    })
+}
+
 /// Whether a Windows path the shell reported is on this machine. Any
 /// program's output can report one, and merely looking at a network share
 /// (`\\host\share`) sends the user's credentials to that host. Only drive
@@ -1092,6 +1193,38 @@ mod tests {
     use alacritty_terminal::index::Line;
 
     use super::*;
+
+    #[test]
+    fn the_title_path_does_not_check_directories() {
+        assert_eq!(
+            pick_directory(Some("/nonexistent/x".into()), None, None),
+            Some(PathBuf::from("/nonexistent/x"))
+        );
+        let calls = std::cell::Cell::new(0);
+        let reject = |_: &Path| {
+            calls.set(calls.get() + 1);
+            false
+        };
+        assert_eq!(
+            pick_directory(Some("/nonexistent/x".into()), None, Some(&reject)),
+            None
+        );
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_check_falls_back_to_the_reported_directory() {
+        let tmp = Path::new("/tmp");
+        assert_eq!(
+            pick_directory(
+                Some("/gone".into()),
+                Some(ReportedDir::Posix("/tmp".into())),
+                Some(&|p: &Path| p == tmp),
+            ),
+            Some(PathBuf::from("/tmp"))
+        );
+    }
 
     #[test]
     fn wslenv_keeps_user_entries() {

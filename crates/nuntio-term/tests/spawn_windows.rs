@@ -117,16 +117,12 @@ fn output_reaches_the_grid() {
 
 #[test]
 fn exit_is_delivered() {
-    let (_handle, rx) = spawn("cmd.exe", &["/c", "exit 3"]);
+    let (handle, rx) = spawn("cmd.exe", &["/c", "exit 3"]);
     let events = wait_for_exit(&rx);
     assert_eq!(events.last(), Some(&TermEvent::Exit));
     // ConPTY announces the program's path as the title at startup; that
     // must have become a reset.
-    assert!(
-        !events
-            .iter()
-            .any(|e| matches!(e, TermEvent::Title(t) if t.to_lowercase().ends_with("cmd.exe")))
-    );
+    assert!(!matches!(handle.take_title(), Some(Some(t)) if t.to_lowercase().ends_with("cmd.exe")));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use nuntio_term::{
@@ -250,13 +250,12 @@ fn extra_environment() {
 
 #[test]
 fn title_is_reported() {
-    let (_handle, rx) = spawn("printf '\\033]0;my title\\007'");
+    let (handle, rx) = spawn("printf '\\033]0;my title\\007'");
     let events = wait_for_exit(&rx);
 
-    assert!(
-        events.contains(&TermEvent::Title("my title".into())),
-        "{events:?}"
-    );
+    assert!(events.contains(&TermEvent::TitleChanged), "{events:?}");
+    assert_eq!(handle.take_title(), Some(Some("my title".into())));
+    assert_eq!(handle.take_title(), None);
 }
 
 fn at(column: usize, line: usize) -> GridPoint {
@@ -633,4 +632,99 @@ fn kitty_keyboard_can_be_turned_off() {
     };
     assert!(mode(true).contains(TermMode::DISAMBIGUATE_ESC_CODES));
     assert!(!mode(false).intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
+}
+
+#[test]
+fn closing_a_pane_releases_the_grid_before_the_child_exits() {
+    let probe = Arc::new(());
+    let held = probe.clone();
+    let (tx, _rx) = mpsc::channel();
+    let handle = TermHandle::spawn(
+        options("trap '' HUP; sleep 8", Vec::new(), OPTIONS),
+        SIZE,
+        move |event| {
+            let _keep = &held;
+            let _ = tx.send(event);
+        },
+    )
+    .expect("spawn");
+    std::thread::sleep(Duration::from_millis(300));
+    drop(handle);
+
+    // The child ignores SIGHUP, so dropping the PTY blocks for seconds; the
+    // grid (and the event callback owned through it) must not wait for that.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Arc::strong_count(&probe) > 1 {
+        assert!(Instant::now() < deadline, "the pane's memory was kept");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn a_panic_on_the_pty_thread_still_closes_the_pane() {
+    let (tx, rx) = mpsc::channel();
+    let _handle = TermHandle::spawn(
+        options("printf '\\007'; sleep 30", Vec::new(), OPTIONS),
+        SIZE,
+        move |event| {
+            if event == TermEvent::Bell {
+                panic!("the callback fails");
+            }
+            let _ = tx.send(event);
+        },
+    )
+    .expect("spawn");
+    // Only the exit guard can deliver Exit before the sleep ends.
+    let events = wait_for_exit(&rx);
+    assert_eq!(events.last(), Some(&TermEvent::Exit));
+}
+
+#[test]
+fn reply_floods_do_not_stop_the_pane() {
+    let (_handle, rx) =
+        spawn("i=0; while [ $i -lt 30000 ]; do printf '\\033[c'; i=$((i+1)); done; sleep 1");
+    let started = Instant::now();
+    wait_for_exit(&rx);
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+#[test]
+fn floods_of_bells_and_color_queries_are_coalesced() {
+    let (_handle, rx) =
+        spawn("i=0; while [ $i -lt 1000 ]; do printf '\\033]11;?\\007\\007'; i=$((i+1)); done");
+    // Nothing acknowledges the bell or answers the queries.
+    let events = wait_for_exit(&rx);
+    let count = |wanted: TermEvent| events.iter().filter(|e| **e == wanted).count();
+    assert_eq!(count(TermEvent::Bell), 1, "{events:?}");
+    assert_eq!(count(TermEvent::ColorQuery), 1, "{events:?}");
+}
+
+#[test]
+fn bells_after_an_ack_are_reported_again() {
+    let (handle, rx) = spawn("printf '\\007'; sleep 1; printf '\\007'");
+    let next_bell = |wait: Duration| {
+        let deadline = Instant::now() + wait;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left).expect("no bell") {
+                TermEvent::Bell => return,
+                TermEvent::Exit => panic!("exited without a bell"),
+                _ => {}
+            }
+        }
+    };
+    next_bell(Duration::from_secs(5));
+    handle.ack_bell();
+    next_bell(Duration::from_secs(5));
+}
+
+#[test]
+fn coalesced_color_queries_are_all_answered_in_order() {
+    let (handle, rx) = spawn(
+        "stty raw -echo; printf '\\033]11;?\\007\\033]11;?\\007\\033]11;?\\007\\033[c'; \
+         r=$(dd bs=1 count=77 2>/dev/null); stty sane; \
+         case \"$r\" in *'[?6c') printf OK;; *) printf NO;; esac",
+    );
+    answer_queries_until_exit(&handle, &rx);
+    assert!(screen_contains(&handle, "OK"));
 }
