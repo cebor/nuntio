@@ -138,15 +138,21 @@ pub fn encode_report(
     }
     let mut out = b"\x1b[M".to_vec();
     out.push((32 + code) as u8);
-    if mode.contains(TermMode::UTF8_MOUSE) {
-        for v in [x, y] {
-            let c = char::from_u32(32 + v).filter(|_| v <= 2015)?;
+    // Coordinates beyond the range of the encoding are clamped to its last
+    // value, as xterm does, so a release far out is still reported.
+    let limit = if mode.contains(TermMode::UTF8_MOUSE) {
+        2015
+    } else {
+        223
+    };
+    for v in [x.min(limit), y.min(limit)] {
+        if mode.contains(TermMode::UTF8_MOUSE) {
+            // At most U+07FF: two bytes.
+            let c = char::from_u32(32 + v)?;
             let mut buf = [0; 4];
             out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-        }
-    } else {
-        for v in [x, y] {
-            out.push(u8::try_from(32 + v).ok()?);
+        } else {
+            out.push((32 + v) as u8);
         }
     }
     Some(out)
@@ -199,11 +205,13 @@ mod tests {
         assert_eq!(at(94).unwrap(), [0x1b, b'[', b'M', 32, 0x7f, 33]);
         assert_eq!(at(95).unwrap(), [0x1b, b'[', b'M', 32, 0xC2, 0x80, 33]);
         assert_eq!(at(2014).unwrap(), [0x1b, b'[', b'M', 32, 0xDF, 0xBF, 33]);
-        assert_eq!(at(2015), None);
+        // Past the end of the range the coordinate is clamped, as in xterm.
+        assert_eq!(at(2015), at(2014));
+        assert_eq!(at(5000), at(2014));
         // The line is limited the same way.
         assert_eq!(
-            encode_report(left, MouseAction::Press, NONE, 0, 2015, mode),
-            None
+            encode_report(left, MouseAction::Press, NONE, 0, 2015, mode).unwrap(),
+            [0x1b, b'[', b'M', 32, 33, 0xDF, 0xBF]
         );
     }
 
@@ -269,9 +277,13 @@ mod tests {
             report(right, MouseAction::Release, mode).unwrap(),
             [0x1b, b'[', b'M', 32 + 3, 32 + 5, 32 + 10]
         );
-        // Out of range for single-byte coordinates.
-        let far = encode_report(right, MouseAction::Press, NONE, 300, 0, mode);
-        assert_eq!(far, None);
+        // Coordinates past 223 are clamped, so releases are never lost.
+        let far = |x, y| encode_report(right, MouseAction::Press, NONE, x, y, mode).unwrap();
+        assert_eq!(far(300, 0), [0x1b, b'[', b'M', 32 + 2, 255, 32 + 1]);
+        assert_eq!(
+            encode_report(right, MouseAction::Release, NONE, 300, 300, mode).unwrap(),
+            [0x1b, b'[', b'M', 32 + 3, 255, 255]
+        );
     }
 
     #[test]

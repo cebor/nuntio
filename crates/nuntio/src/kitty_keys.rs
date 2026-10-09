@@ -150,7 +150,13 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
         return Some(csi(key.number, &[], mods, event, text, key.final_byte));
     }
 
-    let code = text_key_code(input.unmodified)?;
+    let Some(code) = text_key_code(input.unmodified) else {
+        // A key that types several codepoints (a ligature key) can't be
+        // reported as one key code; send its text as legacy mode would.
+        return text
+            .filter(|_| event != KeyEventKind::Release && mods & !SHIFT == 0)
+            .map(|t| t.as_bytes().to_vec());
+    };
 
     let mut alternates = Vec::new();
     if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
@@ -501,6 +507,18 @@ mod tests {
         assert_eq!(named(NamedKey::Enter).sends(m), "\r");
         assert_eq!(named(NamedKey::Tab).sends(m), "\t");
         assert_eq!(named(NamedKey::Backspace).sends(m), "\x7f");
+    }
+
+    #[test]
+    fn multi_codepoint_keys_send_their_text() {
+        let key = || ch("க்ஷ");
+        assert_eq!(key().sends(ALL_KEYS | TEXT), "க்ஷ");
+        assert_eq!(key().sends(ALL_KEYS), "க்ஷ");
+        assert_eq!(key().ctrl().encode(DISAMBIGUATE), None);
+        assert_eq!(
+            key().event(KeyEventKind::Release).encode(ALL_KEYS | EVENTS),
+            None
+        );
     }
 
     #[test]

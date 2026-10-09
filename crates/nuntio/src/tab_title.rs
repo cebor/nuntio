@@ -48,6 +48,7 @@ pub fn strip_user_host(title: &str) -> String {
 
 /// `path` with the home directory shortened to `~`.
 pub fn tilde_path(path: &Path, home: Option<&Path>) -> String {
+    let home = home.filter(|home| home.parent().is_some());
     match home.and_then(|home| path.strip_prefix(home).ok()) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
         Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
@@ -83,6 +84,9 @@ mod tests {
         );
         assert_eq!(tilde_path(Path::new("/home/felixx"), home), "/home/felixx");
         assert_eq!(tilde_path(Path::new("/etc"), None), "/etc");
+        // A root as home would put `~` in front of every path.
+        assert_eq!(tilde_path(Path::new("/etc"), Some(Path::new("/"))), "/etc");
+        assert_eq!(tilde_path(Path::new("/"), Some(Path::new("/"))), "/");
     }
 
     #[test]
