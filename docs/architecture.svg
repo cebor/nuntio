@@ -1,0 +1,377 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100" role="img" aria-labelledby="title desc">
+  <title id="title">nuntio system architecture</title>
+  <desc id="desc">The nuntio process: the main thread owns the window, the wgpu renderer, tabs and panes; one PTY reader thread per pane parses shell output into alacritty_terminal and wakes the main thread through UserEvents; service threads watch the config, sample the system, check for updates and read the clipboard. Child processes are shells in a PTY or ConPTY, WSL shells behind the nuntio-wsl relay, and the nuntio-config settings TUI, which writes the config file that nuntio hot-reloads.</desc>
+  <defs>
+    <style>
+      text { font-family: Inter, 'Segoe UI', 'Helvetica Neue', Arial, 'DejaVu Sans', sans-serif; }
+      .title { font-size: 30px; font-weight: 700; fill: #FFFFFF; }
+      .sub { font-size: 15px; fill: #A9B1D6; }
+      .region { font-size: 13px; font-weight: 600; letter-spacing: 1.6px; fill: #737AA2; }
+      .crate { font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace; font-size: 14px; font-weight: 700; }
+      .mono { font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'DejaVu Sans Mono', monospace; }
+      .desc { font-size: 12px; fill: #A9B1D6; }
+      .chip { font-size: 11.5px; fill: #C0CAF5; }
+      .legend { font-size: 11px; fill: #C0CAF5; }
+      .small { font-size: 11px; fill: #737AA2; }
+      .bold { font-weight: 700; }
+      .head { font-size: 14px; font-weight: 700; fill: #C0CAF5; }
+      .mid { text-anchor: middle; }
+      .end { text-anchor: end; }
+      .main { fill: #7AA2F7; }
+      .render { fill: #BB9AF7; }
+      .term { fill: #9ECE6A; }
+      .svc { fill: #E0AF68; }
+      .cfg { fill: #7DCFFF; }
+      .child { fill: #FF9E64; }
+    </style>
+    <marker id="m-bytes" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#C0CAF5"/>
+    </marker>
+    <marker id="m-event" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7AA2F7"/>
+    </marker>
+    <marker id="m-cfg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7DCFFF"/>
+    </marker>
+    <marker id="m-call" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#737AA2"/>
+    </marker>
+    <symbol id="cyl" viewBox="0 0 24 28" width="24" height="28">
+      <path d="M2 5 V23 A10 4 0 0 0 22 23 V5" fill="#292E42" stroke="#737AA2" stroke-width="1.4"/>
+      <ellipse cx="12" cy="5" rx="10" ry="4" fill="#2F3549" stroke="#737AA2" stroke-width="1.4"/>
+      <path d="M2 14 A10 4 0 0 0 22 14" fill="none" stroke="#737AA2" stroke-width="1"/>
+    </symbol>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1600" height="1100" rx="24" fill="#1A1B26"/>
+
+  <!-- Header: the app icon (assets/icon.svg) -->
+  <g transform="translate(36 22) scale(0.075)">
+    <rect x="64" y="64" width="896" height="896" rx="200" fill="#24283B"/>
+    <rect x="68" y="68" width="888" height="888" rx="196" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="8"/>
+    <path d="M 290 360 L 480 512 L 290 664" fill="none" stroke="#7AA2F7" stroke-width="76" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="540" y="618" width="210" height="76" rx="22" fill="#C0CAF5"/>
+  </g>
+  <text x="124" y="60" class="title">nuntio — system architecture</text>
+  <text x="124" y="86" class="sub">GPU terminal emulator for Linux, macOS and Windows · one window, tabs, split panes · Rust workspace on alacritty_terminal and wgpu</text>
+
+  <!-- Legend -->
+  <line x1="1110" y1="36" x2="1150" y2="36" stroke="#C0CAF5" stroke-width="2" marker-start="url(#m-bytes)" marker-end="url(#m-bytes)"/>
+  <text x="1162" y="40" class="legend">Terminal bytes — PTY, ConPTY, framed pipes to nuntio-wsl</text>
+  <line x1="1110" y1="58" x2="1150" y2="58" stroke="#7AA2F7" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#m-event)"/>
+  <text x="1162" y="62" class="legend">UserEvent through the EventLoopProxy (thread → main thread)</text>
+  <line x1="1110" y1="80" x2="1150" y2="80" stroke="#7DCFFF" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" marker-end="url(#m-cfg)"/>
+  <text x="1162" y="84" class="legend">Config files — atomic write, notify, hot reload</text>
+  <line x1="1110" y1="102" x2="1150" y2="102" stroke="#737AA2" stroke-width="1.5" marker-end="url(#m-call)"/>
+  <text x="1162" y="106" class="legend">Calls, OS APIs, TCP, HTTPS</text>
+
+  <!-- Region A: OS and desktop -->
+  <rect x="40" y="125" width="200" height="645" rx="16" fill="#1F2335" stroke="#2F334D"/>
+  <text x="60" y="151" class="region">DESKTOP</text>
+  <text x="60" y="169" class="small">OS services nuntio uses</text>
+
+  <rect x="56" y="180" width="168" height="55" rx="10" fill="#222436" stroke="#414868" stroke-width="1.5"/>
+  <text x="70" y="200" class="head">User</text>
+  <text x="70" y="220" class="desc">keys · mouse · IME</text>
+
+  <rect x="56" y="250" width="168" height="120" rx="10" fill="#222436" stroke="#414868" stroke-width="1.5"/>
+  <text x="70" y="272" class="head">Window system</text>
+  <text x="70" y="289" class="small">via winit</text>
+  <text x="70" y="310" class="desc">X11 · Wayland</text>
+  <text x="70" y="326" class="desc">AppKit · Win32</text>
+  <text x="70" y="342" class="desc">WSLg: own chrome</text>
+  <text x="70" y="358" class="desc">focus · occlusion</text>
+
+  <rect x="56" y="440" width="168" height="120" rx="10" fill="#222436" stroke="#414868" stroke-width="1.5"/>
+  <text x="70" y="462" class="head">GPU</text>
+  <text x="70" y="479" class="small">via wgpu</text>
+  <text x="70" y="500" class="desc">Vulkan · Metal · DX12</text>
+  <text x="70" y="516" class="desc">DirectComposition</text>
+  <text x="70" y="532" class="desc">GL only as fallback</text>
+  <text x="70" y="550" class="small mono">WGPU_BACKEND</text>
+
+  <rect x="56" y="590" width="168" height="150" rx="10" fill="#222436" stroke="#414868" stroke-width="1.5"/>
+  <text x="70" y="612" class="head">Clipboard · links</text>
+  <text x="70" y="634" class="desc">arboard; on X11 and</text>
+  <text x="70" y="650" class="desc">Wayland also primary</text>
+  <text x="70" y="666" class="desc">OSC 52 store</text>
+  <text x="70" y="682" class="desc">paste text or image</text>
+  <text x="70" y="704" class="small">own threads:</text>
+  <text x="70" y="718" class="small">clipboard-read, link-open</text>
+
+  <!-- Desktop arrows -->
+  <line x1="140" y1="235" x2="140" y2="250" stroke="#737AA2" stroke-width="1.5" marker-end="url(#m-call)"/>
+  <line x1="224" y1="300" x2="290" y2="300" stroke="#737AA2" stroke-width="1.5" marker-start="url(#m-call)" marker-end="url(#m-call)"/>
+  <text x="234" y="293" class="small">events</text>
+  <line x1="290" y1="500" x2="224" y2="500" stroke="#737AA2" stroke-width="1.5" marker-end="url(#m-call)"/>
+  <text x="240" y="493" class="small">draw</text>
+
+  <!-- Region B: the nuntio process -->
+  <rect x="270" y="125" width="880" height="645" rx="16" fill="#1F2335" stroke="#2F334D"/>
+  <text x="290" y="151" class="region">NUNTIO PROCESS</text>
+  <text x="290" y="169" class="small">single window · only the main thread touches the window, the renderer, tabs and panes</text>
+
+  <!-- B1 main thread -->
+  <rect x="290" y="185" width="840" height="225" rx="10" fill="#7AA2F7" fill-opacity="0.10" stroke="#7AA2F7" stroke-width="1.5"/>
+  <text x="306" y="205" class="crate main">nuntio · main thread</text>
+  <text x="306" y="222" class="desc">winit event loop · ControlFlow::Wait · App = Core + WindowState · crates/nuntio/src/app.rs</text>
+
+  <rect x="306" y="234" width="300" height="106" rx="8" fill="#24283B" stroke="#3B4261"/>
+  <text x="320" y="254" class="chip bold">Core</text>
+  <text x="320" y="273" class="desc">config · themes · palette · Bindings</text>
+  <text x="320" y="289" class="desc">banner · services · clipboard</text>
+  <text x="320" y="305" class="desc">pending close / paste · pane ids</text>
+  <text x="320" y="325" class="small">everything that isn't window state</text>
+
+  <rect x="618" y="234" width="300" height="106" rx="8" fill="#24283B" stroke="#3B4261"/>
+  <text x="632" y="254" class="chip bold">WindowState</text>
+  <text x="632" y="273" class="desc">window · Renderer · chrome · timers</text>
+  <text x="632" y="289" class="desc">Tabs&lt;TabContent&gt; → PaneTree → Pane</text>
+  <text x="632" y="305" class="desc">mouse · IME · menus · find bar</text>
+  <text x="632" y="325" class="small">shot_pool: pooled Snapshots</text>
+
+  <rect x="930" y="234" width="184" height="106" rx="8" fill="#24283B" stroke="#3B4261"/>
+  <text x="944" y="254" class="chip bold">UI overlays</text>
+  <text x="944" y="273" class="desc">tab bar · status bar</text>
+  <text x="944" y="289" class="desc">find bar · banner</text>
+  <text x="944" y="305" class="desc">menus · link hint</text>
+  <text x="944" y="325" class="small">with_frame → Frame</text>
+
+  <g>
+    <rect x="306" y="350" width="117" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="364.5" y="366" class="chip mono mid">keyboard_input</text>
+    <rect x="431" y="350" width="96" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="479" y="366" class="chip mono mid">mouse_press</text>
+    <rect x="535" y="350" width="89" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="579.5" y="366" class="chip mono mid">term_event</text>
+    <rect x="632" y="350" width="130" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="697" y="366" class="chip mono mid">redraw_requested</text>
+    <rect x="770" y="350" width="110" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="825" y="366" class="chip mono mid">reload_config</text>
+    <rect x="888" y="350" width="89" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="932.5" y="366" class="chip mono mid">run_action</text>
+    <rect x="985" y="350" width="89" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1029.5" y="366" class="chip mono mid">run_timers</text>
+  </g>
+  <text x="306" y="396" class="desc">keys → Bindings (first match wins) or input::encode_key → TermHandle::write · idle ≈ 0 % CPU</text>
+
+  <!-- B2 renderer -->
+  <rect x="290" y="440" width="390" height="140" rx="10" fill="#BB9AF7" fill-opacity="0.10" stroke="#BB9AF7" stroke-width="1.5"/>
+  <text x="306" y="460" class="crate render">nuntio-render</text>
+  <text x="306" y="477" class="desc">wgpu · render(&amp;Frame) → FrameStatus · not Send</text>
+  <g>
+    <rect x="306" y="488" width="198" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="405" y="504" class="chip mid">quad.wgsl · instanced quads</text>
+    <rect x="512" y="488" width="119" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="571.5" y="504" class="chip mid">one render pass</text>
+    <rect x="306" y="517" width="211" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="411.5" y="533" class="chip mid">atlases: mask · color · image</text>
+    <rect x="525" y="517" width="93" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="571.5" y="533" class="chip mid">cosmic-text</text>
+    <rect x="306" y="546" width="178" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="395" y="562" class="chip mid">box_drawing · decoration</text>
+    <rect x="492" y="546" width="119" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="551.5" y="562" class="chip mid">capture (debug)</text>
+  </g>
+
+  <!-- B3 service threads -->
+  <rect x="740" y="440" width="390" height="140" rx="10" fill="#E0AF68" fill-opacity="0.10" stroke="#E0AF68" stroke-width="1.5"/>
+  <text x="756" y="460" class="crate svc">service threads</text>
+  <text x="756" y="477" class="desc">each sends UserEvent through a cloned EventLoopProxy</text>
+  <g>
+    <rect x="756" y="488" width="112" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="812" y="504" class="chip mid">config watcher</text>
+    <rect x="876" y="488" width="60" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="906" y="504" class="chip mid">sysmon</text>
+    <rect x="944" y="488" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="993.5" y="504" class="chip mid">update-check</text>
+    <rect x="756" y="517" width="112" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="812" y="533" class="chip mid">clipboard-read</text>
+    <rect x="876" y="517" width="79" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="915.5" y="533" class="chip mid">link-open</text>
+    <rect x="963" y="517" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1012.5" y="533" class="chip mid">font preload</text>
+    <rect x="756" y="546" width="165" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="838.5" y="562" class="chip mid">debug-server (feature)</text>
+    <rect x="929" y="546" width="126" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="992" y="562" class="chip mid">update-check-now</text>
+  </g>
+
+  <!-- B4 PTY reader threads (one per pane) -->
+  <rect x="302" y="617" width="840" height="140" rx="10" fill="#1F2335" stroke="#2F334D"/>
+  <rect x="296" y="611" width="840" height="140" rx="10" fill="#1F2335" stroke="#2F334D"/>
+  <rect x="290" y="605" width="840" height="140" rx="10" fill="#1F2335"/>
+  <rect x="290" y="605" width="840" height="140" rx="10" fill="#9ECE6A" fill-opacity="0.10" stroke="#9ECE6A" stroke-width="1.5"/>
+  <text x="306" y="625" class="crate term">nuntio-term · PTY reader thread</text>
+  <text x="1114" y="625" class="small end">one per pane · IoLoop</text>
+  <text x="306" y="642" class="desc">IoLoop over a Backend: Unix PTY · ConPTY · WslPipe (Windows) · ExitGuard closes the pane even on panic</text>
+  <g>
+    <rect x="306" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="316" y="670" class="chip bold">Backend</text>
+    <text x="316" y="687" class="small">poll · read · write</text>
+    <rect x="473" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="483" y="670" class="chip bold">CwdScanner</text>
+    <text x="483" y="687" class="small">OSC 7 · OSC 9;9</text>
+    <rect x="640" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="650" y="670" class="chip bold">ImageScanner</text>
+    <text x="650" y="687" class="small">OSC 1337 · CSI 16 t</text>
+    <rect x="807" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="817" y="670" class="chip bold">vte parser</text>
+    <text x="817" y="687" class="small">alacritty_terminal</text>
+    <rect x="974" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="984" y="670" class="chip bold">Term</text>
+    <text x="984" y="687" class="small">FairMutex · lease()</text>
+  </g>
+  <line x1="446" y1="674" x2="473" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="613" y1="674" x2="640" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="780" y1="674" x2="807" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="947" y1="674" x2="974" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <g>
+    <rect x="306" y="706" width="145" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="378.5" y="722" class="chip mid">image decode worker</text>
+    <rect x="459" y="706" width="192" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="555" y="722" class="chip mid">ImageStore · memory budget</text>
+    <rect x="659" y="706" width="192" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="755" y="722" class="chip mid">placeholder cells U+10EEEE</text>
+    <rect x="859" y="706" width="159" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="938.5" y="722" class="chip mid">replies · ReplyBudget</text>
+    <rect x="1026" y="706" width="73" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1062.5" y="722" class="chip mid">Snapshot</text>
+  </g>
+
+  <!-- Arrows inside the process -->
+  <line x1="485" y1="410" x2="485" y2="440" stroke="#737AA2" stroke-width="1.5" marker-end="url(#m-call)"/>
+  <text x="493" y="430" class="small">render(&amp;Frame)</text>
+  <line x1="935" y1="440" x2="935" y2="410" stroke="#7AA2F7" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#m-event)"/>
+  <text x="943" y="430" class="small">UserEvent</text>
+  <line x1="700" y1="605" x2="700" y2="410" stroke="#7AA2F7" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#m-event)"/>
+  <text transform="translate(694 507) rotate(-90)" class="small mid">UserEvent::Term · Wakeup</text>
+  <line x1="720" y1="410" x2="720" y2="605" stroke="#737AA2" stroke-width="1.5" marker-end="url(#m-call)"/>
+  <text transform="translate(736 507) rotate(-90)" class="small mid">write · snapshot_into</text>
+
+  <!-- PTY bus to the child processes -->
+  <path d="M1162 235 V675" fill="none" stroke="#C0CAF5" stroke-width="2"/>
+  <line x1="1130" y1="675" x2="1196" y2="675" stroke="#C0CAF5" stroke-width="2" marker-start="url(#m-bytes)" marker-end="url(#m-bytes)"/>
+  <line x1="1162" y1="235" x2="1196" y2="235" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="1162" y1="345" x2="1196" y2="345" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="1162" y1="440" x2="1196" y2="440" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+
+  <!-- Region C: child processes -->
+  <rect x="1180" y="125" width="380" height="645" rx="16" fill="#1F2335" stroke="#2F334D"/>
+  <text x="1200" y="151" class="region">CHILD PROCESSES</text>
+  <text x="1200" y="169" class="small">one per pane · spawned by Core::spawn_pane</text>
+
+  <rect x="1196" y="180" width="348" height="110" rx="10" fill="#FF9E64" fill-opacity="0.10" stroke="#FF9E64" stroke-width="1.5"/>
+  <text x="1212" y="200" class="crate child">shell or program</text>
+  <text x="1212" y="220" class="desc">Linux · macOS: forkpty (alacritty tty)</text>
+  <text x="1212" y="236" class="desc">macOS wraps the shell in login(1)</text>
+  <text x="1212" y="252" class="desc">TERM=xterm-256color · COLORTERM</text>
+  <text x="1212" y="268" class="desc">PI_FORCE_IMAGE_PROTOCOL=iterm2 · WINDOWID</text>
+
+  <rect x="1196" y="305" width="348" height="80" rx="10" fill="#FF9E64" fill-opacity="0.10" stroke="#FF9E64" stroke-width="1.5"/>
+  <text x="1212" y="325" class="crate child">ConPTY (Windows)</text>
+  <text x="1212" y="345" class="desc">cmd · PowerShell · native programs</text>
+  <text x="1212" y="361" class="desc">also the fallback for WSL panes</text>
+
+  <rect x="1196" y="400" width="348" height="195" rx="10" fill="#FF9E64" fill-opacity="0.10" stroke="#FF9E64" stroke-width="1.5"/>
+  <text x="1212" y="420" class="crate child">WSL panes (Windows)</text>
+  <g>
+    <rect x="1212" y="432" width="66" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1245" y="448" class="chip mono mid">wsl.exe</text>
+    <rect x="1296" y="432" width="86" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1339" y="448" class="chip mono mid">nuntio-wsl</text>
+    <rect x="1400" y="432" width="79" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1439.5" y="448" class="chip mid">Linux PTY</text>
+    <rect x="1497" y="432" width="33" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1513.5" y="448" class="chip mono mid">sh</text>
+  </g>
+  <line x1="1279" y1="444" x2="1295" y2="444" stroke="#C0CAF5" stroke-width="2"/>
+  <line x1="1383" y1="444" x2="1399" y2="444" stroke="#C0CAF5" stroke-width="2"/>
+  <line x1="1480" y1="444" x2="1496" y2="444" stroke="#C0CAF5" stroke-width="2"/>
+  <text x="1212" y="478" class="desc">stdin: frames [kind u8][len u32 LE][payload]</text>
+  <text x="1212" y="494" class="desc">DATA = 0 · RESIZE = 1 · payload ≤ 1 MiB</text>
+  <text x="1212" y="510" class="desc">stdout: ESC ] nuntio-wsl;ready BEL, then</text>
+  <text x="1212" y="526" class="desc">raw PTY bytes · relay: one poll loop</text>
+  <text x="1212" y="548" class="small">no READY → IoLoop::fall_back to ConPTY</text>
+  <text x="1212" y="564" class="small">build.rs cross-builds it for x86_64 musl</text>
+  <text x="1212" y="580" class="small">why: ConPTY misplaces inline images</text>
+
+  <rect x="1196" y="610" width="348" height="130" rx="10" fill="#7DCFFF" fill-opacity="0.10" stroke="#7DCFFF" stroke-width="1.5"/>
+  <text x="1212" y="630" class="crate cfg">nuntio-config</text>
+  <text x="1528" y="630" class="small end">runs in a nuntio tab</text>
+  <text x="1212" y="650" class="desc">ratatui settings editor · Store trait</text>
+  <text x="1212" y="666" class="desc">every valid edit: ConfigDoc (toml_edit)</text>
+  <text x="1212" y="682" class="desc">validate → write_config (temp + rename)</text>
+  <text x="1212" y="698" class="desc">no IPC: hot reload is the live preview</text>
+  <text x="1212" y="720" class="small">on the PATH of nuntio's panes only</text>
+
+  <!-- Bottom band: files, tools and outside services -->
+  <rect x="40" y="800" width="1520" height="260" rx="16" fill="#1F2335" stroke="#2F334D"/>
+
+  <!-- Bottom arrows (label knock-out drawn after) -->
+  <line x1="380" y1="770" x2="380" y2="845" stroke="#737AA2" stroke-width="1.5" marker-start="url(#m-call)" marker-end="url(#m-call)"/>
+  <text x="390" y="790" class="small">TCP · JSON lines</text>
+  <line x1="900" y1="770" x2="900" y2="845" stroke="#737AA2" stroke-width="1.5" marker-end="url(#m-call)"/>
+  <text x="910" y="790" class="small">HTTPS · opt-in</text>
+  <path d="M1180 905 H1110 V770" fill="none" stroke="#7DCFFF" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" marker-end="url(#m-cfg)"/>
+  <text x="1118" y="850" class="small">notify</text>
+  <text x="1118" y="864" class="small">150 ms</text>
+  <text x="1118" y="878" class="small">debounce</text>
+  <line x1="1360" y1="740" x2="1360" y2="845" stroke="#7DCFFF" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round" marker-end="url(#m-cfg)"/>
+  <text x="1370" y="790" class="small">atomic write</text>
+
+  <rect x="54" y="812" width="316" height="20" fill="#1F2335"/>
+  <text x="60" y="826" class="region">FILES, TOOLS &amp; OUTSIDE SERVICES</text>
+
+  <!-- D1 drive -->
+  <rect x="60" y="845" width="340" height="195" rx="10" fill="#222436" stroke="#414868" stroke-width="1.5"/>
+  <text x="76" y="870" class="head">cargo xtask drive</text>
+  <text x="76" y="890" class="small mono">nuntio --debug-server &lt;state file&gt;</text>
+  <text x="76" y="912" class="desc">debug-server feature, never in packages</text>
+  <text x="76" y="928" class="desc">TcpListener on 127.0.0.1, random port</text>
+  <text x="76" y="944" class="desc">state file {port, token, pid}</text>
+  <text x="76" y="960" class="desc">one JSON line per request and reply</text>
+  <text x="76" y="982" class="desc">input through the real paths</text>
+  <text x="76" y="998" class="desc">Renderer::capture: offscreen shots</text>
+  <text x="76" y="1022" class="small">headless: Xvfb · --headless · transparent window</text>
+
+  <!-- D2 build and release -->
+  <rect x="420" y="845" width="300" height="195" rx="10" fill="#222436" stroke="#414868" stroke-width="1.5"/>
+  <text x="436" y="870" class="head">Build &amp; release</text>
+  <text x="436" y="890" class="small mono">cargo xtask package → dist/</text>
+  <text x="436" y="912" class="desc">ci.yml: fmt · clippy · tests on 3 OSes,</text>
+  <text x="436" y="928" class="desc">with and without nuntio/debug-server</text>
+  <text x="436" y="944" class="desc">release.yml on v* tags → GitHub release</text>
+  <text x="436" y="960" class="desc">notes from Changelog: commit trailers</text>
+  <text x="436" y="982" class="desc">nuntio-config ships in lib/nuntio/</text>
+  <text x="436" y="998" class="desc">or next to the executable</text>
+  <text x="436" y="1022" class="small">see CONTRIBUTING.md</text>
+
+  <!-- D3 GitHub -->
+  <rect x="740" y="845" width="330" height="195" rx="10" fill="#222436" stroke="#414868" stroke-width="1.5"/>
+  <text x="756" y="870" class="head">GitHub releases API</text>
+  <text x="756" y="890" class="small mono">/repos/cebor/nuntio/releases/latest</text>
+  <text x="756" y="912" class="desc">opt-in: [updates] check = true</text>
+  <text x="756" y="928" class="desc">tag_name only · ETag requests</text>
+  <text x="756" y="944" class="desc">state: cache dir nuntio/update.toml</text>
+  <text x="756" y="960" class="desc">banner · tab-bar badge · status item</text>
+  <text x="756" y="1022" class="small">informs only, downloads nothing</text>
+
+  <!-- D4 config files -->
+  <rect x="1180" y="845" width="360" height="195" rx="10" fill="#7DCFFF" fill-opacity="0.08" stroke="#7DCFFF" stroke-width="1.5"/>
+  <use href="#cyl" x="1196" y="858"/>
+  <text x="1232" y="878" class="head">config.toml · themes/</text>
+  <rect x="1196" y="894" width="213" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+  <text x="1302.5" y="910" class="chip mono mid">~/.config/nuntio/config.toml</text>
+  <text x="1196" y="938" class="desc">or $XDG_CONFIG_HOME/nuntio/, ~/.nuntio.toml</text>
+  <text x="1196" y="954" class="desc">20 built-in themes; themes/*.toml and</text>
+  <text x="1196" y="970" class="desc">*.itermcolors override them by name</text>
+  <text x="1196" y="990" class="desc">nuntio-config crate: schema.rs SETTINGS,</text>
+  <text x="1196" y="1006" class="desc">load · validate · edit.rs · watch.rs</text>
+  <text x="1196" y="1026" class="small">invalid file → banner, previous config stays</text>
+
+  <!-- Footer -->
+  <text x="40" y="1085" class="small">docs/architecture.svg · see ARCHITECTURE.md for the detail views</text>
+  <text x="1560" y="1085" class="small end">state of commit b447c29 (2026-10-09)</text>
+</svg>
