@@ -205,6 +205,26 @@ fn map_key(event: KeyEvent) -> Option<Key> {
     })
 }
 
+/// Set up the terminal for the UI. Fails with an error instead of a panic
+/// when there is no terminal. Bracketed paste is switched off again if the
+/// program panics: the panic message goes to a terminal that keeps it on
+/// otherwise.
+fn init_terminal() -> Result<ratatui::DefaultTerminal> {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    let terminal = ratatui::try_init().context("cannot set up the terminal")?;
+    HOOK.call_once(|| {
+        // After ratatui's hook (installed by `try_init`), which restores the
+        // screen: this one runs first.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = ratatui::crossterm::execute!(io::stdout(), DisableBracketedPaste);
+            previous(info);
+        }));
+    });
+    let _ = ratatui::crossterm::execute!(io::stdout(), EnableBracketedPaste);
+    Ok(terminal)
+}
+
 pub fn main() -> Result<()> {
     let path = config_path(parse_args()?)?;
     let (themes, theme_warnings) = ThemeSet::load(nuntio_config::themes_dir(&path).as_deref());
@@ -223,8 +243,7 @@ pub fn main() -> Result<()> {
     app.editor_name = editor_name(&editor());
 
     let mut view = ui::View::default();
-    let mut terminal = ratatui::init();
-    let _ = ratatui::crossterm::execute!(io::stdout(), EnableBracketedPaste);
+    let mut terminal = init_terminal()?;
     let result = (|| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| ui::draw(frame, &app, &mut view))?;
@@ -243,8 +262,7 @@ pub fn main() -> Result<()> {
                 let _ = ratatui::crossterm::execute!(io::stdout(), DisableBracketedPaste);
                 ratatui::restore();
                 let edited = run_editor(&path);
-                terminal = ratatui::init();
-                let _ = ratatui::crossterm::execute!(io::stdout(), EnableBracketedPaste);
+                terminal = init_terminal()?;
                 match edited {
                     Ok(()) => app.reload(),
                     Err(err) => app.message = Some((Tone::Error, format!("{err:#}"))),

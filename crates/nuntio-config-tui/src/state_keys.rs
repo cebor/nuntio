@@ -468,7 +468,7 @@ impl App {
                 };
                 Box::new(move |doc| doc.set("theme", theme_value(&selection)))
             }
-            (PickTarget::Action { index, key }, pick) => {
+            (PickTarget::Action { index, key, .. }, pick) => {
                 let action = match pick {
                     Pick::Value(action) => action,
                     Pick::Unset => "none".into(),
@@ -531,6 +531,15 @@ impl App {
         // A reload meanwhile is the new state to return to.
         if self.reloads != reloads {
             mode.before = self.source.clone();
+            // The binding being edited may have moved.
+            if let PickTarget::Action {
+                index, original, ..
+            } = &mut mode.target
+                && !self.relocate_binding(index, original.as_ref())
+            {
+                self.binding_gone();
+                return;
+            }
         }
         self.mode = Mode::Picker(mode);
     }
@@ -609,7 +618,7 @@ impl App {
                 None,
                 Some((Tone::Dim, "Type a combination like Ctrl+Shift+N".into())),
             ),
-            InputTarget::BindingKey { index } => match KeyCombo::parse(text) {
+            InputTarget::BindingKey { index, .. } => match KeyCombo::parse(text) {
                 Err(err) => (Some(err.to_string()), None),
                 Ok(combo) => {
                     let clash = self
@@ -640,9 +649,23 @@ impl App {
                         return;
                     }
                 }
-                InputTarget::BindingKey { index } => {
+                InputTarget::BindingKey { index, original } => {
                     if !mode.input.text.trim().is_empty() {
-                        self.open_action_picker(*index, mode.input.text.trim().to_owned());
+                        // An outside change meanwhile may have moved the entry.
+                        let reloads = self.reloads;
+                        self.in_sync();
+                        let mut index = *index;
+                        if self.reloads != reloads
+                            && !self.relocate_binding(&mut index, original.as_ref())
+                        {
+                            self.binding_gone();
+                            return;
+                        }
+                        self.open_action_picker(
+                            index,
+                            original.clone(),
+                            mode.input.text.trim().to_owned(),
+                        );
                         return;
                     }
                 }
@@ -657,18 +680,22 @@ impl App {
     }
 
     fn edit_binding_key(&mut self, index: Option<usize>) {
-        let key = index
-            .and_then(|i| self.doc.keybindings().get(i).map(|b| b.key.clone()))
-            .unwrap_or_default();
+        let original = index.and_then(|i| self.doc.keybindings().get(i).cloned());
+        let key = original.as_ref().map(|b| b.key.clone()).unwrap_or_default();
         let title = if index.is_some() {
             "Key combination"
         } else {
             "New keybinding: key combination"
         };
-        self.open_input(InputTarget::BindingKey { index }, title, &key);
+        self.open_input(InputTarget::BindingKey { index, original }, title, &key);
     }
 
-    fn open_action_picker(&mut self, index: Option<usize>, key: String) {
+    fn open_action_picker(
+        &mut self,
+        index: Option<usize>,
+        original: Option<Keybinding>,
+        key: String,
+    ) {
         let current = index
             .and_then(|i| self.doc.keybindings().get(i).map(|b| b.action.clone()))
             .map_or(Pick::Unset, Pick::Value);
@@ -681,7 +708,50 @@ impl App {
             })
             .collect();
         let picker = Picker::new(format!("Action for {key}"), choices, &current).filterable(false);
-        self.open_picker(picker, PickTarget::Action { index, key });
+        self.open_picker(
+            picker,
+            PickTarget::Action {
+                index,
+                key,
+                original,
+            },
+        );
+    }
+
+    /// After a reload, find the binding that was being edited again: the
+    /// entry equal to `original` nearest to where it was. `false` if it is
+    /// gone or was changed elsewhere. Adding a binding has no place to find.
+    fn relocate_binding(&self, index: &mut Option<usize>, original: Option<&Keybinding>) -> bool {
+        let Some(old) = *index else {
+            return true;
+        };
+        let Some(original) = original else {
+            return false;
+        };
+        let nearest = self
+            .doc
+            .keybindings()
+            .iter()
+            .enumerate()
+            .filter(|(_, binding)| *binding == original)
+            .min_by_key(|(i, _)| i.abs_diff(old))
+            .map(|(i, _)| i);
+        match nearest {
+            Some(i) => {
+                *index = Some(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Close the keybinding editor: what it was editing is gone.
+    fn binding_gone(&mut self) {
+        self.mode = Mode::Normal;
+        self.message = Some((
+            Tone::Warn,
+            "That keybinding was changed or removed elsewhere; nothing was written.".into(),
+        ));
     }
 
     /// The entries of an ordered set in display order: the chosen ones

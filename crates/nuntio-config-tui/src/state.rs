@@ -10,7 +10,9 @@ use unicode_width::UnicodeWidthStr;
 
 use nuntio_config::schema::{Kind, SETTINGS, SPRING, Section, Setting};
 use nuntio_config::toml_edit::{self, InlineTable};
-use nuntio_config::{ACTIONS, Config, ConfigDoc, KeyCombo, StatusItem, ThemeSelection, ThemeSet};
+use nuntio_config::{
+    ACTIONS, Config, ConfigDoc, KeyCombo, Keybinding, StatusItem, ThemeSelection, ThemeSet,
+};
 
 use crate::args;
 use crate::widgets::{Picker, TextInput};
@@ -194,6 +196,9 @@ pub enum PickTarget {
     Action {
         index: Option<usize>,
         key: String,
+        /// The binding as it was when editing began (`None` when adding), to
+        /// find it again after the file was reloaded.
+        original: Option<Keybinding>,
     },
 }
 
@@ -203,6 +208,8 @@ pub enum InputTarget {
     /// The first step of editing (`Some`) or adding a keybinding.
     BindingKey {
         index: Option<usize>,
+        /// As in [`PickTarget::Action`].
+        original: Option<Keybinding>,
     },
 }
 
@@ -1680,6 +1687,68 @@ mod tests {
         assert_eq!(app.config.scrollback, 7);
         app.key(Key::Right);
         assert_eq!(memory.text(), "scrollback = 1007\n");
+    }
+
+    const TWO_BINDINGS: &str = "[[keybindings]]\nkey = \"Ctrl+A\"\naction = \"new_tab\"\n\n\
+        [[keybindings]]\nkey = \"Ctrl+B\"\naction = \"split_vertical\"\n";
+    const SECOND_ONLY: &str = "[[keybindings]]\nkey = \"Ctrl+B\"\naction = \"split_vertical\"\n";
+
+    /// Start editing the second of two bindings.
+    fn editing_the_second_binding() -> (App, Memory) {
+        let (mut app, memory) = app(Some(TWO_BINDINGS));
+        app.section = Section::ALL
+            .iter()
+            .position(|s| *s == Section::Keybindings)
+            .unwrap();
+        app.row = 1;
+        assert_eq!(app.current_row(), Some(Row::Keybinding(1)));
+        app.key(Key::Enter);
+        (app, memory)
+    }
+
+    #[test]
+    fn a_reload_moves_the_binding_being_edited() {
+        let (mut app, memory) = editing_the_second_binding();
+        app.key(Key::Enter);
+        assert!(matches!(app.mode, Mode::Picker(_)));
+        type_text(&mut app, "close_pane");
+        // The first binding is deleted elsewhere: the one edited is entry 0 now.
+        memory.set(SECOND_ONLY);
+        app.key(Key::Enter);
+        let Mode::Picker(PickerMode { target, .. }) = &app.mode else {
+            panic!("the picker closed");
+        };
+        assert!(matches!(target, PickTarget::Action { index: Some(0), .. }));
+        assert_eq!(memory.text(), SECOND_ONLY, "nothing written to stale state");
+        app.key(Key::Enter);
+        assert_eq!(
+            memory.text(),
+            "[[keybindings]]\nkey = \"Ctrl+B\"\naction = \"close_pane\"\n"
+        );
+    }
+
+    #[test]
+    fn a_reload_between_the_steps_moves_the_binding_too() {
+        let (mut app, memory) = editing_the_second_binding();
+        memory.set(SECOND_ONLY);
+        app.key(Key::Enter);
+        let Mode::Picker(PickerMode { target, .. }) = &app.mode else {
+            panic!("no action picker");
+        };
+        assert!(matches!(target, PickTarget::Action { index: Some(0), .. }));
+        assert_eq!(memory.text(), SECOND_ONLY);
+    }
+
+    #[test]
+    fn a_reload_that_removes_the_binding_closes_the_editor() {
+        let (mut app, memory) = editing_the_second_binding();
+        app.key(Key::Enter);
+        type_text(&mut app, "close_pane");
+        memory.set("");
+        app.key(Key::Enter);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(matches!(app.message, Some((Tone::Warn, _))));
+        assert_eq!(memory.text(), "", "nothing written");
     }
 
     #[test]

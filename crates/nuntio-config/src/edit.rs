@@ -2,7 +2,7 @@
 //! order and formatting.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value};
@@ -285,7 +285,7 @@ fn has_comment(item: &Item) -> bool {
 /// half-written file. A symlinked config is written at its target; missing
 /// directories are created.
 pub fn write_config(path: &Path, contents: &str) -> io::Result<()> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let target = write_target(path)?;
     let dir = match target.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir.to_owned(),
         _ => std::env::current_dir()?,
@@ -303,7 +303,42 @@ pub fn write_config(path: &Path, contents: &str) -> io::Result<()> {
     write_new(&temp, contents, permissions.as_ref())?;
     std::fs::rename(&temp, &target).inspect_err(|_| {
         let _ = std::fs::remove_file(&temp);
-    })
+    })?;
+    // Make the rename durable too: after a crash the config is the old or the
+    // new one, never an empty file.
+    #[cfg(unix)]
+    {
+        let _ = std::fs::File::open(&dir).and_then(|d| d.sync_all());
+    }
+    Ok(())
+}
+
+/// Most symlinks followed to find where a config is written.
+const MAX_LINK_HOPS: usize = 8;
+
+/// Where writing `path` has to land: its canonical path, or, for a dangling
+/// symlink, the end of the link chain. Replacing the link itself would turn
+/// it into a regular file.
+fn write_target(path: &Path) -> io::Result<PathBuf> {
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        return Ok(resolved);
+    }
+    let mut current = path.to_owned();
+    for hop in 0..=MAX_LINK_HOPS {
+        let Ok(link) = std::fs::read_link(&current) else {
+            // Not a symlink, or nothing there yet.
+            return Ok(current);
+        };
+        if hop == MAX_LINK_HOPS {
+            break;
+        }
+        // An absolute target replaces the path when joined.
+        current = match current.parent() {
+            Some(parent) => parent.join(link),
+            None => link,
+        };
+    }
+    Err(io::Error::other("too many levels of symbolic links"))
 }
 
 /// Create `path` with `contents`, readable only as `permissions` allow from
@@ -334,7 +369,9 @@ fn write_new(
             // The umask may have taken bits away; Windows' read-only flag too.
             Some(permissions) => file.set_permissions(permissions.clone()),
             None => Ok(()),
-        });
+        })
+        // Data must be on disk before the rename publishes it.
+        .and_then(|()| file.sync_all());
     written.inspect_err(|_| {
         let _ = std::fs::remove_file(path);
     })
@@ -609,5 +646,59 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(text, "scrollback = 4\n");
         assert!(!followed, "wrote through the planted symlink");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_through_dangling_symlinks() {
+        let dir = temp_dir("dangling");
+        std::fs::create_dir_all(&dir).unwrap();
+        let is_link = |p: &Path| p.symlink_metadata().unwrap().file_type().is_symlink();
+
+        // Absolute target in a directory that doesn't exist yet.
+        let absolute = dir.join("a-link.toml");
+        let a_target = dir.join("missing/a.toml");
+        std::os::unix::fs::symlink(&a_target, &absolute).unwrap();
+        write_config(&absolute, "scrollback = 1\n").unwrap();
+        assert!(is_link(&absolute));
+        assert_eq!(
+            std::fs::read_to_string(&a_target).unwrap(),
+            "scrollback = 1\n"
+        );
+
+        // Relative target.
+        let relative = dir.join("r-link.toml");
+        std::os::unix::fs::symlink("real-r.toml", &relative).unwrap();
+        write_config(&relative, "scrollback = 2\n").unwrap();
+        assert!(is_link(&relative));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("real-r.toml")).unwrap(),
+            "scrollback = 2\n"
+        );
+
+        // A chain of two links.
+        let (first, second) = (dir.join("first.toml"), dir.join("second.toml"));
+        std::os::unix::fs::symlink("second.toml", &first).unwrap();
+        std::os::unix::fs::symlink("chain/end.toml", &second).unwrap();
+        write_config(&first, "scrollback = 3\n").unwrap();
+        assert!(is_link(&first) && is_link(&second));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("chain/end.toml")).unwrap(),
+            "scrollback = 3\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_loop_is_an_error() {
+        let dir = temp_dir("loop");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.toml"), dir.join("b.toml"));
+        std::os::unix::fs::symlink("b.toml", &a).unwrap();
+        std::os::unix::fs::symlink("a.toml", &b).unwrap();
+        let err = write_config(&a, "x = 1\n").unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(err.to_string().contains("symbolic links"), "{err}");
     }
 }
