@@ -170,7 +170,7 @@ impl WindowState {
             overlay.add(bar.draw(
                 &labels,
                 self.mouse.hovered_bar,
-                self.window.is_maximized(),
+                self.fills_screen(),
                 background,
                 foreground,
             ));

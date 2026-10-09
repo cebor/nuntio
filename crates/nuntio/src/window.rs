@@ -1010,10 +1010,25 @@ impl WindowState {
         let fullscreen = self.window.fullscreen().is_some();
         let target = (!fullscreen).then_some(Fullscreen::Borderless(None));
         self.window.set_fullscreen(target);
+        // The maximize button changes its icon; a toggle doesn't always
+        // resize the window (e.g. without a window manager).
+        self.window.request_redraw();
     }
 
+    /// Maximized or full screen: the window covers the screen, its edges
+    /// don't resize it and the maximize button shows the restore icon.
+    pub fn fills_screen(&self) -> bool {
+        self.window.is_maximized() || self.window.fullscreen().is_some()
+    }
+
+    /// The maximize button and a double click on the tab bar: leave full
+    /// screen, else maximize or restore.
     pub fn toggle_maximized(&self) {
-        self.window.set_maximized(!self.window.is_maximized());
+        if self.window.fullscreen().is_some() {
+            self.window.set_fullscreen(None);
+        } else {
+            self.window.set_maximized(!self.window.is_maximized());
+        }
     }
 
     /// Run the timers that are due at `now` (cursor blinking, title

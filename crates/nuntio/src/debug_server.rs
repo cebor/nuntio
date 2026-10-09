@@ -542,6 +542,7 @@ impl Core {
                 "scale": state.window.scale_factor(),
                 "focused": state.focused,
                 "maximized": state.window.is_maximized(),
+                "fullscreen": state.window.fullscreen().is_some(),
                 "minimized": state.window.is_minimized(),
                 "position": state.window.outer_position().ok().map(|p| [p.x, p.y]),
                 "headless": self.debug.headless,

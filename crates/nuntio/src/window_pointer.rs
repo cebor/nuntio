@@ -146,9 +146,10 @@ impl WindowState {
     }
 
     /// Resize edge under the pointer, for windows without decorations.
-    /// Maximized windows can't be resized, so their edges stay clickable.
+    /// Maximized and full screen windows can't be resized, so their edges
+    /// stay clickable.
     pub fn resize_edge(&self, pos: PhysicalPosition<f64>) -> Option<ResizeDirection> {
-        if self.chrome != Chrome::Undecorated || self.window.is_maximized() {
+        if self.chrome != Chrome::Undecorated || self.fills_screen() {
             return None;
         }
         let size = self.window.inner_size();
