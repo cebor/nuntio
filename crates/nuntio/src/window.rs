@@ -322,6 +322,10 @@ pub struct WindowState {
     pub blink: Blink,
     /// Frames skipped in a row, to stop retrying a stuck surface.
     pub skipped_frames: u32,
+    /// Frames in a row that reported a lost surface or device.
+    pub lost_frames: u32,
+    /// A bell already asked for attention and nobody has looked since.
+    pub attention_requested: bool,
     /// A frame showed cached tab titles; redraw once they expire so they
     /// catch up with the processes.
     pub title_refresh: Option<Instant>,
@@ -367,6 +371,8 @@ impl WindowState {
                 next_toggle: Instant::now(),
             },
             skipped_frames: 0,
+            lost_frames: 0,
+            attention_requested: false,
             title_refresh: None,
             reveal: None,
             ime_cell: None,
@@ -388,6 +394,11 @@ impl WindowState {
     /// The panes of all tabs.
     pub fn panes(&self) -> impl Iterator<Item = &Pane> {
         self.tabs.iter().flat_map(|tab| &tab.content.panes)
+    }
+
+    /// A pane of any tab.
+    pub fn pane(&self, id: PaneId) -> Option<&Pane> {
+        self.panes().find(|pane| pane.id == id)
     }
 
     /// The terminal of the focused pane in the active tab.
@@ -671,6 +682,14 @@ impl WindowState {
         }
     }
 
+    /// Close the tab list menu: its entries are tab indices, which a
+    /// closed or opened tab shifts.
+    pub fn close_tab_menu(&mut self) {
+        if self.menu_kind() == Some(MenuKind::Tabs) {
+            self.close_actions_menu();
+        }
+    }
+
     /// Whether the status bar looks different from the last time this
     /// was asked, e.g. after a new sample. Most samples change nothing
     /// visible (same rounded values, a clock without seconds), and a whole
@@ -782,6 +801,37 @@ impl WindowState {
         PhysicalSize::new(width, height)
     }
 
+    /// Smallest inner window size: `MIN_GRID` cells in a single pane. The
+    /// tab bar counts even while hidden, so the tab count doesn't change it.
+    pub fn min_size(&self, config: &Config) -> PhysicalSize<u32> {
+        let bars =
+            self.tab_layout().height + self.status_bar_bounds(config).map_or(0.0, |(_, h)| h);
+        let (width, height) =
+            min_window_size(self.renderer.cell_metrics(), self.padding(config), bars);
+        PhysicalSize::new(width, height)
+    }
+
+    /// Tell the window manager the smallest size; call when cell size,
+    /// padding or the bars change.
+    pub fn update_min_size(&self, config: &Config) {
+        self.window.set_min_inner_size(Some(self.min_size(config)));
+    }
+
+    /// Whether the window is minimized or empty; see `is_layout_frozen`.
+    pub fn layout_frozen(&self) -> bool {
+        let size = self.window.inner_size();
+        is_layout_frozen(size.width, size.height, self.window.is_minimized())
+    }
+
+    /// After the renderer was given up on, try drawing again: something
+    /// changed (resize, focus, the window was shown).
+    pub fn retry_renderer(&mut self) {
+        if self.lost_frames > MAX_RENDERER_REBUILDS {
+            self.lost_frames = 0;
+            self.window.request_redraw();
+        }
+    }
+
     /// Drop every cached tab title, so the next frame computes them all.
     /// Refreshing only the expired ones would leave others cached, which
     /// would schedule yet another refresh, tab after tab.
@@ -796,6 +846,9 @@ impl WindowState {
 
     /// Fit every pane's terminal to its area, in all tabs.
     pub fn resize_terms(&mut self, config: &Config) {
+        if self.layout_frozen() {
+            return;
+        }
         let area = self.terminal_area(config);
         let gap = self.divider_width();
         let padding = self.padding(config);
@@ -999,6 +1052,7 @@ impl WindowState {
         if index != self.tabs.active_index() {
             self.send_focus(false);
             self.tabs.select(index);
+            self.attention_requested = false;
             // A divider of the old tab can't be dragged on in the new one.
             self.mouse.divider_drag = None;
             self.send_focus(true);
@@ -1051,6 +1105,49 @@ fn window_size(
     let width = columns as f32 * cell.width as f32 + 2.0 * padding.0;
     let height = lines as f32 * cell.height as f32 + 2.0 * padding.1 + bars;
     (width.ceil() as u32, height.ceil() as u32)
+}
+
+/// A zero-sized or minimized window has no usable layout; Windows reports
+/// 0x0 or 160x28 when minimized.
+pub fn is_layout_frozen(width: u32, height: u32, minimized: Option<bool>) -> bool {
+    width == 0 || height == 0 || minimized == Some(true)
+}
+
+/// Whether a bell should ask for the user's attention: only while the
+/// pane isn't in view, and once per burst until the user looks again.
+pub fn wants_attention(tab_active: bool, window_focused: bool, already_requested: bool) -> bool {
+    (!tab_active || !window_focused) && !already_requested
+}
+
+/// Smallest window, in cells, so the grids never collapse.
+const MIN_GRID: (u16, u16) = (20, 4);
+
+/// Smallest inner window size that holds `MIN_GRID` in a single pane.
+fn min_window_size(cell: CellMetrics, padding: (f32, f32), bars: f32) -> (u32, u32) {
+    window_size(MIN_GRID, cell, padding, bars)
+}
+
+/// Lost-surface frames in a row that still rebuild the renderer.
+pub const MAX_RENDERER_REBUILDS: u32 = 3;
+
+/// What to do about a frame that reported a lost GPU surface or device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LostAction {
+    /// Build a new renderer.
+    Rebuild,
+    /// Tell the user once that rebuilding doesn't help.
+    GiveUp,
+    /// Stay quiet until something (resize, focus, show) retries.
+    Wait,
+}
+
+/// The action for the `consecutive`-th lost frame in a row (1-based).
+pub fn lost_action(consecutive: u32) -> LostAction {
+    match consecutive {
+        ..=MAX_RENDERER_REBUILDS => LostAction::Rebuild,
+        n if n == MAX_RENDERER_REBUILDS + 1 => LostAction::GiveUp,
+        _ => LostAction::Wait,
+    }
 }
 
 /// How many cells fit into a pane, minus padding.
@@ -1151,5 +1248,46 @@ mod tests {
         };
         let size = grid_size(rect, (200.0, 200.0), CELL);
         assert_eq!((size.columns, size.lines), (1, 1));
+    }
+
+    #[test]
+    fn layout_is_frozen_when_minimized_or_empty() {
+        assert!(is_layout_frozen(0, 10, None));
+        assert!(is_layout_frozen(10, 0, None));
+        assert!(is_layout_frozen(160, 28, Some(true)));
+        assert!(!is_layout_frozen(160, 28, Some(false)));
+        assert!(!is_layout_frozen(160, 28, None));
+    }
+
+    #[test]
+    fn attention_is_requested_once_per_burst() {
+        assert!(wants_attention(false, true, false));
+        assert!(wants_attention(true, false, false));
+        assert!(!wants_attention(true, true, false));
+        assert!(!wants_attention(false, false, true));
+    }
+
+    #[test]
+    fn min_size_holds_twenty_by_four_cells() {
+        let (width, height) = min_window_size(CELL, (8.0, 6.0), 30.0);
+        assert_eq!((width, height), (216, 122));
+        let rect = Rect {
+            x: 0.0,
+            y: 30.0,
+            width: width as f32,
+            height: height as f32 - 30.0,
+        };
+        let size = grid_size(rect, (8.0, 6.0), CELL);
+        assert_eq!((size.columns, size.lines), (20, 4));
+    }
+
+    #[test]
+    fn lost_frames_rebuild_a_few_times_then_give_up() {
+        for consecutive in 1..=MAX_RENDERER_REBUILDS {
+            assert_eq!(lost_action(consecutive), LostAction::Rebuild);
+        }
+        assert_eq!(lost_action(MAX_RENDERER_REBUILDS + 1), LostAction::GiveUp);
+        assert_eq!(lost_action(MAX_RENDERER_REBUILDS + 2), LostAction::Wait);
+        assert_eq!(lost_action(u32::MAX), LostAction::Wait);
     }
 }

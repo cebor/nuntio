@@ -13,14 +13,14 @@ use nuntio_config::{
 use nuntio_render::{FrameStatus, GpuOptions, Renderer};
 use nuntio_term::{Palette, Rgb, TermEvent, TermOptions, TermSize};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::window::{Theme as WindowTheme, Window, WindowAttributes, WindowId};
 
 use crate::actions::Bindings;
 use crate::banner::{Banner, Severity};
-use crate::event::{MenuCommand, PaneId, UserEvent};
+use crate::event::{ClipboardPaste, MenuCommand, PaneId, PasteSource, Pasted, UserEvent};
 use crate::input::KeyPress;
 use crate::status_bar::Stats;
 use crate::sysmon::{SystemMonitor, is_sampled};
@@ -397,12 +397,18 @@ impl Core {
             .inspect_err(|err| tracing::warn!("clipboard unavailable: {err}"))
             .ok();
         let themes_dir = themes_dir(config_path.as_deref());
+        let mut watch_warning = None;
         let watcher = config_path.as_deref().and_then(|path| {
             let proxy = proxy.clone();
             ConfigWatcher::new(path, themes_dir.as_deref(), move || {
                 let _ = proxy.send_event(UserEvent::ConfigChanged);
             })
-            .inspect_err(|err| tracing::info!("config hot reload unavailable: {err}"))
+            .inspect_err(|err| {
+                tracing::warn!("config hot reload unavailable: {err}");
+                watch_warning = Some(format!(
+                    "Config hot reload is unavailable ({err}); restart nuntio to apply changes to the config."
+                ));
+            })
             .ok()
         });
         let (themes, theme_warnings) = ThemeSet::load(themes_dir.as_deref());
@@ -454,6 +460,7 @@ impl Core {
                 .into_iter()
                 .chain(binding_warnings)
                 .chain(theme_warning)
+                .chain(watch_warning)
                 .collect(),
         ));
         core
@@ -533,14 +540,20 @@ impl Core {
 
     /// Open `url` in the browser, or say why not.
     fn open_url(&mut self, url: &str) {
-        let problem = match crate::link::check(url) {
-            Err(reason) => format!("not opening {url}: {reason}"),
-            Ok(()) => match open::that_detached(url) {
-                Err(err) => format!("failed to open {url}: {err}"),
-                Ok(()) => return,
-            },
-        };
-        self.notify(Banner::new(Severity::Warning, "Link", vec![problem]));
+        // Checking the target touches the file system, which can hang.
+        let owned = url.to_owned();
+        let proxy = self.proxy.clone();
+        let spawned = std::thread::Builder::new()
+            .name("link-open".into())
+            .spawn(move || {
+                if let Err(problem) = crate::link::open(&owned) {
+                    let _ = proxy.send_event(UserEvent::LinkFailed(problem));
+                }
+            });
+        if let Err(err) = spawned {
+            let problem = format!("failed to open {url}: {err}");
+            self.notify(Banner::new(Severity::Warning, "Link", vec![problem]));
+        }
     }
 
     /// Open the page of the newer release.
@@ -851,6 +864,7 @@ impl Core {
             state.renderer.set_font_size(self.font_size, scale);
         }
         // Padding, font and tab bar settings all affect the grid.
+        state.update_min_size(&self.config);
         state.resize_terms(&self.config);
         state.window.request_redraw();
     }
@@ -859,6 +873,7 @@ impl Core {
         self.font_size = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         let scale = state.window.scale_factor();
         state.renderer.set_font_size(self.font_size, scale);
+        state.update_min_size(&self.config);
         state.resize_terms(&self.config);
         state.window.request_redraw();
     }
@@ -870,28 +885,6 @@ impl Core {
             && let Err(err) = clipboard.set_text(text)
         {
             tracing::warn!("failed to write clipboard: {err}");
-        }
-    }
-
-    fn clipboard_text(&mut self) -> Option<String> {
-        let clipboard = self.clipboard.as_mut()?;
-        clipboard
-            .get_text()
-            .inspect_err(|err| tracing::debug!("failed to read clipboard: {err}"))
-            .ok()
-    }
-
-    fn clipboard_image(&mut self) -> ClipboardImage {
-        let Some(clipboard) = self.clipboard.as_mut() else {
-            return ClipboardImage::None;
-        };
-        match clipboard.get_image() {
-            Ok(image) => ClipboardImage::Image(image),
-            Err(arboard::Error::ConversionFailure) => ClipboardImage::Unreadable,
-            Err(err) => {
-                tracing::debug!("failed to read a clipboard image: {err}");
-                ClipboardImage::None
-            }
         }
     }
 
@@ -914,21 +907,25 @@ impl Core {
         let _ = text;
     }
 
-    fn primary_text(&mut self) -> Option<String> {
-        #[cfg(target_os = "linux")]
-        {
-            use arboard::{GetExtLinux, LinuxClipboardKind};
-
-            let clipboard = self.clipboard.as_mut()?;
-            clipboard
-                .get()
-                .clipboard(LinuxClipboardKind::Primary)
-                .text()
-                .inspect_err(|err| tracing::debug!("failed to read primary selection: {err}"))
-                .ok()
+    /// Read the clipboard (or the primary selection) off the event loop:
+    /// a selection owner that doesn't answer blocks the reader for seconds
+    /// (X11). The result arrives as `UserEvent::Paste`. `read_image`: look
+    /// for an image when there is no text.
+    fn request_paste(&self, pane: PaneId, source: PasteSource, read_image: bool) {
+        let proxy = self.proxy.clone();
+        let spawned = std::thread::Builder::new()
+            .name("clipboard-read".into())
+            .spawn(move || {
+                let content = read_clipboard(source, read_image);
+                let _ = proxy.send_event(UserEvent::Paste(ClipboardPaste {
+                    pane,
+                    source,
+                    content,
+                }));
+            });
+        if let Err(err) = spawned {
+            tracing::warn!("failed to start reading the clipboard: {err}");
         }
-        #[cfg(not(target_os = "linux"))]
-        None
     }
 
     // ----- The window ------------------------------------------------------
@@ -1027,6 +1024,7 @@ impl Core {
             warnings.extend(renderer.take_font_warning());
         }
         state.renderer = renderer;
+        state.update_min_size(&self.config);
         state.window.request_redraw();
         Ok(warnings)
     }
@@ -1096,7 +1094,10 @@ impl Core {
         state.update_badge = self.update_badge();
         // The cell size is only known now that the renderer has the font.
         // Where the size applies at once, there may be no `Resized` event.
+        state.update_min_size(&self.config);
+        let min = state.min_size(&self.config);
         let size = state.size_for_grid(&self.config);
+        let size = PhysicalSize::new(size.width.max(min.width), size.height.max(min.height));
         if let Some(size) = state.window.request_inner_size(size) {
             state.renderer.resize(size.width, size.height);
         }
@@ -1144,6 +1145,9 @@ impl Core {
         } else {
             state.skipped_frames = 0;
         }
+        if status == FrameStatus::Presented {
+            state.lost_frames = 0;
+        }
         match status {
             FrameStatus::Presented | FrameStatus::Paused => {}
             // Retry a few times; a surface that keeps timing out must not
@@ -1155,11 +1159,23 @@ impl Core {
                 tracing::debug!("giving up on this frame after repeated skips");
             }
             FrameStatus::Lost => {
-                tracing::warn!("surface lost, recreating renderer");
-                let software = !self.config.window.gpu_acceleration;
-                match self.rebuild_renderer(state, software, true) {
-                    Ok(warnings) => self.notify(Banner::config(Severity::Warning, warnings)),
-                    Err(err) => self.fail(event_loop, err),
+                state.lost_frames += 1;
+                match window::lost_action(state.lost_frames) {
+                    window::LostAction::Rebuild => {
+                        tracing::warn!("surface lost, recreating renderer");
+                        let software = !self.config.window.gpu_acceleration;
+                        match self.rebuild_renderer(state, software, true) {
+                            Ok(warnings) => self.notify(Banner::config(Severity::Warning, warnings)),
+                            Err(err) => self.fail(event_loop, err),
+                        }
+                    }
+                    window::LostAction::GiveUp => self.notify(Banner::new(
+                        Severity::Error,
+                        "GPU error",
+                        vec!["the renderer failed repeatedly; drawing resumes when the window is resized, focused or shown again".into()],
+                    )),
+                    // Resizing, focusing or showing the window tries again.
+                    window::LostAction::Wait => {}
                 }
             }
         }
@@ -1218,7 +1234,8 @@ impl Core {
                     // The dot in the tab label is the only thing a bell draws.
                     state.window.request_redraw();
                 }
-                if !active || !state.focused {
+                if window::wants_attention(active, state.focused, state.attention_requested) {
+                    state.attention_requested = true;
                     state.window.request_user_attention(Some(
                         winit::window::UserAttentionType::Informational,
                     ));
@@ -1251,13 +1268,16 @@ impl Core {
             // Minimized: keep the grids, don't reflow to a tiny size. Windows
             // reports 0x0 or the size of the minimized caption (160x28).
             WindowEvent::Resized(size)
-                if size.width == 0
-                    || size.height == 0
-                    || state.window.is_minimized() == Some(true) => {}
+                if window::is_layout_frozen(
+                    size.width,
+                    size.height,
+                    state.window.is_minimized(),
+                ) => {}
             WindowEvent::Resized(size) => {
                 // A resized window needs a fresh frame right away.
                 state.reveal = None;
                 state.close_actions_menu();
+                state.retry_renderer();
                 state.renderer.resize(size.width, size.height);
                 state.resize_terms(&self.config);
                 state.window.request_redraw();
@@ -1266,6 +1286,7 @@ impl Core {
                 state.reveal = None;
                 state.renderer.set_font_size(self.font_size, scale_factor);
                 state.invalidate_ime_area();
+                state.update_min_size(&self.config);
                 state.resize_terms(&self.config);
                 state.window.request_redraw();
             }
@@ -1276,7 +1297,10 @@ impl Core {
                 // Report while still marked focused, so focus-out gets through.
                 if focused {
                     state.focused = true;
+                    state.attention_requested = false;
                     state.send_focus(true);
+                    state.retry_renderer();
+                    state.resize_terms(&self.config);
                 } else {
                     state.send_focus(false);
                     state.focused = false;
@@ -1328,7 +1352,10 @@ impl Core {
             WindowEvent::DroppedFile(path) => self.drop_file(state, &path),
             WindowEvent::Occluded(occluded) => {
                 // Frames are paused while occluded; catch up once visible.
+                // A restore may come without a `Resized`, so fit the grids.
                 if !occluded {
+                    state.retry_renderer();
+                    state.resize_terms(&self.config);
                     state.window.request_redraw();
                 }
                 self.occluded = occluded;
@@ -1366,12 +1393,48 @@ fn set_pane_title(
     }
 }
 
-/// What the clipboard holds besides text.
-enum ClipboardImage {
-    None,
-    Image(arboard::ImageData<'static>),
-    /// An image nuntio can't decode; the program may read it itself.
-    Unreadable,
+/// Read what a paste needs, with a clipboard of its own so that the event
+/// loop's one isn't tied up. Runs on a worker thread.
+fn read_clipboard(source: PasteSource, read_image: bool) -> Pasted {
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(err) => {
+            tracing::debug!("clipboard unavailable: {err}");
+            return Pasted::Nothing;
+        }
+    };
+    let text = match source {
+        PasteSource::Clipboard => clipboard.get_text(),
+        // Only Linux has a primary selection.
+        #[cfg(target_os = "linux")]
+        PasteSource::Primary => {
+            use arboard::{GetExtLinux, LinuxClipboardKind};
+
+            clipboard
+                .get()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text()
+        }
+        #[cfg(not(target_os = "linux"))]
+        PasteSource::Primary => Err(arboard::Error::ContentNotAvailable),
+    };
+    match text {
+        Ok(text) if !text.is_empty() => return Pasted::Text(text),
+        Ok(_) => {}
+        Err(err) => tracing::debug!("failed to read the clipboard: {err}"),
+    }
+    if !read_image {
+        return Pasted::Nothing;
+    }
+    match clipboard.get_image() {
+        Ok(image) => Pasted::Image(image),
+        // An image nuntio can't decode; the program may read it itself.
+        Err(arboard::Error::ConversionFailure) => Pasted::UnreadableImage,
+        Err(err) => {
+            tracing::debug!("failed to read a clipboard image: {err}");
+            Pasted::Nothing
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -1435,10 +1498,18 @@ impl ApplicationHandler<UserEvent> for App {
             },
             #[cfg(feature = "debug-server")]
             UserEvent::Debug(call) => core.debug_call(state, call),
+            UserEvent::LinkFailed(problem) => {
+                core.notify(Banner::new(Severity::Warning, "Link", vec![problem]));
+            }
             // The rest needs the window.
             UserEvent::Term(pane, event) => {
                 if let Some(state) = state {
                     core.term_event(state, pane, event);
+                }
+            }
+            UserEvent::Paste(paste) => {
+                if let Some(state) = state {
+                    core.clipboard_pasted(state, paste);
                 }
             }
             UserEvent::Menu(MenuCommand::Action(action)) => {

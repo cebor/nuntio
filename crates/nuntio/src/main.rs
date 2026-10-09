@@ -167,13 +167,18 @@ fn load_config(path: Option<&Path>, mut warnings: Vec<String>) -> (Config, Optio
 /// macOS). The previous run's log is kept as `nuntio.old.log`, so starting
 /// a second window doesn't wipe the first one's log.
 fn log_file() -> Option<std::fs::File> {
-    let dir = dirs::cache_dir()?.join("nuntio");
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("nuntio.log");
+    let path = log_path()?;
+    let dir = path.parent()?;
+    std::fs::create_dir_all(dir).ok()?;
     // Fails on Windows while another instance has it open; then it's
     // truncated like before.
     let _ = std::fs::rename(&path, dir.join("nuntio.old.log"));
     std::fs::File::create(path).ok()
+}
+
+/// Where `log_file` writes.
+fn log_path() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join("nuntio").join("nuntio.log"))
 }
 
 /// Load DLLs only from our own directory and System32, not from `PATH`.
@@ -216,13 +221,67 @@ fn attach_parent_console() {}
 const DEFAULT_LOG_FILTER: &str = "info,wgpu_hal=warn,wgpu_core=warn,arboard=error,sctk_adwaita=off";
 
 fn main() -> Result<()> {
-    let result = run();
+    let Err(err) = run() else {
+        return Ok(());
+    };
     // Startup errors go to stderr, which a GUI-subsystem build doesn't have.
-    if result.is_err() {
-        attach_parent_console();
+    attach_parent_console();
+    if cfg!(feature = "debug-server") || std::io::stderr().is_terminal() {
+        return Err(err);
     }
-    result
+    // Started from a launcher: nobody sees stderr, so show the failure.
+    let message = failure_message(&err, log_path().filter(|path| path.exists()).as_deref());
+    show_error(&message);
+    Err(anyhow::anyhow!(message))
 }
+
+/// The error for the user, with where to find the log if there is one.
+fn failure_message(err: &anyhow::Error, log: Option<&Path>) -> String {
+    let mut message = format!("{err:#}");
+    if let Some(log) = log {
+        message.push_str(&format!("\n\nLog: {}", log.display()));
+    }
+    message
+}
+
+/// Tell the user nuntio could not start, where there is a window system
+/// to do it with and no terminal.
+#[cfg(windows)]
+fn show_error(message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() };
+    let (text, title) = (wide(message), wide("nuntio"));
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        )
+    };
+}
+
+#[cfg(target_os = "macos")]
+fn show_error(message: &str) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSApplication};
+    use objc2_foundation::NSString;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    // An alert needs the application object, even before an event loop runs.
+    let _ = NSApplication::sharedApplication(mtm);
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str("nuntio could not start"));
+    alert.setInformativeText(&NSString::from_str(message));
+    alert.runModal();
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn show_error(_message: &str) {}
 
 /// Panics go to the log too: a run without a terminal has no stderr.
 fn install_panic_hook() {
@@ -423,5 +482,18 @@ mod tests {
         let bare = describe_panic(&"x", None, None);
         assert!(bare.contains("<unnamed>"), "{bare}");
         assert!(bare.contains("unknown location"), "{bare}");
+    }
+
+    #[test]
+    fn failure_message_names_the_log() {
+        let err = anyhow::anyhow!("no adapter");
+        let log = Path::new("/home/me/.cache/nuntio/nuntio.log");
+        assert_eq!(
+            failure_message(&err, Some(log)),
+            format!("no adapter\n\nLog: {}", log.display())
+        );
+        assert_eq!(failure_message(&err, None), "no adapter");
+        let chained = anyhow::anyhow!("inner").context("outer");
+        assert_eq!(failure_message(&chained, None), "outer: inner");
     }
 }

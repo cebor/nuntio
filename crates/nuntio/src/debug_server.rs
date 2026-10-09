@@ -424,7 +424,8 @@ impl Core {
                 Ok(Reply::ok(json!({})))
             }
             Request::Paste { text } => {
-                self.paste(state, text);
+                let pane = state.content().focused;
+                self.paste(state, pane, text);
                 Ok(Reply::ok(json!({})))
             }
             Request::Action { name } => {

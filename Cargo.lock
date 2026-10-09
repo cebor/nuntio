@@ -2182,6 +2182,7 @@ dependencies = [
  "gethostname",
  "image",
  "lexopt",
+ "libc",
  "nuntio-config",
  "nuntio-config-tui",
  "nuntio-render",

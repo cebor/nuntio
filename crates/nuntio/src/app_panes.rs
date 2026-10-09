@@ -333,6 +333,8 @@ impl Core {
         let id = pane.id;
         state.send_focus(false);
         state.tabs.open(TabContent::new(pane), placement);
+        state.close_tab_menu();
+        state.attention_requested = false;
         state.hold_reveal(id, Instant::now());
         state.reset_focus_state();
         // The first extra tab may show the tab bar and shrink the grid.
@@ -405,7 +407,9 @@ impl Core {
         }
         let was_active = index == state.tabs.active_index();
         state.tabs.close(index);
+        state.close_tab_menu();
         if was_active {
+            state.attention_requested = false;
             state.send_focus(true);
             state.reset_focus_state();
         }

@@ -20,6 +20,8 @@ const PADDING: f64 = 3.0;
 /// opened, on any platform: a link could come from a remote machine.
 const PROGRAM_EXTENSIONS: &[&str] = &[
     // Windows
+    "ade",
+    "adp",
     "appinstaller",
     "application",
     "appref-ms",
@@ -38,7 +40,12 @@ const PROGRAM_EXTENSIONS: &[&str] = &[
     "jse",
     "library-ms",
     "lnk",
+    "mde",
     "msc",
+    "msh",
+    "msh1",
+    "msh2",
+    "mshxml",
     "msi",
     "msix",
     "msp",
@@ -98,8 +105,11 @@ const PROGRAM_EXTENSIONS: &[&str] = &[
     "jar",
     "js",
     "py",
+    "pyc",
+    "pyo",
     "pyw",
     "pyz",
+    "pyzw",
     "sh",
 ];
 
@@ -130,6 +140,14 @@ pub fn check(url: &str) -> Result<(), String> {
         return Err(PROGRAM.into());
     }
     Ok(())
+}
+
+/// Open `url` with the system's opener after `check`; the error is the
+/// text for the user. May block on the file system: don't call it from
+/// the UI thread.
+pub fn open(url: &str) -> Result<(), String> {
+    check(url).map_err(|reason| format!("not opening {url}: {reason}"))?;
+    open::that_detached(url).map_err(|err| format!("failed to open {url}: {err}"))
 }
 
 fn local_host() -> String {
@@ -460,6 +478,16 @@ mod tests {
             "xbap",
             "vsto",
             "gadget",
+            "ade",
+            "adp",
+            "mde",
+            "msh",
+            "msh1",
+            "msh2",
+            "mshxml",
+            "pyc",
+            "pyo",
+            "pyzw",
         ] {
             assert!(
                 check(&format!("file:///nonexistent/x.{ext}")).is_err(),
@@ -471,6 +499,14 @@ mod tests {
                 "{upper}"
             );
         }
+    }
+
+    #[test]
+    fn opening_a_program_reports_why_not() {
+        assert_eq!(
+            open("file:///tmp/x.exe"),
+            Err("not opening file:///tmp/x.exe: it could run a program".into())
+        );
     }
 
     #[test]

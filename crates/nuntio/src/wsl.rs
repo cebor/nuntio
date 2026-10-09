@@ -2,6 +2,10 @@
 //! `wsl.exe` and whose processes it can't see.
 
 use std::collections::HashMap;
+use std::io::{self, Read};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use nuntio_term::ReportedDir;
 
@@ -126,23 +130,77 @@ pub fn cd_arg(dir: &str, home: impl FnOnce() -> Option<String>) -> Option<String
 }
 
 /// Home directories in WSL distributions, by distribution and user. Asking
-/// `wsl.exe` takes a moment, so each is asked once.
+/// `wsl.exe` takes a moment, so an answer is kept; a failure is asked again
+/// next time, as `wsl.exe` may just have been slow or the distribution
+/// not started.
 #[derive(Default)]
-pub struct Homes(HashMap<(String, Option<String>), Option<String>>);
+pub struct Homes(HashMap<(String, Option<String>), String>);
 
 impl Homes {
     pub fn get(&mut self, distro: &str, user: Option<&str>) -> Option<String> {
-        self.0
-            .entry((distro.to_owned(), user.map(str::to_owned)))
-            .or_insert_with(|| query_home(distro, user))
-            .clone()
+        self.get_with(distro, user, query_home)
+    }
+
+    fn get_with(
+        &mut self,
+        distro: &str,
+        user: Option<&str>,
+        query: impl FnOnce(&str, Option<&str>) -> Option<String>,
+    ) -> Option<String> {
+        let key = (distro.to_owned(), user.map(str::to_owned));
+        if let Some(home) = self.0.get(&key) {
+            return Some(home.clone());
+        }
+        let home = query(distro, user)?;
+        self.0.insert(key, home.clone());
+        Some(home)
+    }
+}
+
+/// How long `wsl.exe` may take to name a home directory.
+#[cfg(windows)]
+const HOME_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `Command::output`, but a command that runs longer than `limit` is
+/// killed and gives `None`. Stderr isn't captured.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn output_within(command: &mut Command, limit: Duration) -> io::Result<Option<Output>> {
+    let mut child = command.stdout(Stdio::piped()).spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("no stdout"))?;
+    // Read on the side, so that a full pipe doesn't stall the command.
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        let _ = sender.send(bytes);
+    });
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stdout = receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap_or_default();
+            return Ok(Some(Output {
+                status,
+                stdout,
+                stderr: Vec::new(),
+            }));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
 #[cfg(windows)]
 fn query_home(distro: &str, user: Option<&str>) -> Option<String> {
     use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
 
     // No console window flashing up.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -151,14 +209,22 @@ fn query_home(distro: &str, user: Option<&str>) -> Option<String> {
     if let Some(user) = user {
         command.args(["-u", user]);
     }
-    let output = command
+    command
         .args(["--exec", "sh", "-c", r#"printf %s "$HOME""#])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .inspect_err(|err| tracing::warn!("failed to run wsl.exe: {err}"))
-        .ok()?;
+        .creation_flags(CREATE_NO_WINDOW);
+    let output = match output_within(&mut command, HOME_LOOKUP_TIMEOUT) {
+        Ok(Some(output)) => output,
+        Ok(None) => {
+            tracing::warn!(distro, "wsl.exe did not answer in time");
+            return None;
+        }
+        Err(err) => {
+            tracing::warn!("failed to run wsl.exe: {err}");
+            return None;
+        }
+    };
     let home = String::from_utf8(output.stdout).ok()?;
     let found = output.status.success() && home.starts_with('/');
     if !found {
@@ -286,5 +352,50 @@ mod tests {
         assert_eq!(cd_arg("~/code", home), Some("/home/me/code".into()));
         assert_eq!(cd_arg("~/code", || None), None);
         assert_eq!(cd_arg("code", home), None);
+    }
+
+    #[test]
+    fn failed_home_lookups_are_not_cached() {
+        let mut homes = Homes::default();
+        let mut asked = 0;
+        let mut ask = |answer: Option<&str>| {
+            homes.get_with("Ubuntu", None, |_, _| {
+                asked += 1;
+                answer.map(str::to_owned)
+            })
+        };
+        assert_eq!(ask(None), None);
+        assert_eq!(ask(Some("/home/me")), Some("/home/me".into()));
+        assert_eq!(ask(None), Some("/home/me".into()), "cached");
+        assert_eq!(asked, 2);
+
+        let other = homes.get_with("Ubuntu", Some("root"), |_, user| {
+            assert_eq!(user, Some("root"));
+            Some("/root".into())
+        });
+        assert_eq!(other, Some("/root".into()), "another user asks again");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn slow_commands_are_killed() {
+        use std::process::Command;
+
+        let started = Instant::now();
+        let slow = output_within(
+            Command::new("sh").args(["-c", "sleep 5"]),
+            Duration::from_millis(100),
+        )
+        .unwrap();
+        assert!(slow.is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let quick = output_within(
+            Command::new("sh").args(["-c", "printf %s hi"]),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(quick.stdout, b"hi");
     }
 }

@@ -8,6 +8,33 @@ use crate::update::Checked;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PaneId(pub u64);
 
+/// Where a paste reads from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteSource {
+    Clipboard,
+    /// The primary selection, which only Linux has.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Primary,
+}
+
+/// What a paste found.
+#[derive(Debug)]
+pub enum Pasted {
+    Nothing,
+    Text(String),
+    Image(arboard::ImageData<'static>),
+    /// An image nuntio can't decode; the program may read it itself.
+    UnreadableImage,
+}
+
+/// The result of reading the clipboard for a paste into `pane`.
+#[derive(Debug)]
+pub struct ClipboardPaste {
+    pub pane: PaneId,
+    pub source: PasteSource,
+    pub content: Pasted,
+}
+
 /// Events sent to the main thread from PTY-IO and watcher threads.
 #[derive(Debug)]
 pub enum UserEvent {
@@ -24,6 +51,10 @@ pub enum UserEvent {
     /// A request from the debug server.
     #[cfg(feature = "debug-server")]
     Debug(crate::app::debug_server::DebugCall),
+    /// Clipboard contents read on a worker thread, for a paste.
+    Paste(ClipboardPaste),
+    /// Opening a link failed or was refused; the text is for the user.
+    LinkFailed(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

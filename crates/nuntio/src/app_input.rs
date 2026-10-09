@@ -15,10 +15,11 @@ use winit::keyboard::{
 use winit::window::{CursorIcon, ResizeDirection, Window};
 
 use super::app_panes::CloseTarget;
-use super::{CONFIRM_REPEAT, ClipboardImage, Core};
+use super::{CONFIRM_REPEAT, Core};
 use crate::actions::Action;
 use crate::actions_menu::{MenuKind, Step};
 use crate::banner::{Banner, Severity};
+use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
 use crate::pane_tree::Axis;
@@ -35,6 +36,7 @@ const PASTE_BANNER: &str = "Paste";
 /// A paste that would run commands at once and waits to be repeated.
 #[derive(Debug, Clone)]
 pub struct PendingPaste {
+    pane: PaneId,
     text: String,
     until: Instant,
 }
@@ -51,6 +53,33 @@ fn paste_warning(text: &str) -> Option<String> {
     } else {
         "the text has a line break and would run at once; paste again to run it".into()
     })
+}
+
+/// Where pasted text goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PasteTarget {
+    /// Nowhere: the pane closed while the clipboard was read.
+    Drop,
+    FindBar,
+    Pane,
+}
+
+/// Where text read for a paste into a pane goes. The clipboard feeds the
+/// find bar while the pane is focused and the bar open; the primary
+/// selection (middle click) always goes to the pane clicked.
+fn text_target(
+    source: PasteSource,
+    pane_alive: bool,
+    pane_focused: bool,
+    search_open: bool,
+) -> PasteTarget {
+    if !pane_alive {
+        PasteTarget::Drop
+    } else if source == PasteSource::Clipboard && pane_focused && search_open {
+        PasteTarget::FindBar
+    } else {
+        PasteTarget::Pane
+    }
 }
 
 /// Whether Alt should act as Meta (ESC prefix). On macOS Option composes
@@ -252,58 +281,90 @@ impl Core {
         }
     }
 
+    /// Paste the clipboard into the focused pane. The clipboard is read on
+    /// a worker thread; `clipboard_pasted` gets the result.
     fn paste_clipboard(&mut self, state: &mut WindowState) {
-        if let Some(text) = self.clipboard_text().filter(|text| !text.is_empty()) {
-            // Pasting into the find bar extends the query.
-            if !state.search_append(text.lines().next().unwrap_or("")) {
-                self.paste(state, text);
-            }
-            return;
-        }
         // An image can't go into the find bar.
-        if state.search_and_term().is_some() {
-            return;
-        }
-        match self.clipboard_image() {
-            ClipboardImage::None => {}
-            // Pasted like a dropped file: AI CLIs attach image paths.
-            ClipboardImage::Image(image) => match self.pasted_images.save(&image) {
-                Ok(path) => {
-                    let pane = state.content().focused_pane();
-                    let syntax = PathSyntax::of(pane.wsl.is_some(), &pane.term.process_name());
-                    self.paste(state, dropped_path(&path.to_string_lossy(), syntax));
+        let read_image = state.search.is_none();
+        self.request_paste(state.content().focused, PasteSource::Clipboard, read_image);
+    }
+
+    /// Put what a worker thread read from the clipboard where it was asked
+    /// for: the pane may have closed or lost the focus meanwhile.
+    pub(super) fn clipboard_pasted(&mut self, state: &mut WindowState, paste: ClipboardPaste) {
+        let ClipboardPaste {
+            pane,
+            source,
+            content,
+        } = paste;
+        let alive = state.pane(pane).is_some();
+        let focused = state.content().focused == pane;
+        let search_open = state.search.is_some();
+        match content {
+            Pasted::Nothing => {}
+            Pasted::Text(text) => match text_target(source, alive, focused, search_open) {
+                PasteTarget::Drop => {}
+                // Pasting into the find bar extends the query.
+                PasteTarget::FindBar => {
+                    state.search_append(text.lines().next().unwrap_or(""));
                 }
-                Err(err) => {
-                    tracing::warn!("failed to save the clipboard image: {err:#}");
+                PasteTarget::Pane => self.paste(state, pane, text),
+            },
+            // Pasted like a dropped file: AI CLIs attach image paths.
+            Pasted::Image(image) => {
+                if !alive || search_open {
+                    return;
+                }
+                match self.pasted_images.save(&image) {
+                    Ok(path) => {
+                        if let Some(target) = state.pane(pane) {
+                            let syntax =
+                                PathSyntax::of(target.wsl.is_some(), &target.term.process_name());
+                            self.paste(state, pane, dropped_path(&path.to_string_lossy(), syntax));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to save the clipboard image: {err:#}");
+                        if focused {
+                            send_ctrl_v(state);
+                        }
+                    }
+                }
+            }
+            Pasted::UnreadableImage => {
+                if alive && focused && !search_open {
                     send_ctrl_v(state);
                 }
-            },
-            ClipboardImage::Unreadable => send_ctrl_v(state),
+            }
         }
     }
 
-    /// Paste into the focused pane. Where the program doesn't use
+    /// Paste into `pane`. Where the program doesn't use
     /// bracketed paste, text with line breaks would run at once: the
     /// first paste only warns, and the same paste again within
     /// `CONFIRM_REPEAT` goes through.
-    pub(super) fn paste(&mut self, state: &WindowState, text: String) {
-        let bracketed = state.term().mode().contains(TermMode::BRACKETED_PASTE);
+    pub(super) fn paste(&mut self, state: &WindowState, pane: PaneId, text: String) {
+        let Some(target) = state.pane(pane) else {
+            return;
+        };
+        let bracketed = target.term.mode().contains(TermMode::BRACKETED_PASTE);
         let pending = self.pending_paste.take();
         self.dismiss_banner(PASTE_BANNER);
         let now = Instant::now();
         if self.config.confirm_paste
             && !bracketed
             && let Some(message) = paste_warning(&text)
-            && !pending.is_some_and(|p| p.text == text && now < p.until)
+            && !pending.is_some_and(|p| p.pane == pane && p.text == text && now < p.until)
         {
             self.pending_paste = Some(PendingPaste {
+                pane,
                 text,
                 until: now + CONFIRM_REPEAT,
             });
             self.ask_to_repeat(PASTE_BANNER, message);
             return;
         }
-        state.term().paste(&text);
+        target.term.paste(&text);
     }
 
     /// Paste a dropped file's path into the pane under the pointer.
@@ -550,9 +611,8 @@ impl Core {
             Button::Left => start_selection(state, point),
             // Middle click pastes the primary selection, as on X11.
             Button::Middle => {
-                if let Some(text) = self.primary_text() {
-                    self.paste(state, text);
-                }
+                #[cfg(target_os = "linux")]
+                self.request_paste(id, PasteSource::Primary, false);
             }
             _ => {}
         }
@@ -863,6 +923,18 @@ mod tests {
             paste_warning("cd /tmp\r\nls\n\nmake\n").as_deref(),
             Some("3 lines would run at once; paste again to run them")
         );
+    }
+
+    #[test]
+    fn text_goes_to_the_pane_asked_for() {
+        use PasteSource::{Clipboard, Primary};
+        use PasteTarget::{Drop, FindBar, Pane};
+
+        assert_eq!(text_target(Clipboard, false, true, true), Drop, "pane gone");
+        assert_eq!(text_target(Clipboard, true, true, true), FindBar);
+        assert_eq!(text_target(Clipboard, true, true, false), Pane);
+        assert_eq!(text_target(Clipboard, true, false, true), Pane, "unfocused");
+        assert_eq!(text_target(Primary, true, true, true), Pane, "middle click");
     }
 
     #[test]
