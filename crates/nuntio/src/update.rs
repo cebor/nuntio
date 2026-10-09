@@ -4,7 +4,9 @@
 
 use std::cmp::Ordering;
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -218,6 +220,23 @@ fn decide_against(
     }
 }
 
+/// Unique temporary names within this process.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write `text` to `path` in one step, so a reader (or a crash) never sees a
+/// half-written file.
+fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let counter = TEMP_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let temp = path.with_file_name(format!("{name}.{}.{counter}.tmp", std::process::id()));
+    fs::write(&temp, text)?;
+    fs::rename(&temp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp);
+    })
+}
+
 /// What is kept between runs, in the cache directory.
 #[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
@@ -249,12 +268,27 @@ impl State {
             if let Some(dir) = path.parent() {
                 fs::create_dir_all(dir)?;
             }
-            fs::write(&path, toml::to_string(self)?)?;
+            write_atomically(&path, &toml::to_string(self)?)?;
             Ok(())
         });
         if let Err(err) = saved {
             tracing::warn!("cannot save the update check state: {err:#}");
         }
+    }
+
+    /// `self` with the dismissal found on disk, if any: the user may have
+    /// closed the banner while a check was running.
+    fn with_dismissal_of(mut self, on_disk: &State) -> State {
+        if on_disk.dismissed.is_some() {
+            self.dismissed.clone_from(&on_disk.dismissed);
+        }
+        self
+    }
+
+    /// Save without losing a dismissal made since this state was loaded.
+    fn save_refreshed(&mut self) {
+        *self = std::mem::take(self).with_dismissal_of(&State::load());
+        self.save();
     }
 
     /// Time until the next check is due; zero if it is.
@@ -403,7 +437,7 @@ impl Checker {
                     let fresh = if wait.is_zero() {
                         match state.refresh(now) {
                             Ok(release) => {
-                                state.save();
+                                state.save_refreshed();
                                 remembered = Some(state.clone());
                                 Some(release)
                             }
@@ -451,7 +485,7 @@ pub fn check_now(proxy: EventLoopProxy<UserEvent>) {
             let mut state = State::load();
             let result = state.refresh(now());
             if result.is_ok() {
-                state.save();
+                state.save_refreshed();
             }
             let dismissed = result.as_ref().is_ok_and(|r| state.is_dismissed(r));
             let checked = Checked {
@@ -579,6 +613,46 @@ mod tests {
         assert!(!state.is_dismissed(&release("v0.1.7")));
         assert!(!State::default().is_dismissed(&release("v0.1.7")));
         assert_eq!(toml::from_str::<State>("").unwrap(), State::default());
+    }
+
+    #[test]
+    fn a_refresh_keeps_a_dismissal_made_meanwhile() {
+        let on_disk = State {
+            dismissed: Some("0.1.7".into()),
+            ..State::default()
+        };
+        let refreshed = State {
+            last_check: 5,
+            etag: Some("e".into()),
+            dismissed: None,
+            latest: Some(release("v0.1.7")),
+        };
+        let merged = refreshed.clone().with_dismissal_of(&on_disk);
+        assert_eq!(merged.dismissed.as_deref(), Some("0.1.7"));
+        assert_eq!(merged.last_check, 5);
+        assert_eq!(merged.etag, refreshed.etag);
+        assert!(merged.is_dismissed(&release("v0.1.7")));
+        // Nothing dismissed on disk: ours stays.
+        let ours = State {
+            dismissed: Some("0.1.6".into()),
+            ..State::default()
+        };
+        assert_eq!(
+            ours.clone().with_dismissal_of(&State::default()).dismissed,
+            ours.dismissed
+        );
+    }
+
+    #[test]
+    fn writes_replace_the_file_in_one_step() {
+        let dir = std::env::temp_dir().join(format!("nuntio-update-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("update.toml");
+        write_atomically(&path, "a").unwrap();
+        write_atomically(&path, "b").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "b");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

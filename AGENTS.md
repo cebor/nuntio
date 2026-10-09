@@ -25,7 +25,7 @@ To look at the running terminal or try out a change, use the debug server instea
 ```sh
 cargo xtask drive start                  # build with --features debug-server, start headless in the background (empty config)
 cargo xtask drive wait-idle              # until no pane had output for 300 ms
-cargo xtask drive shot                   # target/nuntio-debug/shot.png, look at it with Read
+cargo xtask drive shot                   # target/nuntio-debug/shot.png (%LOCALAPPDATA%\nuntio\debug\shot.png on Windows), look at it with Read
 cargo xtask drive text                   # visible lines of the focused pane; `state` for tabs/panes/banner as JSON
 cargo xtask drive type 'ls\r'            # also: key ctrl+shift+t, action split_vertical, mouse click 100 17 / --cell 5 3
 cargo xtask drive record start           # then act, then: record stop --sheet (contact sheet of every drawn frame)

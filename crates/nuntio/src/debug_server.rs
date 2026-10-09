@@ -43,6 +43,12 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_MAX_FRAMES: usize = 60;
 /// The longest request line a connection may send, in bytes.
 const MAX_LINE: u64 = 64 * 1024;
+/// Most clicks one `click` request may repeat.
+const MAX_CLICK_COUNT: u32 = 10;
+/// Most wheel notches one `scroll` request may send, in either direction.
+const MAX_SCROLL_LINES: f32 = 100.0;
+/// Most frames a recording may keep: every one holds a screenshot in memory.
+const MAX_RECORDED_FRAMES: usize = 600;
 
 /// A request and where its reply goes.
 #[derive(Debug)]
@@ -234,7 +240,9 @@ pub fn start(state_file: &Path, proxy: EventLoopProxy<UserEvent>) -> Result<()> 
 }
 
 /// Write `contents` to a file only the user can read: whoever knows the
-/// token can type into the shells.
+/// token can type into the shells. On Unix the file mode is 0600; on
+/// Windows the privacy comes from the directory the caller picks
+/// (`cargo xtask drive` uses `%LOCALAPPDATA%\nuntio\debug`).
 fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -248,6 +256,29 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     file.write_all(contents.as_bytes())
+}
+
+/// Fail a mouse request that would make the UI loop for ages.
+fn check_mouse_limits(mouse: &MouseRequest) -> Result<(), String> {
+    if mouse.count > MAX_CLICK_COUNT {
+        return Err(format!("count must be at most {MAX_CLICK_COUNT}"));
+    }
+    // NaN must fail too.
+    if mouse.lines.is_nan() || mouse.lines.abs() > MAX_SCROLL_LINES {
+        return Err(format!(
+            "lines must be a number between -{MAX_SCROLL_LINES} and {MAX_SCROLL_LINES}"
+        ));
+    }
+    Ok(())
+}
+
+/// How many frames a recording keeps: the client's wish within the limit.
+fn recording_limit(max_frames: Option<usize>) -> Result<usize, String> {
+    let frames = max_frames.unwrap_or(DEFAULT_MAX_FRAMES);
+    if frames > MAX_RECORDED_FRAMES {
+        return Err(format!("max_frames must be at most {MAX_RECORDED_FRAMES}"));
+    }
+    Ok(frames)
 }
 
 /// A token nobody else on the machine can guess: `RandomState` is seeded
@@ -431,7 +462,7 @@ impl Core {
             Request::RecordStart { max_frames } => {
                 self.debug.recording = Some(Recording {
                     start: Instant::now(),
-                    max_frames: max_frames.unwrap_or(DEFAULT_MAX_FRAMES),
+                    max_frames: recording_limit(max_frames)?,
                     frames: Vec::new(),
                 });
                 Ok(Reply::ok(json!({})))
@@ -584,6 +615,7 @@ impl Core {
         state: &mut WindowState,
         mouse: &MouseRequest,
     ) -> Result<(), String> {
+        check_mouse_limits(mouse)?;
         let position = self.mouse_position(state, mouse)?;
         let mods = parse_mods(&mouse.mods)?;
         let button = match mouse.button {
@@ -962,6 +994,38 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn mouse_requests_are_bounded() {
+        let mouse = |text: &str| serde_json::from_str::<MouseRequest>(text).unwrap();
+        assert!(check_mouse_limits(&mouse(r#"{"kind":"click","count":10}"#)).is_ok());
+        assert_eq!(
+            check_mouse_limits(&mouse(r#"{"kind":"click","count":11}"#)),
+            Err("count must be at most 10".into())
+        );
+        assert!(check_mouse_limits(&mouse(r#"{"kind":"scroll","lines":-100}"#)).is_ok());
+        for lines in ["101", "-101", "1e30"] {
+            let text = format!(r#"{{"kind":"scroll","lines":{lines}}}"#);
+            assert_eq!(
+                check_mouse_limits(&mouse(&text)),
+                Err("lines must be a number between -100 and 100".into()),
+                "{lines}"
+            );
+        }
+        let mut nan = mouse(r#"{"kind":"scroll"}"#);
+        nan.lines = f32::NAN;
+        assert!(check_mouse_limits(&nan).is_err());
+    }
+
+    #[test]
+    fn recordings_are_bounded() {
+        assert_eq!(recording_limit(None), Ok(DEFAULT_MAX_FRAMES));
+        assert_eq!(recording_limit(Some(600)), Ok(600));
+        assert_eq!(
+            recording_limit(Some(601)),
+            Err("max_frames must be at most 600".into())
+        );
     }
 
     #[test]

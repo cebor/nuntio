@@ -2,6 +2,7 @@
 //! (feature `debug-server`) and remote-control it, to look at it and try
 //! things out without touching the keyboard. See `drive help`.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -32,7 +33,7 @@ usage: cargo xtask drive <command>
   cells --line L [--from C] [--to C] [--pane N]
                           colors and attributes of the cells in a line
   shot [<file.png>] [--pane N]
-                          screenshot (default target/nuntio-debug/shot.png)
+                          screenshot (default <debug dir>/shot.png)
   key <combo>...          e.g. `key ctrl+shift+t`, `key up up enter`
   type <text>             type text; \\r \\n \\t \\e \\\\ and \\xNN are escapes
   paste <text>            paste text (bracketed, may ask for confirmation)
@@ -194,9 +195,19 @@ pub fn main(args: &[String]) -> Result<()> {
     }
 }
 
-/// Where the debug instance keeps its files.
+/// Where the debug instance keeps its files (the token among them).
 fn dir() -> PathBuf {
-    root().join("target").join("nuntio-debug")
+    debug_dir(cfg!(windows), std::env::var_os("LOCALAPPDATA"), &root())
+}
+
+/// On Windows files in `target` or the temp dir may be readable by other
+/// users of the machine, so the token goes under the user's own profile.
+fn debug_dir(windows: bool, local_app_data: Option<OsString>, root: &Path) -> PathBuf {
+    match (windows, local_app_data) {
+        (true, Some(base)) => PathBuf::from(base).join("nuntio").join("debug"),
+        (true, None) => std::env::temp_dir().join("nuntio-debug"),
+        (false, _) => root.join("target").join("nuntio-debug"),
+    }
 }
 
 fn state_file() -> PathBuf {
@@ -927,6 +938,25 @@ mod tests {
         assert_eq!(quote(r"C:\my dir\"), r#""C:\my dir\\""#);
         assert_eq!(quote(r#"say "hi""#), r#""say \"hi\"""#);
         assert_eq!(quote(""), r#""""#);
+    }
+
+    #[test]
+    fn debug_dir_is_private_on_windows() {
+        let root = Path::new("/repo");
+        assert_eq!(
+            debug_dir(true, Some("/Users/me/AppData/Local".into()), root),
+            Path::new("/Users/me/AppData/Local")
+                .join("nuntio")
+                .join("debug")
+        );
+        assert_eq!(
+            debug_dir(true, None, root),
+            std::env::temp_dir().join("nuntio-debug")
+        );
+        assert_eq!(
+            debug_dir(false, Some("/ignored".into()), root),
+            root.join("target").join("nuntio-debug")
+        );
     }
 
     #[test]

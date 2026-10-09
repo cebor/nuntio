@@ -75,7 +75,7 @@ impl SystemMonitor {
         let spawned = thread::Builder::new().name("sysmon".into()).spawn(move || {
             let mut sampler = Sampler::new(&wanted);
             loop {
-                let sample = sampler.sample();
+                let sample = sampler.sample(Instant::now());
                 if proxy.send_event(UserEvent::SystemStats(sample)).is_err() {
                     return;
                 }
@@ -102,6 +102,7 @@ impl SystemMonitor {
 }
 
 struct Sampler {
+    created: Instant,
     system: Option<System>,
     cpu: bool,
     memory: bool,
@@ -117,11 +118,12 @@ struct BatterySource {
 
 impl Sampler {
     fn new(items: &[StatusItem]) -> Self {
+        let created = Instant::now();
         let cpu = items.contains(&StatusItem::Cpu);
         let memory = items.contains(&StatusItem::Memory);
         let networks = items
             .contains(&StatusItem::Network)
-            .then(|| (Networks::new_with_refreshed_list(), Instant::now()));
+            .then(|| (Networks::new_with_refreshed_list(), created));
         let battery = items
             .contains(&StatusItem::Battery)
             .then(starship_battery::Manager::new)
@@ -141,6 +143,7 @@ impl Sampler {
             system.refresh_cpu_usage();
         }
         Self {
+            created,
             system,
             cpu,
             memory,
@@ -149,10 +152,15 @@ impl Sampler {
         }
     }
 
-    fn sample(&mut self) -> Sample {
+    /// Reads everything wanted. CPU usage and network rates are differences
+    /// to the previous reading, so they are only reported once a full
+    /// `INTERVAL` has passed since the sampler was created: the reading
+    /// before that covers an arbitrary sliver of time.
+    fn sample(&mut self, now: Instant) -> Sample {
+        let primed = now.saturating_duration_since(self.created) >= INTERVAL;
         let mut sample = Sample::default();
         if let Some(system) = self.system.as_mut() {
-            if self.cpu {
+            if self.cpu && primed {
                 system.refresh_cpu_usage();
                 sample.cpu = Some(system.global_cpu_usage());
             }
@@ -164,10 +172,12 @@ impl Sampler {
                 });
             }
         }
-        if let Some((networks, last)) = self.networks.as_mut() {
+        if primed && let Some((networks, last)) = self.networks.as_mut() {
             networks.refresh(true);
-            let now = Instant::now();
-            let seconds = now.duration_since(*last).as_secs_f64().max(0.001);
+            let seconds = now
+                .saturating_duration_since(*last)
+                .as_secs_f64()
+                .max(0.001);
             *last = now;
             let (down, up) = networks
                 .iter()
@@ -223,5 +233,18 @@ mod tests {
         for name in ["eth0", "wlan0", "en0", "enp3s0", "Wi-Fi", "local"] {
             assert!(!is_virtual(name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_first_reading_has_no_cpu_or_network() {
+        let items = [StatusItem::Cpu, StatusItem::Memory, StatusItem::Network];
+        let mut sampler = Sampler::new(&items);
+        let first = sampler.sample(sampler.created);
+        assert_eq!(first.cpu, None);
+        assert_eq!(first.network, None);
+        assert!(first.memory.is_some());
+        let second = sampler.sample(sampler.created + INTERVAL);
+        assert!(second.cpu.is_some());
+        assert!(second.network.is_some());
     }
 }
