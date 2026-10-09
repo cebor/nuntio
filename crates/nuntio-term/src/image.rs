@@ -26,6 +26,7 @@ use base64::Engine;
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use image::imageops::{self, FilterType};
+use image::metadata::Orientation;
 use image::{ColorType, DynamicImage, ImageDecoder, ImageReader, Limits, RgbaImage};
 use thiserror::Error;
 
@@ -47,8 +48,10 @@ const IMAGE_MEMORY_LIMIT: usize = 512 << 20;
 /// than the 4096 texels of the smallest GPU limit, so the atlas's 1-texel
 /// padding still fits.
 const MAX_BITMAP_SIDE: u64 = 4095;
-/// Most rows an image may cover.
+/// Most rows an image may cover, at most.
 const MAX_LINES: u64 = 10_000;
+/// Most rows an image may cover, in screens of the terminal it was sent to.
+const MAX_SCREENS: u64 = 16;
 /// Most columns an image may cover; more than any terminal is wide.
 const MAX_COLUMNS: u64 = 10_000;
 /// Largest image id: ids fill the 24 bits of an RGB color.
@@ -102,7 +105,7 @@ fn mark(index: usize) -> char {
         .expect("marks are valid characters")
 }
 
-fn image_cell(id: u32, line: usize, column: usize, bg: Color) -> Cell {
+pub(crate) fn image_cell(id: u32, line: usize, column: usize, bg: Color) -> Cell {
     let mut cell = Cell {
         c: PLACEHOLDER,
         fg: Color::Spec(Rgb {
@@ -298,12 +301,17 @@ pub(crate) fn decode(
     let mut decoder = reader.into_decoder()?;
     // `into_decoder` only checks the dimensions; reserve what decoding and
     // the RGBA copy allocate.
-    budget.reserve(decoder.total_bytes())?;
+    let total = decoder.total_bytes();
+    budget.reserve(total)?;
     if decoder.color_type() != ColorType::Rgba8 {
         let (w, h) = decoder.dimensions();
         budget.reserve(u64::from(w) * u64::from(h) * 4)?;
     }
     let orientation = decoder.orientation()?;
+    // Rotating by a quarter turn copies the image.
+    if swaps_axes(orientation) {
+        budget.reserve(total)?;
+    }
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
     let decoded = img.into_rgba8();
@@ -341,7 +349,8 @@ pub(crate) fn decode(
     drawn = (drawn.0.max(1), drawn.1.max(1));
 
     let columns = cells.0.div_ceil(cw).clamp(1, MAX_COLUMNS);
-    let lines = cells.1.div_ceil(ch).clamp(1, MAX_LINES);
+    let max_lines = (geometry.lines as u64 * MAX_SCREENS).clamp(1, MAX_LINES);
+    let lines = cells.1.div_ceil(ch).clamp(1, max_lines);
     let mut bitmap = (columns * cw, lines * ch);
     let longest = bitmap.0.max(bitmap.1);
     if longest > MAX_BITMAP_SIDE {
@@ -352,6 +361,14 @@ pub(crate) fn decode(
     // Only past the row and column limits is the image larger than its cells.
     drawn = (drawn.0.min(bitmap.0), drawn.1.min(bitmap.1));
 
+    // The canvas, the scaled image and, when enlarging, the f32 copy
+    // `imageops::resize` makes of the shrunk image.
+    let shrunk = (inherent.0.min(drawn.0), inherent.1.min(drawn.1));
+    let mut canvas_bytes = bitmap.0 * bitmap.1 * 4 + drawn.0 * drawn.1 * 4;
+    if shrunk != drawn {
+        canvas_bytes += shrunk.0 * drawn.1 * 16;
+    }
+    budget.reserve(canvas_bytes)?;
     let mut canvas = RgbaImage::new(bitmap.0 as u32, bitmap.1 as u32);
     let scaled = scale(decoded, (drawn.0 as u32, drawn.1 as u32));
     imageops::replace(&mut canvas, &scaled, 0, 0);
@@ -364,6 +381,18 @@ pub(crate) fn decode(
         height: canvas.height(),
         rgba: canvas.into_raw().into_boxed_slice(),
     })
+}
+
+/// Whether applying `orientation` turns the image by a quarter turn and so
+/// has to copy it.
+fn swaps_axes(orientation: Orientation) -> bool {
+    matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    )
 }
 
 /// `image` scaled to `size`, averaged and kept premultiplied, so the color
@@ -432,6 +461,9 @@ pub(crate) struct ImageStore {
     bytes: usize,
     /// Above this, images no cell of the active grid refers to are dropped.
     budget: usize,
+    /// Below this many bytes, a scan that left the store over budget isn't
+    /// repeated.
+    next_scan: usize,
     /// Above this, images not visible are dropped.
     limit: usize,
 }
@@ -456,6 +488,7 @@ impl ImageStore {
             order: VecDeque::new(),
             recent: HashMap::new(),
             bytes: 0,
+            next_scan: 0,
             budget,
             limit,
         }
@@ -514,6 +547,10 @@ impl ImageStore {
     /// ones that aren't visible, wherever they were placed, and then any.
     pub(crate) fn evict<T: EventListener>(&mut self, term: &Term<T>) {
         if self.bytes <= self.budget {
+            self.next_scan = 0;
+            return;
+        }
+        if self.bytes < self.next_scan && self.bytes <= self.limit {
             return;
         }
         let alt = term.mode().contains(TermMode::ALT_SCREEN);
@@ -537,6 +574,14 @@ impl ImageStore {
         }
         let images = &self.images;
         self.recent.retain(|_, id| images.contains_key(id));
+        // Images in the scrollback stay referenced, so a scan that left the
+        // store over budget would find nothing again: rescan after another
+        // quarter budget of data, or at once over the hard limit.
+        self.next_scan = if self.bytes > self.budget {
+            self.bytes + self.budget / 4
+        } else {
+            0
+        };
     }
 
     /// Drop the oldest images `droppable` accepts until at most `target`
@@ -783,6 +828,47 @@ mod tests {
     }
 
     #[test]
+    fn rows_are_limited_relative_to_the_screen() {
+        let args = "inline=1;width=2;height=10000;preserveAspectRatio=0";
+        let image = decode_with(args, png(1, 1), GEOMETRY);
+        assert_eq!(image.lines, 384);
+        let tall = CellGeometry {
+            lines: 1000,
+            ..GEOMETRY
+        };
+        let image = decode_with(args, png(1, 1), tall);
+        assert_eq!(image.lines, 10_000);
+    }
+
+    #[test]
+    fn enlarging_beyond_the_budget_is_refused() {
+        let request = request(
+            "inline=1;width=4095px;height=4095px;preserveAspectRatio=0",
+            png(4095, 1),
+        );
+        let result = decode(&request, &parse_args(&request.args), GEOMETRY);
+        assert!(matches!(result, Err(ImageError::Image(_))));
+    }
+
+    #[test]
+    fn quarter_turns_swap_axes() {
+        for turn in [
+            Orientation::Rotate90,
+            Orientation::Rotate270,
+            Orientation::Rotate270FlipH,
+        ] {
+            assert!(swaps_axes(turn));
+        }
+        for other in [
+            Orientation::Rotate180,
+            Orientation::NoTransforms,
+            Orientation::FlipHorizontal,
+        ] {
+            assert!(!swaps_axes(other));
+        }
+    }
+
+    #[test]
     fn unknown_cell_size() {
         let request = request("inline=1", png(1, 1));
         let geometry = CellGeometry {
@@ -902,6 +988,34 @@ mod tests {
         assert_eq!(store.cached(key(1)), None);
         assert!(store.get(kept).is_some());
         assert_eq!(store.cached(key(2)), Some(kept));
+    }
+
+    #[test]
+    fn a_scan_that_found_nothing_is_not_repeated() {
+        let mut term = term(4, 2);
+        let mut parser: Processor = Processor::new();
+        // Budget 16 bytes, limit 32; each image is 16 bytes.
+        let mut store = ImageStore::with_budget(16);
+        let a = store.insert(test_key(1), test_image(2, 2));
+        place(&mut term, a, &test_image(2, 2));
+        parser.advance(&mut term, b"\x1b[1;3H");
+        let b = store.insert(test_key(2), test_image(2, 2));
+        place(&mut term, b, &test_image(2, 2));
+        store.evict(&term);
+        assert!(store.get(a).is_some() && store.get(b).is_some());
+        assert_eq!(store.next_scan, 36);
+
+        // Overwrite both images with text: nothing refers to them any more,
+        // but the scan isn't repeated yet.
+        parser.advance(&mut term, b"\x1b[Hxxxx\r\nxxxx");
+        store.evict(&term);
+        assert!(store.get(a).is_some());
+
+        // Over the hard limit it scans at once.
+        let c = store.insert(test_key(3), test_image(2, 2));
+        store.evict(&term);
+        assert!(store.get(a).is_none());
+        assert!(store.get(c).is_some());
     }
 
     fn test_key(n: u64) -> ImageKey {

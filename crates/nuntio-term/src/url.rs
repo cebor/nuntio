@@ -7,6 +7,8 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
 
+use crate::image::image_cell_ref;
+
 /// Longest wrapped line considered when looking for URLs, in rows.
 const MAX_WRAPPED_ROWS: usize = 32;
 
@@ -78,12 +80,30 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
         });
     }
 
-    let chars: Vec<char> = points.iter().map(|p| grid[*p].c).collect();
-    let range = find_urls(&chars).into_iter().find(|r| r.contains(&index))?;
+    // Text per cell: the base character and its combining marks; an image
+    // cell is a gap, not text. `first[i]` is where cell `i` starts in
+    // `chars`.
+    let mut chars: Vec<char> = Vec::with_capacity(points.len());
+    let mut first: Vec<usize> = Vec::with_capacity(points.len() + 1);
+    for p in &points {
+        first.push(chars.len());
+        let cell = &grid[*p];
+        if image_cell_ref(cell).is_some() {
+            chars.push(' ');
+        } else {
+            chars.push(cell.c);
+            chars.extend(cell.zerowidth().unwrap_or_default());
+        }
+    }
+    first.push(chars.len());
+    let cell_of = |char_index: usize| first.partition_point(|&f| f <= char_index) - 1;
+    let range = find_urls(&chars)
+        .into_iter()
+        .find(|r| r.start < first[index + 1] && r.end > first[index])?;
     Some(Link {
         url: chars[range.clone()].iter().collect(),
-        start: to_viewport(points[range.start]),
-        end: to_viewport(points[range.end - 1]),
+        start: to_viewport(points[cell_of(range.start)]),
+        end: to_viewport(points[cell_of(range.end - 1)]),
     })
 }
 
@@ -145,25 +165,19 @@ fn starts_with(text: &[char], prefix: &str) -> bool {
 /// Drop punctuation that ends a sentence rather than the URL, and closing
 /// brackets without a matching opening one inside the URL.
 fn trim_trailing(text: &[char], start: usize, mut end: usize) -> usize {
-    loop {
-        let Some(&last) = text[start..end].last() else {
-            return end;
-        };
-        let unbalanced = |open: char, close: char| {
-            let url = &text[start..end];
-            last == close
-                && url.iter().filter(|&&c| c == open).count()
-                    < url.iter().filter(|&&c| c == close).count()
-        };
-        if matches!(last, '.' | ',' | ':' | ';' | '!' | '?')
-            || unbalanced('(', ')')
-            || unbalanced('[', ']')
-        {
-            end -= 1;
-        } else {
-            return end;
+    let count = |c: char| text[start..end].iter().filter(|&&x| x == c).count();
+    let (round_open, mut round_close) = (count('('), count(')'));
+    let (square_open, mut square_close) = (count('['), count(']'));
+    while let Some(&last) = text[start..end].last() {
+        match last {
+            '.' | ',' | ':' | ';' | '!' | '?' => {}
+            ')' if round_open < round_close => round_close -= 1,
+            ']' if square_open < square_close => square_close -= 1,
+            _ => break,
         }
+        end -= 1;
     }
+    end
 }
 
 #[cfg(test)]
@@ -198,6 +212,11 @@ mod tests {
             urls("https://en.wikipedia.org/wiki/Rust_(programming_language)"),
             ["https://en.wikipedia.org/wiki/Rust_(programming_language)"]
         );
+        assert_eq!(
+            urls(&format!("https://a{}", ")".repeat(30_000))),
+            ["https://a"]
+        );
+        assert_eq!(urls("https://a/b_(c)))"), ["https://a/b_(c)"]);
     }
 
     #[test]
@@ -216,5 +235,27 @@ mod tests {
         assert!(urls("xhttps://example.com").is_empty());
         assert!(urls("https:// nothing").is_empty());
         assert_eq!(urls("HTTPS://EXAMPLE.COM"), ["HTTPS://EXAMPLE.COM"]);
+    }
+
+    #[test]
+    fn an_inline_image_ends_the_link() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::Config;
+        use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
+
+        let size = crate::TermSize {
+            columns: 40,
+            lines: 3,
+            cell_width: 1,
+            cell_height: 1,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"https://x.org");
+        term.grid_mut()[Point::new(Line(0), Column(13))] =
+            crate::image::image_cell(1, 0, 0, Color::Named(NamedColor::Background));
+        let link = link_at(&term, Point::new(Line(0), Column(3))).unwrap();
+        assert_eq!(link.url, "https://x.org");
+        assert_eq!(link.end, (12, 0));
     }
 }

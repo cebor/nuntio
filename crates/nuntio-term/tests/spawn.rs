@@ -465,6 +465,16 @@ fn links_across_wrapped_lines() {
 }
 
 #[test]
+fn links_include_combining_marks() {
+    let (handle, rx) = spawn("printf 'https://example.com/cafe\\314\\201 x'");
+    wait_for_exit(&rx);
+
+    let link = handle.link_at(at(5, 0)).unwrap();
+    assert_eq!(link.url, "https://example.com/cafe\u{301}");
+    assert_eq!((link.start, link.end), ((0, 0), (23, 0)));
+}
+
+#[test]
 fn search_survives_a_cleared_scrollback() {
     let script = "echo marker; for i in $(seq 1 60); do echo x; done; printf end";
     let (handle, rx) = spawn(script);

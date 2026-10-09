@@ -43,13 +43,34 @@ struct Counted {
     starts: Vec<Point>,
     more: bool,
     generation: u64,
+    /// The scan began at the top of the scrollback, so the index of a match
+    /// among `starts` is its index among all matches.
+    from_top: bool,
+    /// Only a window of the scrollback was scanned.
+    partial: bool,
 }
 
 impl Counted {
-    /// Scan the whole scrollback for at most `MAX_COUNTED` matches.
-    fn scan<T>(term: &Term<T>, regex: &mut RegexSearch, generation: u64) -> Self {
-        let start = Point::new(term.topmost_line(), Column(0));
-        let end = Point::new(term.bottommost_line(), term.last_column());
+    /// Scan for at most `MAX_COUNTED` matches: the whole scrollback, or with
+    /// `around` only the lines within `MAX_SEARCH_WHILE_TYPING` of that line.
+    fn scan<T>(
+        term: &Term<T>,
+        regex: &mut RegexSearch,
+        generation: u64,
+        around: Option<Line>,
+    ) -> Self {
+        let top = term.topmost_line();
+        let bottom = term.bottommost_line();
+        let (first, last) = match around {
+            Some(line) => {
+                let reach = MAX_SEARCH_WHILE_TYPING as i32;
+                (top.max(line - reach), bottom.min(line + reach))
+            }
+            None => (top, bottom),
+        };
+        let start = Point::new(first, Column(0));
+        let end = Point::new(last, term.last_column());
+        let partial = first > top || last < bottom;
         let mut starts = Vec::new();
         let mut more = false;
         for m in RegexIter::new(start, end, Direction::Right, term, regex) {
@@ -61,8 +82,10 @@ impl Counted {
         }
         Self {
             starts,
-            more,
+            more: more || partial,
             generation,
+            from_top: first == top,
+            partial,
         }
     }
 
@@ -72,7 +95,7 @@ impl Counted {
         let total = self.starts.len();
         match self.starts.binary_search(&current) {
             Ok(i) => Some(MatchPosition {
-                index: Some(i + 1),
+                index: self.from_top.then_some(i + 1),
                 total,
                 more: self.more,
             }),
@@ -212,7 +235,13 @@ pub(crate) fn find<T: EventListener>(
     };
     // Points go stale when the scrollback shrinks (`clear`, resize); an
     // anchor outside the grid would index out of bounds.
-    let in_grid = |p: &Point| p.line >= term.topmost_line() && p.line <= term.bottommost_line();
+    // Columns too: narrowing the pane leaves an anchor right of the new
+    // last column.
+    let in_grid = |p: &Point| {
+        p.line >= term.topmost_line()
+            && p.line <= term.bottommost_line()
+            && p.column <= term.last_column()
+    };
     let origin = match &search.current {
         Some(m) if up => m.start().sub(term, Boundary::None, 1),
         Some(m) => m.end().add(term, Boundary::None, 1),
@@ -236,13 +265,20 @@ pub(crate) fn find<T: EventListener>(
     search.position = search
         .current
         .is_some()
-        .then(|| position(term, search, generation));
+        .then(|| position(term, search, generation, max_lines.is_some()));
     search.current.is_some()
 }
 
 /// Where the current match is among the matches of the scrollback, from the
-/// cached scan if the grid hasn't changed since.
-fn position<T>(term: &Term<T>, search: &mut Search, generation: u64) -> MatchPosition {
+/// cached scan if the grid hasn't changed since. `bounded` (typing) counts
+/// only the lines around the current match; the index is then unknown
+/// unless that window reaches the top.
+fn position<T>(
+    term: &Term<T>,
+    search: &mut Search,
+    generation: u64,
+    bounded: bool,
+) -> MatchPosition {
     let current = *search
         .current
         .as_ref()
@@ -250,11 +286,17 @@ fn position<T>(term: &Term<T>, search: &mut Search, generation: u64) -> MatchPos
         .start();
     if let Some(counted) = &search.counted
         && counted.generation == generation
+        && (bounded || !counted.partial)
         && let Some(position) = counted.position(current)
     {
         return position;
     }
-    let counted = Counted::scan(term, &mut search.regex, generation);
+    let counted = Counted::scan(
+        term,
+        &mut search.regex,
+        generation,
+        bounded.then_some(current.line),
+    );
     let position = counted.position(current).unwrap_or(MatchPosition {
         index: None,
         total: counted.starts.len(),
@@ -325,6 +367,63 @@ mod tests {
         assert!(find(&mut term, &mut search, false, None, 2));
         let next = search.current_in(&term).cloned().unwrap();
         assert!(next.start().line > current.start().line);
+    }
+
+    #[test]
+    fn a_stale_anchor_column_after_narrowing_is_ignored() {
+        let mut term = term(4);
+        feed(&mut term, &format!("{}needle", " ".repeat(14)));
+        let mut first = Search::new("needle", false).unwrap();
+        assert!(find(&mut term, &mut first, true, None, 0));
+        term.resize(crate::TermSize {
+            columns: 10,
+            lines: 4,
+            cell_width: 1,
+            cell_height: 1,
+        });
+        let mut second = Search::new("needle", false).unwrap().continue_from(&first);
+        assert!(find(
+            &mut term,
+            &mut second,
+            true,
+            Some(MAX_SEARCH_WHILE_TYPING),
+            1
+        ));
+        let current = second.current_in(&term).cloned().unwrap();
+        assert_eq!(text_at(&term, &current), "needle");
+    }
+
+    #[test]
+    fn typing_counts_only_a_window() {
+        let mut term = term(4);
+        feed(&mut term, "needle\r\n");
+        feed(&mut term, &"x\r\n".repeat(2500));
+        feed(&mut term, "needle\r\n");
+        let mut search = Search::new("needle", false).unwrap();
+        assert!(find(
+            &mut term,
+            &mut search,
+            true,
+            Some(MAX_SEARCH_WHILE_TYPING),
+            0
+        ));
+        assert_eq!(
+            search.position(),
+            Some(MatchPosition {
+                index: None,
+                total: 1,
+                more: true
+            })
+        );
+        assert!(find(&mut term, &mut search, true, None, 0));
+        assert_eq!(
+            search.position(),
+            Some(MatchPosition {
+                index: Some(1),
+                total: 2,
+                more: false
+            })
+        );
     }
 
     #[test]
