@@ -1,4 +1,6 @@
 use std::fmt::Debug;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use thiserror::Error;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
@@ -15,6 +17,8 @@ pub enum GpuError {
     UnsupportedSurface,
     #[error("failed to configure the surface: {0}")]
     Configure(String),
+    #[error(transparent)]
+    Fonts(#[from] crate::font::NoFontsError),
     #[cfg(feature = "capture")]
     #[error("failed to capture the frame: {0}")]
     Capture(String),
@@ -57,6 +61,9 @@ pub struct GpuContext {
     reconfigure: bool,
     /// The adapter renders on the CPU.
     software: bool,
+    /// The device was lost or reported an error nobody captured; the
+    /// context must be rebuilt.
+    lost: Arc<AtomicBool>,
     /// The visual the surface was created from, if it wasn't the HWND.
     #[cfg(windows)]
     layer: Option<crate::dcomp::Layer>,
@@ -147,6 +154,7 @@ impl GpuContext {
             match setup(&adapter, &surface, width, height, transparent) {
                 Ok((device, queue, config, transparent)) => {
                     tracing::info!(adapter = ?info, "selected GPU adapter");
+                    let lost = watch_device(&device);
                     let context = Self {
                         instance,
                         surface: Some(surface),
@@ -156,6 +164,7 @@ impl GpuContext {
                         transparent,
                         reconfigure: false,
                         software: info.device_type == wgpu::DeviceType::Cpu,
+                        lost,
                         #[cfg(windows)]
                         layer: None,
                     };
@@ -214,7 +223,9 @@ impl GpuContext {
         // The last frame's back buffer is kept by the device until its
         // submission is cleaned up, and with it the swapchain (on DX12 the
         // successor's configure fails with "Access is denied").
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        if !self.lost() {
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        }
         // Every surface gets a new sublayer of the view's layer, which
         // neither wgpu nor raw-window-metal removes: it would stay under the
         // successor's with its last frame, showing through where the window
@@ -324,32 +335,38 @@ impl GpuContext {
         self.config.format
     }
 
+    /// The device was lost (or hit an error it can't recover from).
+    pub(crate) fn lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
     /// Get the next surface texture, or the reason to skip this frame.
     pub(crate) fn acquire(&mut self) -> Result<wgpu::SurfaceTexture, FrameStatus> {
+        if self.lost() {
+            return Err(FrameStatus::Lost);
+        }
         if std::mem::take(&mut self.reconfigure) {
             let _ = self.configure();
         }
         let Some(surface) = &self.surface else {
             return Err(FrameStatus::Lost);
         };
-        match surface.get_current_texture() {
+        let result = surface.get_current_texture();
+        if let Some(status) = status_without_texture(&result) {
+            if matches!(result, wgpu::CurrentSurfaceTexture::Outdated) {
+                let _ = self.configure();
+            }
+            return Err(status);
+        }
+        match result {
             wgpu::CurrentSurfaceTexture::Success(frame) => Ok(frame),
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 // Configuring while the frame is alive panics; do it next time.
                 self.reconfigure = true;
                 Ok(frame)
             }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                let _ = self.configure();
-                Err(FrameStatus::Skipped)
-            }
-            wgpu::CurrentSurfaceTexture::Lost => Err(FrameStatus::Lost),
-            wgpu::CurrentSurfaceTexture::Timeout => Err(FrameStatus::Skipped),
-            wgpu::CurrentSurfaceTexture::Occluded => Err(FrameStatus::Paused),
-            other => {
-                tracing::warn!(?other, "failed to acquire a frame");
-                Err(FrameStatus::Paused)
-            }
+            // `status_without_texture` handled every result without a frame.
+            _ => Err(FrameStatus::Lost),
         }
     }
 }
@@ -506,5 +523,85 @@ fn configure_checked(
     match pollster::block_on(scope.pop()) {
         Some(err) => Err(GpuError::Configure(err.to_string())),
         None => Ok(()),
+    }
+}
+
+/// Run `create`, which allocates GPU memory, and return `None` (after
+/// logging) instead of panicking if the device ran out of memory.
+pub(crate) fn oom_checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Option<T> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let created = create();
+    match pollster::block_on(scope.pop()) {
+        Some(err) => {
+            tracing::error!("GPU allocation failed: {err}");
+            None
+        }
+        None => Some(created),
+    }
+}
+
+/// Flag the device as lost when wgpu reports it, and when an error nobody
+/// captured turns up (wgpu's default handler for those panics).
+fn watch_device(device: &wgpu::Device) -> Arc<AtomicBool> {
+    let lost = Arc::new(AtomicBool::new(false));
+    let flag = lost.clone();
+    device.set_device_lost_callback(move |reason, message| {
+        if reason != wgpu::DeviceLostReason::Destroyed {
+            tracing::error!(?reason, "GPU device lost: {message}");
+        }
+        flag.store(true, Ordering::Release);
+    });
+    let flag = lost.clone();
+    device.on_uncaptured_error(Arc::new(move |err: wgpu::Error| {
+        tracing::error!("GPU error: {err}");
+        flag.store(true, Ordering::Release);
+    }));
+    lost
+}
+
+/// The frame status for a surface result that came without a texture, or
+/// `None` if there is a texture to draw into.
+fn status_without_texture(result: &wgpu::CurrentSurfaceTexture) -> Option<FrameStatus> {
+    match result {
+        wgpu::CurrentSurfaceTexture::Success(_) | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
+            None
+        }
+        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Timeout => {
+            Some(FrameStatus::Skipped)
+        }
+        wgpu::CurrentSurfaceTexture::Occluded => Some(FrameStatus::Paused),
+        wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Validation => {
+            Some(FrameStatus::Lost)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surface_results_without_a_texture_map_to_statuses() {
+        use wgpu::CurrentSurfaceTexture as Result;
+        assert_eq!(
+            status_without_texture(&Result::Outdated),
+            Some(FrameStatus::Skipped)
+        );
+        assert_eq!(
+            status_without_texture(&Result::Timeout),
+            Some(FrameStatus::Skipped)
+        );
+        assert_eq!(
+            status_without_texture(&Result::Occluded),
+            Some(FrameStatus::Paused)
+        );
+        assert_eq!(
+            status_without_texture(&Result::Lost),
+            Some(FrameStatus::Lost)
+        );
+        assert_eq!(
+            status_without_texture(&Result::Validation),
+            Some(FrameStatus::Lost)
+        );
     }
 }

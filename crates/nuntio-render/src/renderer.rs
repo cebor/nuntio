@@ -4,14 +4,16 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use bytemuck::{Pod, Zeroable};
-use nuntio_term::{CursorStyle, ImagePiece, Rgb, Snapshot, SnapshotCell, UnderlineStyle};
+use nuntio_term::{
+    CursorStyle, ImagePiece, MAX_ZEROWIDTH, Rgb, Snapshot, SnapshotCell, UnderlineStyle,
+};
 use unicode_width::UnicodeWidthChar;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::font::{CellMetrics, FaceStyle, Fonts};
 use crate::frame::{Frame, Rect, UiRect, UiText};
-use crate::gpu::{FrameStatus, GpuContext, GpuError, GpuOptions};
+use crate::gpu::{FrameStatus, GpuContext, GpuError, GpuOptions, oom_checked};
 use crate::{box_drawing, decoration};
 
 const KIND_SOLID: u32 = 0;
@@ -32,6 +34,19 @@ const INITIAL_COLOR_ATLAS_SIZE: u32 = 512;
 /// `MAX_IMAGE_ATLAS_SIZE` (256 MiB) when inline images need it.
 const INITIAL_IMAGE_ATLAS_SIZE: u32 = 1024;
 const MAX_IMAGE_ATLAS_SIZE: u32 = 8192;
+
+/// Consecutive overflowing frames between two clears of the glyph atlas.
+const OVERFLOW_RETRY_FRAMES: u32 = 32;
+
+/// Most clusters (characters with combining marks) kept; the cache starts
+/// over beyond that.
+const MAX_CLUSTERS: usize = 4096;
+
+/// Whether the atlas may be cleared in a frame that follows
+/// `overflow_frames` overflowing ones.
+fn may_clear_atlas(overflow_frames: u32) -> bool {
+    overflow_frames.is_multiple_of(OVERFLOW_RETRY_FRAMES)
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -191,8 +206,14 @@ pub struct Renderer {
     cutout_start: usize,
     /// Problem with the configured font, reported once.
     font_warning: Option<String>,
-    /// The last frame didn't fit into the glyph atlas (already warned).
-    atlas_overflow: bool,
+    /// Consecutive frames in which glyphs didn't fit into the atlas and
+    /// were left out.
+    overflow_frames: u32,
+    /// Glyphs that don't fit into the atlas stay blank for this frame.
+    skip_missing: bool,
+    /// The last frame had more instances than the GPU buffer holds (already
+    /// warned).
+    instances_truncated: bool,
     /// The last frame's images didn't fit into the image atlas (already
     /// warned).
     image_overflow: bool,
@@ -211,8 +232,10 @@ impl Renderer {
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
+        // Without any font there is nothing to draw: say so before the GPU
+        // is set up.
+        let (fonts, font_warning) = Fonts::new(font_family, font_size, scale_factor)?;
         let gpu = GpuContext::new(window, width, height, options)?;
-        let (fonts, font_warning) = Fonts::new(font_family, font_size, scale_factor);
         let device = &gpu.device;
 
         // Large fonts on HiDPI screens need room for many glyph masks (one
@@ -272,7 +295,7 @@ impl Renderer {
         let (bind_group_layout, pipeline, fill_pipeline, cutout_pipeline) =
             create_pipelines(device, gpu.format());
 
-        let instance_capacity = 4096;
+        let instance_capacity = MIN_INSTANCE_CAPACITY;
         let instance_buffer = create_instance_buffer(device, instance_capacity);
         let bind_group = create_bind_group(
             device,
@@ -310,7 +333,9 @@ impl Renderer {
             ui_start: 0,
             cutout_start: 0,
             font_warning,
-            atlas_overflow: false,
+            overflow_frames: 0,
+            skip_missing: false,
+            instances_truncated: false,
             image_overflow: false,
         })
     }
@@ -381,6 +406,7 @@ impl Renderer {
         self.clusters.clear();
         self.mask_atlas.clear();
         self.color_atlas.clear();
+        self.overflow_frames = 0;
     }
 
     /// Grow the atlas that ran full and drop all glyphs, which pointed into
@@ -398,13 +424,14 @@ impl Renderer {
         true
     }
 
-    /// Draw a frame and present it.
+    /// Draw a frame and present it. A frame that isn't presented (the
+    /// window is occluded, the surface or device is lost) uploads nothing.
     pub fn render(&mut self, frame: &Frame) -> FrameStatus {
-        self.prepare(frame);
         let surface_texture = match self.gpu.acquire() {
             Ok(texture) => texture,
             Err(status) => return status,
         };
+        self.prepare(frame);
         let view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -426,6 +453,9 @@ impl Renderer {
     /// it also works while the window is covered or minimized.
     #[cfg(feature = "capture")]
     pub fn capture(&mut self, frame: &Frame) -> Result<Capture, GpuError> {
+        if self.gpu.lost() {
+            return Err(GpuError::Capture("GPU device lost".into()));
+        }
         self.prepare(frame);
         let device = &self.gpu.device;
         let (width, height) = self.gpu.size();
@@ -440,23 +470,27 @@ impl Renderer {
             height,
             depth_or_array_layers: 1,
         };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("capture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
         let padded_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("capture"),
-            size: u64::from(padded_row) * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let (texture, buffer) = oom_checked(device, || {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("capture"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("capture"),
+                size: u64::from(padded_row) * u64::from(height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            (texture, buffer)
+        })
+        .ok_or_else(|| GpuError::Capture("out of memory".into()))?;
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("capture"),
@@ -503,10 +537,19 @@ impl Renderer {
     /// Lay out the frame's instances and upload them with the uniforms.
     fn prepare(&mut self, frame: &Frame) {
         self.upload_images(frame);
-        let mut cleared = false;
+        // While the atlas stays too small for the screen, clearing it again
+        // and again would re-rasterize everything every frame: only now and
+        // then, and draw what fits in between.
+        let streak = self.overflow_frames;
+        let mut cleared = !may_clear_atlas(streak);
+        self.skip_missing = false;
         loop {
             let Err(full) = self.build_instances(frame) else {
-                self.atlas_overflow = false;
+                self.overflow_frames = if self.skip_missing {
+                    self.overflow_frames.saturating_add(1)
+                } else {
+                    0
+                };
                 break;
             };
             // Grow before clearing, so the atlas settles at the size the
@@ -523,35 +566,58 @@ impl Renderer {
                 continue;
             }
             // Warn once, not on every frame while it stays too full.
-            if !self.atlas_overflow {
+            if streak == 0 {
                 tracing::warn!("screen content does not fit into the glyph atlas");
             }
-            self.atlas_overflow = true;
-            // Draw what was laid out; the UI part ends where it stopped.
-            let len = self.instances.len();
-            self.ui_start = self.ui_start.min(len);
-            self.cutout_start = len;
-            break;
+            // Glyphs that don't fit stay blank; everything else is drawn.
+            self.skip_missing = true;
         }
-        let device = &self.gpu.device;
-        let queue = &self.gpu.queue;
 
         let (width, height) = self.gpu.size();
         let uniforms = Uniforms {
             screen_size: [width as f32, height as f32],
             _pad: [0.0; 2],
         };
-        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+        self.gpu
+            .queue
+            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
-        if self.instances.len() > self.instance_capacity {
-            self.instance_capacity = self.instances.len().next_power_of_two();
-            self.instance_buffer = create_instance_buffer(device, self.instance_capacity);
+        let limit = max_instances(self.gpu.device.limits().max_buffer_size);
+        let mut truncated = self.limit_instances(limit);
+        let wanted = next_capacity(self.instance_capacity, self.instances.len(), limit);
+        if wanted != self.instance_capacity {
+            match try_create_instance_buffer(&self.gpu.device, wanted) {
+                Some(buffer) => {
+                    self.instance_buffer = buffer;
+                    self.instance_capacity = wanted;
+                }
+                // No memory to grow into: draw what the old buffer holds.
+                None if wanted > self.instance_capacity => {
+                    truncated |= self.limit_instances(self.instance_capacity);
+                }
+                None => {}
+            }
         }
-        queue.write_buffer(
+        if truncated && !self.instances_truncated {
+            tracing::warn!("frame has more instances than the GPU buffer limit; truncated");
+        }
+        self.instances_truncated = truncated;
+        self.gpu.queue.write_buffer(
             &self.instance_buffer,
             0,
             bytemuck::cast_slice(&self.instances),
         );
+    }
+
+    /// Cut the layout to `limit` instances. Returns whether it was cut.
+    fn limit_instances(&mut self, limit: usize) -> bool {
+        truncate_layout(
+            &mut self.instances,
+            limit,
+            &mut self.pane_batches,
+            &mut self.ui_start,
+            &mut self.cutout_start,
+        )
     }
 
     /// Bind the current atlas textures, after one was replaced.
@@ -571,9 +637,11 @@ impl Renderer {
     fn upload_images(&mut self, frame: &Frame) {
         if frame.panes.iter().all(|p| p.snapshot.images.is_empty()) {
             // Give the memory back that a large image needed.
-            if self.image_atlas.size() > INITIAL_IMAGE_ATLAS_SIZE {
-                self.image_atlas
-                    .reset(&self.gpu.device, INITIAL_IMAGE_ATLAS_SIZE);
+            if self.image_atlas.size() > INITIAL_IMAGE_ATLAS_SIZE
+                && self
+                    .image_atlas
+                    .reset(&self.gpu.device, INITIAL_IMAGE_ATLAS_SIZE)
+            {
                 self.image_regions.clear();
                 self.rebuild_bind_group();
             }
@@ -790,11 +858,16 @@ impl Renderer {
             let mut marks = std::mem::take(&mut self.cluster_text);
             marks.clear();
             marks.push(c);
+            let mut mark_count = 0;
             while let Some(&mark) = chars.peek() {
                 if mark.width() != Some(0) {
                     break;
                 }
-                marks.push(mark);
+                // Consume every mark, but keep only as many as a cell may have.
+                if mark_count < MAX_ZEROWIDTH {
+                    marks.push(mark);
+                    mark_count += 1;
+                }
                 chars.next();
             }
             let has_marks = marks.len() > c.len_utf8();
@@ -1016,7 +1089,17 @@ impl Renderer {
         {
             return Ok(sprites.clone());
         }
-        let sprites: Rc<[Sprite]> = self.font_sprites(text, style, small)?.into();
+        let sprites: Rc<[Sprite]> = match self.font_sprites(text, style, small) {
+            Ok(sprites) => sprites.into(),
+            // Blank for this frame; not cached, so it is tried again later.
+            Err(_) if self.skip_missing => return Ok(Rc::from(Vec::new())),
+            Err(full) => return Err(full),
+        };
+        // Only the map is cleared, never the atlas: regions already used by
+        // this frame's instances must stay valid.
+        if self.clusters.len() >= MAX_CLUSTERS {
+            self.clusters.clear();
+        }
         self.clusters.entry(text.into()).or_default()[slot] = Some(sprites.clone());
         Ok(sprites)
     }
@@ -1026,12 +1109,17 @@ impl Renderer {
         if let Some(sprites) = self.glyphs.get(&key) {
             return Ok(sprites.clone());
         }
-        let sprites: Rc<[Sprite]> = match &key {
-            GlyphKey::Char(c, style) => self.char_sprites(*c, *style, false)?,
-            GlyphKey::Small(c, style) => self.char_sprites(*c, *style, true)?,
-            GlyphKey::Underline(style) => self.underline_sprites(*style)?,
-        }
-        .into();
+        let built = match &key {
+            GlyphKey::Char(c, style) => self.char_sprites(*c, *style, false),
+            GlyphKey::Small(c, style) => self.char_sprites(*c, *style, true),
+            GlyphKey::Underline(style) => self.underline_sprites(*style),
+        };
+        let sprites: Rc<[Sprite]> = match built {
+            Ok(sprites) => sprites.into(),
+            // Blank for this frame; not cached, so it is tried again later.
+            Err(_) if self.skip_missing => return Ok(Rc::from(Vec::new())),
+            Err(full) => return Err(full),
+        };
         self.glyphs.insert(key, sprites.clone());
         Ok(sprites)
     }
@@ -1284,6 +1372,57 @@ fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffe
     })
 }
 
+/// Smallest instance buffer, in instances.
+const MIN_INSTANCE_CAPACITY: usize = 4096;
+
+/// Most instances a buffer of `max_buffer_size` bytes can hold.
+fn max_instances(max_buffer_size: u64) -> usize {
+    usize::try_from(max_buffer_size / size_of::<Instance>() as u64).unwrap_or(usize::MAX)
+}
+
+/// The capacity the instance buffer should have for `len` instances: it
+/// grows to the next power of two (at most `limit`) and shrinks when fewer
+/// than a quarter is used, so one huge frame doesn't pin its memory.
+fn next_capacity(capacity: usize, len: usize, limit: usize) -> usize {
+    if len > capacity {
+        len.next_power_of_two().min(limit)
+    } else if capacity > MIN_INSTANCE_CAPACITY && len < capacity / 4 {
+        (len.max(1).next_power_of_two() * 2)
+            .max(MIN_INSTANCE_CAPACITY)
+            .min(capacity)
+    } else {
+        capacity
+    }
+}
+
+/// Cut the layout to `limit` instances, keeping the pane batches and the
+/// UI/cutout starts inside it. Returns whether anything was cut.
+fn truncate_layout(
+    instances: &mut Vec<Instance>,
+    limit: usize,
+    batches: &mut Vec<PaneBatch>,
+    ui_start: &mut usize,
+    cutout_start: &mut usize,
+) -> bool {
+    if instances.len() <= limit {
+        return false;
+    }
+    instances.truncate(limit);
+    let end = u32::try_from(limit).unwrap_or(u32::MAX);
+    batches.retain(|batch| batch.range.start < end);
+    for batch in batches.iter_mut() {
+        batch.range.end = batch.range.end.min(end);
+    }
+    *ui_start = (*ui_start).min(limit);
+    *cutout_start = (*cutout_start).min(limit);
+    true
+}
+
+/// Like `create_instance_buffer`, but `None` if the GPU is out of memory.
+fn try_create_instance_buffer(device: &wgpu::Device, capacity: usize) -> Option<wgpu::Buffer> {
+    oom_checked(device, || create_instance_buffer(device, capacity))
+}
+
 fn create_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1438,6 +1577,79 @@ mod tests {
         // Nothing visible.
         assert_eq!(scissor(rect(850.0, 0.0, 100.0, 100.0), size), None);
         assert_eq!(scissor(rect(0.0, 0.0, 0.0, 100.0), size), None);
+    }
+
+    #[test]
+    fn next_capacity_grows_shrinks_and_clamps() {
+        const L: usize = 1 << 20;
+        assert_eq!(next_capacity(4096, 5000, L), 8192);
+        assert_eq!(next_capacity(4096, 5000, 6000), 6000);
+        assert_eq!(next_capacity(4096, 4096, L), 4096);
+        assert_eq!(next_capacity(8192, 2000, L), 4096);
+        assert_eq!(next_capacity(8192, 3000, L), 8192);
+        assert_eq!(max_instances(256 << 20), 4_194_304);
+    }
+
+    #[test]
+    fn truncate_layout_keeps_ranges_consistent() {
+        let batch = |range: Range<u32>| PaneBatch {
+            fill: false,
+            range,
+            area: rect(0.0, 0.0, 1.0, 1.0),
+        };
+        let layout = || {
+            (
+                vec![Instance::solid(0.0, 0.0, 1.0, 1.0, Rgb { r: 0, g: 0, b: 0 }); 34],
+                vec![batch(0..10), batch(10..20), batch(20..30)],
+            )
+        };
+        let ranges =
+            |batches: &[PaneBatch]| batches.iter().map(|b| b.range.clone()).collect::<Vec<_>>();
+
+        let (mut instances, mut batches) = layout();
+        let (mut ui_start, mut cutout_start) = (30, 34);
+        assert!(truncate_layout(
+            &mut instances,
+            15,
+            &mut batches,
+            &mut ui_start,
+            &mut cutout_start
+        ));
+        assert_eq!(ranges(&batches), [0..10, 10..15]);
+        assert_eq!((instances.len(), ui_start, cutout_start), (15, 15, 15));
+
+        let (mut instances, mut batches) = layout();
+        let (mut ui_start, mut cutout_start) = (30, 34);
+        assert!(truncate_layout(
+            &mut instances,
+            20,
+            &mut batches,
+            &mut ui_start,
+            &mut cutout_start
+        ));
+        assert_eq!(ranges(&batches), [0..10, 10..20]);
+        assert_eq!((instances.len(), ui_start, cutout_start), (20, 20, 20));
+
+        let (mut instances, mut batches) = layout();
+        let (mut ui_start, mut cutout_start) = (30, 34);
+        assert!(!truncate_layout(
+            &mut instances,
+            34,
+            &mut batches,
+            &mut ui_start,
+            &mut cutout_start
+        ));
+        assert_eq!(ranges(&batches), [0..10, 10..20, 20..30]);
+    }
+
+    #[test]
+    fn atlas_clearing_is_rationed_while_overflowing() {
+        for frames in [0, 32, 64] {
+            assert!(may_clear_atlas(frames), "{frames}");
+        }
+        for frames in [1, 31, 33] {
+            assert!(!may_clear_atlas(frames), "{frames}");
+        }
     }
 
     #[cfg(feature = "capture")]

@@ -11,6 +11,9 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use crate::image::{ImagePiece, ImageStore, image_cell_ref};
 use crate::palette::{Palette, dim};
 
+/// Combining marks kept per cell; a program can attach any number.
+pub const MAX_ZEROWIDTH: usize = 16;
+
 const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
 /// Style bits the renderer cares about.
@@ -195,7 +198,8 @@ impl Snapshot {
                 zerowidth: if hidden {
                     None
                 } else {
-                    cell.zerowidth().map(Box::from)
+                    cell.zerowidth()
+                        .map(|marks| Box::from(&marks[..marks.len().min(MAX_ZEROWIDTH)]))
                 },
                 fg,
                 bg,
@@ -323,6 +327,15 @@ mod tests {
             None,
         );
         snapshot
+    }
+
+    #[test]
+    fn combining_marks_are_capped() {
+        let marks = |s: &Snapshot| s.cell(0, 0).zerowidth.as_deref().map(<[char]>::len);
+        let s = capture(&format!("a{}", "\u{301}".repeat(100)));
+        assert_eq!(marks(&s), Some(MAX_ZEROWIDTH));
+        let s = capture("b\u{301}\u{302}\u{303}");
+        assert_eq!(marks(&s), Some(3));
     }
 
     #[test]

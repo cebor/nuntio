@@ -25,6 +25,6 @@ pub use pane::{
 };
 pub use search::{MatchPosition, Search, SearchError};
 pub use snapshot::{
-    CellStyle, CursorStyle, Snapshot, SnapshotCell, SnapshotCursor, UnderlineStyle,
+    CellStyle, CursorStyle, MAX_ZEROWIDTH, Snapshot, SnapshotCell, SnapshotCursor, UnderlineStyle,
 };
 pub use url::Link;

@@ -263,14 +263,30 @@ fn first_installed<'a>(
         .copied()
 }
 
+/// The system has no fonts at all.
+#[derive(Debug, thiserror::Error)]
+#[error("no fonts installed: install a font package such as fonts-dejavu")]
+pub struct NoFontsError;
+
 impl Fonts {
     /// Load fonts. Returns a warning if the requested family isn't installed.
     pub fn new(
         family: Option<String>,
         size_points: f32,
         scale_factor: f64,
-    ) -> (Self, Option<String>) {
-        let mut system = font_system();
+    ) -> Result<(Self, Option<String>), NoFontsError> {
+        Self::with_system(font_system(), family, size_points, scale_factor)
+    }
+
+    fn with_system(
+        mut system: FontSystem,
+        family: Option<String>,
+        size_points: f32,
+        scale_factor: f64,
+    ) -> Result<(Self, Option<String>), NoFontsError> {
+        if system.db().faces().next().is_none() {
+            return Err(NoFontsError);
+        }
         let installed = system
             .db()
             .faces()
@@ -311,7 +327,7 @@ impl Fonts {
             small_metrics: placeholder,
         };
         let warning = fonts.set_family(family);
-        (fonts, warning)
+        Ok((fonts, warning))
     }
 
     /// Switch the font family (`None` = system monospace). Returns a warning
@@ -566,6 +582,21 @@ mod tests {
         "Hack Nerd Font Propo",
         "Liberation Mono",
     ];
+
+    #[test]
+    fn an_empty_font_database_is_an_error() {
+        let system = FontSystem::new_with_locale_and_db(
+            "en-US".into(),
+            cosmic_text::fontdb::Database::new(),
+        );
+        let Err(err) = Fonts::with_system(system, None, 12.0, 1.0) else {
+            panic!("expected an error");
+        };
+        assert_eq!(
+            err.to_string(),
+            "no fonts installed: install a font package such as fonts-dejavu"
+        );
+    }
 
     #[test]
     fn first_installed_takes_the_first_installed_candidate() {

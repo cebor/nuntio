@@ -1,5 +1,7 @@
 use etagere::{AtlasAllocator, size2};
 
+use crate::gpu::oom_checked;
+
 /// Glyph atlas side length that every wgpu backend supports.
 pub const MIN_ATLAS_SIZE: u32 = 2048;
 
@@ -56,15 +58,16 @@ impl Atlas {
 
     /// Double the side length, up to the maximum. The new texture is empty,
     /// so the caller has to drop its cached glyphs. `false` if already at
-    /// the maximum.
+    /// the maximum or if the GPU has no memory for a larger texture; the
+    /// atlas stays as it was then.
     pub fn grow(&mut self, device: &wgpu::Device) -> bool {
         if self.size >= self.max_size {
             return false;
         }
         let size = (self.size * 2).min(self.max_size);
-        (self.texture, self.view) = create_texture(device, self.format, self.label, size);
-        self.allocator = AtlasAllocator::new(size2(size as i32, size as i32));
-        self.size = size;
+        if !self.replace(device, size) {
+            return false;
+        }
         tracing::debug!(atlas = self.label, size, "glyph atlas grown");
         true
     }
@@ -72,12 +75,25 @@ impl Atlas {
     /// Replace the texture with an empty one of side length `size` (clamped
     /// to the maximum), larger or smaller than before. The caller has to
     /// drop its cached regions and rebuild what binds the texture view.
-    pub fn reset(&mut self, device: &wgpu::Device, size: u32) {
+    /// `false` if the GPU has no memory for it; the atlas stays as it was.
+    pub fn reset(&mut self, device: &wgpu::Device, size: u32) -> bool {
         let size = size.min(self.max_size);
-        (self.texture, self.view) = create_texture(device, self.format, self.label, size);
+        if !self.replace(device, size) {
+            return false;
+        }
+        tracing::debug!(atlas = self.label, size, "atlas reset");
+        true
+    }
+
+    fn replace(&mut self, device: &wgpu::Device, size: u32) -> bool {
+        let Some((texture, view)) = try_create_texture(device, self.format, self.label, size)
+        else {
+            return false;
+        };
+        (self.texture, self.view) = (texture, view);
         self.allocator = AtlasAllocator::new(size2(size as i32, size as i32));
         self.size = size;
-        tracing::debug!(atlas = self.label, size, "atlas reset");
+        true
     }
 
     /// Side length in texels, to normalize texture coordinates.
@@ -141,6 +157,16 @@ impl Atlas {
     pub fn clear(&mut self) {
         self.allocator.clear();
     }
+}
+
+/// Like `create_texture`, but `None` if the GPU is out of memory.
+fn try_create_texture(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    label: &str,
+    size: u32,
+) -> Option<(wgpu::Texture, wgpu::TextureView)> {
+    oom_checked(device, || create_texture(device, format, label, size))
 }
 
 fn create_texture(
