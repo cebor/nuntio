@@ -98,7 +98,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      # Prebuilt binary: the cargo-deny action builds a Docker image, and Docker
+      # Hub rate-limits anonymous pulls from shared runners.
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-deny
+      - run: cargo deny --log-level warn --all-features check
 
   # Packaging and the website normally only run for releases and on main;
   # build them here so a PR that breaks them fails before merging.
