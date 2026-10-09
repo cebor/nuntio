@@ -224,6 +224,34 @@ fn main() -> Result<()> {
     result
 }
 
+/// Panics go to the log too: a run without a terminal has no stderr.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let message = describe_panic(info.payload(), info.location(), thread.name());
+        tracing::error!(backtrace = %std::backtrace::Backtrace::force_capture(), "{message}");
+        previous(info);
+    }));
+}
+
+fn describe_panic(
+    payload: &(dyn std::any::Any + Send),
+    location: Option<&std::panic::Location<'_>>,
+    thread: Option<&str>,
+) -> String {
+    let text = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("Box<dyn Any>");
+    let place = location.map_or_else(|| "unknown location".to_owned(), ToString::to_string);
+    format!(
+        "thread '{}' panicked at {place}: {text}",
+        thread.unwrap_or("<unnamed>")
+    )
+}
+
 fn run() -> Result<()> {
     let mut args = parse_args()?;
 
@@ -255,6 +283,7 @@ fn run() -> Result<()> {
             .init(),
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
     }
+    install_panic_hook();
     if let Some(title) = &args.title {
         tracing::debug!(%title, "ignoring --title: tab titles come from tabs.title");
     }
@@ -379,5 +408,20 @@ mod tests {
             args.startup.command,
             Some(vec!["sh".into(), "-T".into(), "x".into()])
         );
+    }
+
+    #[test]
+    fn panics_are_described_with_thread_and_place() {
+        let place = std::panic::Location::caller();
+        let text = describe_panic(&"boom", Some(place), Some("PTY reader"));
+        assert!(text.contains("thread 'PTY reader' panicked at"), "{text}");
+        assert!(text.contains("boom"), "{text}");
+        let owned = describe_panic(&String::from("owned"), Some(place), Some("t"));
+        assert!(owned.contains("owned"), "{owned}");
+        let other = describe_panic(&42_i32, Some(place), Some("t"));
+        assert!(other.contains("Box<dyn Any>"), "{other}");
+        let bare = describe_panic(&"x", None, None);
+        assert!(bare.contains("<unnamed>"), "{bare}");
+        assert!(bare.contains("unknown location"), "{bare}");
     }
 }
