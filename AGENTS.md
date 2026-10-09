@@ -38,6 +38,8 @@ Always test headless, the default: nothing shows up on the user's desktop. Use `
 
 ## Architecture
 
+ARCHITECTURE.md has the full picture (threads, UserEvent flow, output/input paths, hot reload, WSL protocol, extension points); read it before cross-crate changes.
+
 | Crate | Role |
 |---|---|
 | `crates/nuntio` | Binaries `nuntio` and `nuntio-config` (`src/bin/`, a console program even on Windows). winit event loop (`app.rs`: `App` = `Core` + `Option<WindowState>`; handlers in the child modules `app_input.rs`, `app_panes.rs`), window state and layout (`window.rs`, with `window_pointer.rs` and `window_frame.rs`), tabs (`tabs.rs`), split tree (`pane_tree.rs`), key and mouse encoding (`input.rs`, `mouse.rs`), shortcuts (`actions.rs`), UI overlays (`tab_bar.rs`, `status_bar.rs`, `search_bar.rs`, `banner.rs`) with shared colors and `UiMetrics` (`style.rs`), the macOS menu bar (`macos_menu.rs`) |

@@ -21,6 +21,7 @@
   <a href="#installation">Installation</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#keyboard-shortcuts">Shortcuts</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -172,22 +173,7 @@ In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>
 
 ## Architecture
 
-<details>
-<summary>Workspace layout</summary>
-
-| Crate | Role |
-|---|---|
-| [`crates/nuntio`](crates/nuntio) | The binary: winit event loop, window and layout, tabs, split tree, key and mouse encoding, shortcuts, tab bar, find bar and banners |
-| [`crates/nuntio-term`](crates/nuntio-term) | Wrapper around `alacritty_terminal`: a PTY and IO thread per pane, inline images, snapshots of the visible screen, palette, search, URL detection, foreground process info |
-| [`crates/nuntio-render`](crates/nuntio-render) | wgpu renderer: instanced quads for backgrounds, glyphs (cosmic-text, R8 + RGBA atlases), inline images and UI; procedural box drawing |
-| [`crates/nuntio-wsl`](crates/nuntio-wsl) | `nuntio-wsl`, the Linux helper that gives WSL panes on Windows their own Linux PTY, connected to nuntio over plain pipes |
-| [`crates/nuntio-config`](crates/nuntio-config) | Config schema, loading and validation, editing in place, themes (built-in TOML and `.itermcolors`), file watcher |
-| [`crates/nuntio-config-tui`](crates/nuntio-config-tui) | The `nuntio-config` editor: a ratatui terminal UI built on the schema |
-| [`xtask`](xtask) | Icons, packaging, changelog, the website build (`site`) and the debug driver (`drive`) |
-
-PTY threads send events through the winit event loop proxy. The main thread takes a snapshot of each visible pane, holding the terminal lock only for the copy, and hands one frame to the renderer. It redraws only when something changed.
-
-</details>
+nuntio is a Cargo workspace: the `nuntio` binary (window, tabs, panes, input), `nuntio-term` (PTY and terminal state on top of `alacritty_terminal`), `nuntio-render` (wgpu), `nuntio-config` and its editor `nuntio-config-tui`, and the WSL helper `nuntio-wsl`. [ARCHITECTURE.md](ARCHITECTURE.md) describes the threads, data flows and platform specifics.
 
 ## Contributing
 
