@@ -341,6 +341,9 @@ pub struct WindowState {
     pub update_badge: bool,
     /// First tab the tab bar shows when not all fit.
     pub tab_scroll: usize,
+    /// Outer size before full screen, unless the window was maximized then:
+    /// a drag out of full screen puts it back under the pointer.
+    windowed_size: Option<PhysicalSize<u32>>,
 }
 
 impl WindowState {
@@ -380,6 +383,7 @@ impl WindowState {
             title: String::new(),
             update_badge: false,
             tab_scroll: 0,
+            windowed_size: None,
         }
     }
 
@@ -1005,9 +1009,12 @@ impl WindowState {
         }
     }
 
-    pub fn toggle_fullscreen(&self) {
+    pub fn toggle_fullscreen(&mut self) {
         // Borderless is the native full screen (its own Space) on macOS.
         let fullscreen = self.window.fullscreen().is_some();
+        if !fullscreen {
+            self.windowed_size = (!self.window.is_maximized()).then(|| self.window.outer_size());
+        }
         let target = (!fullscreen).then_some(Fullscreen::Borderless(None));
         self.window.set_fullscreen(target);
         // The maximize button changes its icon; a toggle doesn't always
@@ -1028,6 +1035,24 @@ impl WindowState {
             self.window.set_fullscreen(None);
         } else {
             self.window.set_maximized(!self.window.is_maximized());
+        }
+    }
+
+    /// Leave full screen because free tab bar space is dragged with the
+    /// pointer at `pos`: the window gets its size from before back and
+    /// moves so the pointer keeps its relative spot in the tab bar, as when
+    /// a maximized window is dragged away. Where windows can't be placed
+    /// (Wayland), the compositor places it.
+    fn leave_fullscreen_for_drag(&mut self, pos: PhysicalPosition<f64>) {
+        let origin = self.window.inner_position().ok();
+        let full_width = self.window.inner_size().width.max(1);
+        self.window.set_fullscreen(None);
+        if let (Some(origin), Some(size)) = (origin, self.windowed_size.take()) {
+            let x = pos.x * f64::from(size.width) / f64::from(full_width);
+            self.window.set_outer_position(PhysicalPosition::new(
+                origin.x + (pos.x - x).round() as i32,
+                origin.y,
+            ));
         }
     }
 

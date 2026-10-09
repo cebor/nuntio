@@ -625,7 +625,9 @@ impl Core {
         pos: PhysicalPosition<f64>,
     ) {
         if button == Button::Left
-            && (state.mouse.tab_drag.take().is_some() || state.mouse.divider_drag.take().is_some())
+            && (state.mouse.tab_drag.take().is_some()
+                || state.mouse.divider_drag.take().is_some()
+                || state.mouse.fullscreen_drag.take().is_some())
         {
             return;
         }
@@ -763,7 +765,7 @@ impl Core {
                     state.toggle_maximized();
                 } else {
                     state.mouse.last_bar_click = Some(now);
-                    if !self.synthetic_input {
+                    if state.press_drag_area(pos) && !self.synthetic_input {
                         let _ = state.window.drag_window();
                     }
                 }
@@ -812,6 +814,12 @@ impl Core {
         state.mouse.position = Some(pos);
         if state.actions_menu.is_some() {
             self.cursor_over_actions_menu(state, pos);
+            return;
+        }
+        if state.mouse.fullscreen_drag.is_some() {
+            if state.drag_from_fullscreen(pos) && !self.synthetic_input {
+                let _ = state.window.drag_window();
+            }
             return;
         }
         state.update_hover_link(&self.config);

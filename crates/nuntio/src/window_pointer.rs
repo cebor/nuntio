@@ -57,6 +57,9 @@ pub struct MouseState {
     pub tab_drag: Option<TabDrag>,
     /// A pane divider is being dragged.
     pub divider_drag: Option<Divider>,
+    /// A press on free tab bar space in full screen waits for the pointer
+    /// to move.
+    pub fullscreen_drag: Option<FullscreenDrag>,
     /// Link under the pointer while the link modifier is held.
     pub hover_link: Option<(PaneId, Link)>,
     /// A selection drag is past the top or bottom of the pane and scrolls it.
@@ -64,10 +67,11 @@ pub struct MouseState {
 }
 
 impl MouseState {
-    /// Let go of a dragged tab or divider.
+    /// Let go of a dragged tab, divider or full screen window.
     pub fn end_drags(&mut self) {
         self.tab_drag = None;
         self.divider_drag = None;
+        self.fullscreen_drag = None;
     }
 
     /// Whole lines to scroll for a wheel or trackpad movement of `pixels`.
@@ -102,6 +106,17 @@ pub struct TabDrag {
     pub index: usize,
     pub press_x: f64,
     pub moved: bool,
+}
+
+/// Free tab bar space pressed while an undecorated window is full screen.
+/// A full screen window can't be moved, so it first leaves full screen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FullscreenDrag {
+    /// Pressed at this window position; the pointer hasn't moved far yet.
+    Pressed(PhysicalPosition<f64>),
+    /// Full screen was left; the drag starts once the window reports it
+    /// (Wayland only does after the compositor's configure).
+    Leaving,
 }
 
 impl WindowState {
@@ -292,6 +307,40 @@ impl WindowState {
             self.window.request_redraw();
         }
         self.mouse.tab_drag = Some(drag);
+    }
+
+    /// Free tab bar space was pressed (not a double click) at `pos`.
+    /// Returns whether to drag the window now; a full screen undecorated
+    /// window waits for the pointer to move (`drag_from_fullscreen`).
+    pub fn press_drag_area(&mut self, pos: PhysicalPosition<f64>) -> bool {
+        if self.chrome == Chrome::Undecorated && self.window.fullscreen().is_some() {
+            self.mouse.fullscreen_drag = Some(FullscreenDrag::Pressed(pos));
+            return false;
+        }
+        true
+    }
+
+    /// The pointer moved to `pos` during a `FullscreenDrag`. Past
+    /// `TAB_DRAG_THRESHOLD` it leaves full screen; returns true once the
+    /// window is out of full screen and should be dragged.
+    pub fn drag_from_fullscreen(&mut self, pos: PhysicalPosition<f64>) -> bool {
+        match self.mouse.fullscreen_drag {
+            None => return false,
+            Some(FullscreenDrag::Pressed(press)) => {
+                let moved = (pos.x - press.x).abs().max((pos.y - press.y).abs());
+                if moved <= TAB_DRAG_THRESHOLD {
+                    return false;
+                }
+                self.leave_fullscreen_for_drag(pos);
+                self.mouse.fullscreen_drag = Some(FullscreenDrag::Leaving);
+            }
+            Some(FullscreenDrag::Leaving) => {}
+        }
+        if self.window.fullscreen().is_some() {
+            return false;
+        }
+        self.mouse.fullscreen_drag = None;
+        true
     }
 
     /// Extend the selection being dragged to `pos`. Past the top or bottom
