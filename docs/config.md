@@ -55,6 +55,34 @@ A key combination for a keybinding is typed as text, like `Ctrl+Shift+Enter` (se
 
 If you edit the file in another editor while `nuntio-config` is open, it reloads the file before the next change. After <kbd>e</kbd> it reloads as soon as the editor exits, and <kbd>u</kbd> undoes the edit. On Windows, shells that `shell.wsl` starts in a WSL distribution don't get the command. nuntio running inside WSL itself (WSLg) is not affected.
 
+## Notes
+
+<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> (<kbd>Cmd</kbd><kbd>Shift</kbd><kbd>N</kbd> on macOS, the `open_notes` action) opens your notes in a new tab, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd> (<kbd>Cmd</kbd><kbd>Opt</kbd><kbd>Shift</kbd><kbd>N</kbd>, `open_notes_split`) next to the focused pane. You can also run `nuntio-apps notes` in any nuntio shell; `--dir <path>` uses another folder.
+
+- Each note is a Markdown file in one folder: `notes.directory` (see [Options](#options)), by default `~/.local/share/nuntio/notes` on Linux, `~/Library/Application Support/nuntio/notes` on macOS and `%APPDATA%\nuntio\notes` on Windows. The title is the file name.
+- The editor shows Markdown rendered (headings, bold, italic, code, lists, quotes, checkboxes) except on the line with the cursor, which shows its source.
+- Notes are saved a second after you stop typing, and when you switch notes or quit. If another program changes the open note while it has unsaved changes, you choose whether to overwrite or reload it.
+- Todos are list items with a box: `- [ ] milk`. The list shows each note's progress, like `2/5`, and <kbd>Ctrl</kbd><kbd>O</kbd> lists the open todos of all notes.
+- Deleted notes are moved to a `.trash` folder inside the notes folder.
+
+| Key | Action |
+|---|---|
+| <kbd>Ctrl</kbd><kbd>N</kbd> | New note |
+| <kbd>Ctrl</kbd><kbd>O</kbd> | Todo overview: <kbd>Space</kbd> toggles, <kbd>Enter</kbd> opens the note at that todo, <kbd>a</kbd> shows done todos |
+| <kbd>Ctrl</kbd><kbd>B</kbd> | Show or hide the list of notes |
+| <kbd>Ctrl</kbd><kbd>S</kbd> | Save now |
+| <kbd>Ctrl</kbd><kbd>Q</kbd> | Quit |
+| <kbd>F1</kbd> | All keys |
+| <kbd>Enter</kbd> | In the list: edit the note |
+| <kbd>/</kbd> | In the list: filter by title |
+| <kbd>r</kbd> or <kbd>F2</kbd>, <kbd>d</kbd> | In the list: rename, delete |
+| <kbd>Ctrl</kbd><kbd>T</kbd> | In the editor: toggle the todo on the cursor line, or make the line a todo (a click on a box toggles it too) |
+| <kbd>Enter</kbd> | In the editor: continue the list; on an empty item, end it |
+| <kbd>Tab</kbd> / <kbd>Shift</kbd><kbd>Tab</kbd> | In the editor: indent or outdent a list item |
+| <kbd>Ctrl</kbd><kbd>Z</kbd> / <kbd>Ctrl</kbd><kbd>Y</kbd> | In the editor: undo, redo |
+| <kbd>Ctrl</kbd><kbd>C</kbd> / <kbd>X</kbd> / <kbd>V</kbd> | In the editor: copy (also to the clipboard), cut, paste what you copied in the notes |
+| <kbd>Esc</kbd> | In the editor: back to the list |
+
 ## Reloading
 
 nuntio watches the config file and the `themes/` directory and applies changes as soon as you save. You can also reload manually with <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>,</kbd> (<kbd>Cmd</kbd><kbd>Shift</kbd><kbd>,</kbd> on macOS).
@@ -141,11 +169,15 @@ status_bar = false
 [mouse]
 copy_on_select = false
 
+[notes]
+# Folder of the notes. Default: <data dir>/nuntio/notes.
+# directory = "~/notes"
+
 [macos]
 option_as_meta = "none"
 
 # [[keybindings]]
-# key = "Ctrl+Shift+N"
+# key = "Ctrl+Shift+O"
 # action = "new_tab"
 
 # [[profiles]]
@@ -264,6 +296,12 @@ With `check` on, nuntio asks GitHub once a day whether a newer release exists. N
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `copy_on_select` | bool | `false` | Copy selected text to the clipboard as soon as you release the mouse button. |
+
+### `[notes]`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `directory` | string | `<data dir>/nuntio/notes` | Folder of the Markdown notes that `nuntio-apps notes` shows: an absolute path, `~` or `~/…`. Created when missing. The default is `~/.local/share/nuntio/notes` on Linux, `~/Library/Application Support/nuntio/notes` on macOS and `%APPDATA%\nuntio\notes` on Windows. |
 
 ### `[macos]`
 
@@ -410,7 +448,7 @@ Each `[[keybindings]]` entry binds a key combination to an action:
 
 ```toml
 [[keybindings]]
-key = "Ctrl+Shift+N"
+key = "Ctrl+Shift+O"
 action = "new_tab"
 
 # Send Ctrl+Shift+K to the terminal instead of clearing scrollback
@@ -464,6 +502,8 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `clear_scrollback` | Clear the history of the focused pane |
 | `reload_config` | Reload the config file |
 | `open_settings` | Open `nuntio-config` in a new tab |
+| `open_notes` | Open the notes in a new tab (default <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd>, <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>N</kbd> on macOS) |
+| `open_notes_split` | Open the notes in a split next to the focused pane (default <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd>, <kbd>Cmd</kbd><kbd>Opt</kbd><kbd>Shift</kbd><kbd>N</kbd> on macOS) |
 | `open_actions_menu` | Open the menu of actions (the `actions` status bar item opens it too) |
 | `open_shell_menu` | Open the menu of shells to start a new tab with (see [Profiles](#profiles)) |
 | `check_for_updates` | Look for a newer nuntio release now, even with `updates.check` off |

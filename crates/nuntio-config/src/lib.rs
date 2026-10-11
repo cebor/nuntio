@@ -10,6 +10,7 @@ mod theme;
 mod watch;
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +46,7 @@ pub struct Config {
     pub updates: Updates,
     pub theme: ThemeSelection,
     pub mouse: Mouse,
+    pub notes: Notes,
     pub macos: MacOs,
     pub keybindings: Vec<Keybinding>,
     /// Shells the shell menu offers for new tabs, besides `shell`.
@@ -68,6 +70,7 @@ impl Default for Config {
             updates: Updates::default(),
             theme: ThemeSelection::default(),
             mouse: Mouse::default(),
+            notes: Notes::default(),
             macos: MacOs::default(),
             keybindings: Vec::new(),
             profiles: Vec::new(),
@@ -507,6 +510,35 @@ pub struct Mouse {
     pub copy_on_select: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Notes {
+    /// Folder of the Markdown notes: an absolute path or `~/…`.
+    /// Unset: `<data dir>/nuntio/notes`.
+    pub directory: Option<String>,
+}
+
+impl Notes {
+    /// The notes folder; `None` without a home resp. data directory.
+    pub fn resolved_directory(&self) -> Option<PathBuf> {
+        notes_dir(
+            self.directory.as_deref(),
+            dirs::home_dir(),
+            dirs::data_dir(),
+        )
+    }
+}
+
+fn notes_dir(dir: Option<&str>, home: Option<PathBuf>, data: Option<PathBuf>) -> Option<PathBuf> {
+    match dir {
+        Some(d) => match d.strip_prefix('~') {
+            Some(rest) => Some(home?.join(rest.trim_start_matches(['/', '\\']))),
+            None => Some(PathBuf::from(d)),
+        },
+        None => Some(data?.join("nuntio").join("notes")),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionAsMeta {
@@ -535,6 +567,29 @@ pub struct Keybinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_dir_resolves_home_and_default() {
+        let home = || Some(PathBuf::from("/h"));
+        let data = || Some(PathBuf::from("/d"));
+        assert_eq!(
+            notes_dir(Some("~/n"), home(), data()),
+            Some(PathBuf::from("/h/n"))
+        );
+        assert_eq!(
+            notes_dir(Some("~"), home(), data()),
+            Some(PathBuf::from("/h"))
+        );
+        assert_eq!(
+            notes_dir(Some("/abs/n"), home(), data()),
+            Some(PathBuf::from("/abs/n"))
+        );
+        assert_eq!(
+            notes_dir(None, home(), data()),
+            Some(PathBuf::from("/d/nuntio/notes"))
+        );
+        assert_eq!(notes_dir(None, home(), None), None);
+    }
 
     #[test]
     fn without_a_spring_the_last_item_is_pushed_right() {

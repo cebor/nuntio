@@ -78,6 +78,13 @@ const MENU: &[(&str, &[(&str, Action)])] = &[
         ],
     ),
     (
+        "Notes",
+        &[
+            ("Open Notes", Action::OpenNotes),
+            ("Open Notes in Split", Action::OpenNotesSplit),
+        ],
+    ),
+    (
         "nuntio",
         &[
             ("Settings…", Action::OpenSettings),

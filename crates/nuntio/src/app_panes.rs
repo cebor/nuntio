@@ -125,10 +125,7 @@ impl Core {
                 program: argv.remove(0),
                 args: argv,
             }),
-            Launch::Settings(program) => Some(Shell {
-                program,
-                args: Vec::new(),
-            }),
+            Launch::Helper { program, args, .. } => Some(Shell { program, args }),
             Launch::Shell(ShellChoice { shell: None, .. }) => None,
             Launch::Shell(ShellChoice { shell: Some(s), .. }) => {
                 let wsl_dir = match &dir {
@@ -351,6 +348,11 @@ impl Core {
             .shell
             .clone()
             .map_or_else(|| self.default_launch(), Launch::Shell);
+        self.split_with(state, launch, axis);
+    }
+
+    /// Split the focused pane; the new pane runs `launch`.
+    pub(super) fn split_with(&mut self, state: &mut WindowState, launch: Launch, axis: Axis) {
         let Some(pane) = self.spawn_for_focused(state, launch, true) else {
             return;
         };

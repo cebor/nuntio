@@ -23,9 +23,9 @@ use std::process::Command;
 use anyhow::{Context, Result, bail, ensure};
 
 const NAME: &str = "nuntio";
-/// The config editor, built from the same package. It must not land on
-/// the global PATH: nuntio adds it only inside its panes.
-const HELPER: &str = "nuntio-config";
+/// The config editor and the apps (notes), built from the same package. They
+/// must not land on the global PATH: nuntio adds them only inside its panes.
+const HELPERS: [&str; 2] = ["nuntio-config", "nuntio-apps"];
 /// The dependency license notices shipped in every package.
 const THIRD_PARTY: &str = "THIRD-PARTY-LICENSES.html";
 const PNG_SIZES: [u32; 9] = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
@@ -321,12 +321,12 @@ fn icons() -> Result<()> {
 
 // -------------------------------------------------------------- package
 
-/// `nuntio-config` next to the built `nuntio`.
-fn helper_of(binary: &Path) -> PathBuf {
-    binary.with_file_name(format!("{HELPER}{}", std::env::consts::EXE_SUFFIX))
+/// The helper `name` next to the built `nuntio`.
+fn helper_of(binary: &Path, name: &str) -> PathBuf {
+    binary.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX))
 }
 
-/// Builds both binaries of the package; returns the path of `nuntio`.
+/// Builds all binaries of the package; returns the path of `nuntio`.
 fn cargo_build(target: Option<&str>) -> Result<PathBuf> {
     let mut command = Command::new(env!("CARGO"));
     command
@@ -424,10 +424,12 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
     let tree = stage.join(&base);
     fresh_dir(&tree)?;
     copy(&binary, &tree.join("bin").join(NAME))?;
-    copy(
-        &helper_of(&binary),
-        &tree.join("lib").join(NAME).join(HELPER),
-    )?;
+    for helper in HELPERS {
+        copy(
+            &helper_of(&binary, helper),
+            &tree.join("lib").join(NAME).join(helper),
+        )?;
+    }
     install_desktop_files(&assets, &tree.join("share"))?;
     copy_docs(&tree, &notices)?;
     let tarball = dist.join(format!("{base}.tar.gz"));
@@ -454,10 +456,12 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
         let appdir = stage.join("AppDir");
         fresh_dir(&appdir)?;
         copy(&binary, &appdir.join("usr/bin").join(NAME))?;
-        copy(
-            &helper_of(&binary),
-            &appdir.join("usr/lib").join(NAME).join(HELPER),
-        )?;
+        for helper in HELPERS {
+            copy(
+                &helper_of(&binary, helper),
+                &appdir.join("usr/lib").join(NAME).join(helper),
+            )?;
+        }
         install_desktop_files(&assets, &appdir.join("usr/share"))?;
         copy_docs(&appdir.join("usr/share/doc").join(NAME), &notices)?;
         copy(
@@ -529,10 +533,11 @@ fn package_macos(dist: &Path, version: &str) -> Result<()> {
 
     let app = stage.join("nuntio.app/Contents");
     fs::create_dir_all(app.join("MacOS"))?;
-    for (intel, arm, name) in [
-        (intel.clone(), arm.clone(), NAME),
-        (helper_of(&intel), helper_of(&arm), HELPER),
-    ] {
+    let helpers = HELPERS.map(|h| (helper_of(&intel, h), helper_of(&arm, h), h));
+    for (intel, arm, name) in [(intel.clone(), arm.clone(), NAME)]
+        .into_iter()
+        .chain(helpers)
+    {
         run(Command::new("lipo")
             .arg("-create")
             .arg(&intel)
@@ -548,11 +553,13 @@ fn package_macos(dist: &Path, version: &str) -> Result<()> {
     fs::write(app.join("Info.plist"), plist)?;
     // Ad-hoc signature (no identity): binds Info.plist and resources to the
     // bundle. Unsigned universal bundles are reported as "damaged" on Apple
-    // Silicon instead of just "from an unidentified developer". The helper
-    // is signed first, as a nested executable.
-    run(Command::new("codesign")
-        .args(["--force", "--sign", "-"])
-        .arg(app.join("MacOS").join(HELPER)))?;
+    // Silicon instead of just "from an unidentified developer". The helpers
+    // are signed first, as nested executables.
+    for helper in HELPERS {
+        run(Command::new("codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(app.join("MacOS").join(helper)))?;
+    }
     run(Command::new("codesign")
         .args(["--force", "--sign", "-"])
         .arg(stage.join("nuntio.app")))?;
@@ -609,7 +616,12 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
         .join(format!("{NAME}-{version}"));
     fresh_dir(&stage)?;
     copy(&binary, &stage.join(format!("{NAME}.exe")))?;
-    copy(&helper_of(&binary), &stage.join(format!("{HELPER}.exe")))?;
+    for helper in HELPERS {
+        copy(
+            &helper_of(&binary, helper),
+            &stage.join(format!("{helper}.exe")),
+        )?;
+    }
     let wsl_helper = binary.with_file_name("nuntio-wsl");
     ensure!(
         wsl_helper.is_file(),

@@ -192,6 +192,8 @@ impl Core {
             Action::FontReset => self.set_font_size(state, self.config.font.size),
             Action::NewTab => self.new_tab(state, self.default_launch(), Placement::AfterActive),
             Action::OpenSettings => self.open_settings(state),
+            Action::OpenNotes => self.open_notes(state, false),
+            Action::OpenNotesSplit => self.open_notes(state, true),
             Action::CheckForUpdates => update::check_now(self.proxy.clone()),
             Action::CloseTab => {
                 let id = state.content().focused;
@@ -257,19 +259,43 @@ impl Core {
 
     /// Open `nuntio-config` in a new tab.
     fn open_settings(&mut self, state: &mut WindowState) {
-        match crate::pane_env::helper() {
+        match crate::pane_env::helper(crate::pane_env::CONFIG_HELPER) {
             Some(helper) => {
-                self.new_tab(
-                    state,
-                    Launch::Settings(helper.to_string_lossy().into_owned()),
-                    Placement::AfterActive,
-                );
+                let launch = Launch::Helper {
+                    program: helper.to_string_lossy().into_owned(),
+                    args: Vec::new(),
+                    name: "Settings",
+                };
+                self.new_tab(state, launch, Placement::AfterActive);
             }
             None => self.notify(Banner::new(
                 Severity::Warning,
                 "Settings",
                 vec!["nuntio-config is not installed next to nuntio".into()],
             )),
+        }
+    }
+
+    /// Open `nuntio-apps notes` in a new tab, or with `split` next to the
+    /// focused pane.
+    fn open_notes(&mut self, state: &mut WindowState, split: bool) {
+        let Some(helper) = crate::pane_env::helper(crate::pane_env::APPS_HELPER) else {
+            self.notify(Banner::new(
+                Severity::Warning,
+                "Notes",
+                vec!["nuntio-apps is not installed next to nuntio".into()],
+            ));
+            return;
+        };
+        let launch = Launch::Helper {
+            program: helper.to_string_lossy().into_owned(),
+            args: vec!["notes".into()],
+            name: "Notes",
+        };
+        if split {
+            self.split_with(state, launch, Axis::Vertical);
+        } else {
+            self.new_tab(state, launch, Placement::AfterActive);
         }
     }
 

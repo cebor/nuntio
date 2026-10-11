@@ -20,8 +20,13 @@ pub enum Launch {
     Shell(ShellChoice),
     /// argv, never empty.
     Command(Vec<String>),
-    /// `nuntio-config`, the settings tab: this program without arguments.
-    Settings(String),
+    /// A program shipped with nuntio: `nuntio-config` or `nuntio-apps`.
+    /// `name` is what the `shell` status bar item shows.
+    Helper {
+        program: String,
+        args: Vec<String>,
+        name: &'static str,
+    },
 }
 
 impl Launch {
@@ -33,7 +38,7 @@ impl Launch {
                 .first()
                 .map(|program| detect::program_stem(program).to_owned())
                 .unwrap_or_default(),
-            Self::Settings(_) => "Shell".to_owned(),
+            Self::Helper { name, .. } => (*name).to_owned(),
         }
     }
 

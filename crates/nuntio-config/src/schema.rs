@@ -24,13 +24,14 @@ pub enum Section {
     Updates,
     Theme,
     Mouse,
+    Notes,
     MacOs,
     Shell,
     Keybindings,
 }
 
 impl Section {
-    pub const ALL: [Section; 12] = [
+    pub const ALL: [Section; 13] = [
         Section::General,
         Section::Theme,
         Section::Font,
@@ -39,6 +40,7 @@ impl Section {
         Section::Panes,
         Section::StatusBar,
         Section::Mouse,
+        Section::Notes,
         Section::Shell,
         Section::Updates,
         Section::Keybindings,
@@ -56,6 +58,7 @@ impl Section {
             Section::Updates => "Updates",
             Section::Theme => "Theme",
             Section::Mouse => "Mouse",
+            Section::Notes => "Notes",
             Section::MacOs => "macOS",
             Section::Shell => "Shell",
             Section::Keybindings => "Keybindings",
@@ -495,6 +498,16 @@ pub static SETTINGS: &[Setting] = &[
         Kind::Bool,
         "Copy selected text to the clipboard as soon as you release the mouse button.",
     ),
+    optional(
+        setting(
+            "notes.directory",
+            Section::Notes,
+            "Directory",
+            Kind::Text,
+            "Folder of the Markdown notes that `nuntio-apps notes` shows: an absolute path, `~` or `~/…`. Created when missing.",
+        ),
+        "<data dir>/nuntio/notes",
+    ),
     only_on(
         setting(
             "macos.option_as_meta",
@@ -623,7 +636,7 @@ mod tests {
     fn optional_settings_are_accepted() {
         let shell = r#"shell = { program = "fish", args = ["-l"] }"#;
         let loaded = crate::parse(&format!(
-            "{shell}\nworking_directory = \"~/code\"\n[font]\nfamily = \"Hack\"\n[window]\nmacos_titlebar = \"none\""
+            "{shell}\nworking_directory = \"~/code\"\n[font]\nfamily = \"Hack\"\n[window]\nmacos_titlebar = \"none\"\n[notes]\ndirectory = \"~/notes\""
         ))
         .unwrap();
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
@@ -631,7 +644,13 @@ mod tests {
         assert!(wsl.warnings.is_empty());
         for s in SETTINGS.iter().filter(|s| s.unset.is_some()) {
             assert!(
-                ["working_directory", "font.family", "window.macos_titlebar"].contains(&s.path)
+                [
+                    "working_directory",
+                    "font.family",
+                    "window.macos_titlebar",
+                    "notes.directory"
+                ]
+                .contains(&s.path)
                     || s.path.starts_with("shell."),
                 "untested optional setting {}",
                 s.path

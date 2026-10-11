@@ -37,6 +37,10 @@ pub enum Action {
     ToggleFullscreen,
     /// Open `nuntio-config` in a new tab.
     OpenSettings,
+    /// Open the notes in a new tab.
+    OpenNotes,
+    /// Open the notes in a split next to the focused pane.
+    OpenNotesSplit,
     /// Look for a newer release now.
     CheckForUpdates,
     /// Open the menu of all actions.
@@ -78,6 +82,8 @@ pub(crate) const NAMES: &[(&str, Action)] = {
         ("select_tab_9", SelectTab(8)),
         ("reload_config", ReloadConfig),
         ("open_settings", OpenSettings),
+        ("open_notes", OpenNotes),
+        ("open_notes_split", OpenNotesSplit),
         ("check_for_updates", CheckForUpdates),
         ("open_actions_menu", OpenActionsMenu),
         ("open_shell_menu", OpenShellMenu),
@@ -175,6 +181,8 @@ impl Bindings {
             char('w', cmd_shift, ClosePane),
             char('f', cmd_shift, Search),
             char(',', cmd_shift | shift, ReloadConfig),
+            char('n', cmd_shift | shift, OpenNotes),
+            char('n', cmd_shift | shift | ModifiersState::ALT, OpenNotesSplit),
         ];
         let (focus_mods, resize_mods) = if cfg!(target_os = "macos") {
             let cmd = ModifiersState::SUPER;
@@ -453,6 +461,11 @@ mod tests {
             Ok(Some(Action::SelectTab(2)))
         );
         assert_eq!(Action::from_name("none"), Ok(None));
+        assert_eq!(Action::from_name("open_notes"), Ok(Some(Action::OpenNotes)));
+        assert_eq!(
+            Action::from_name("open_notes_split"),
+            Ok(Some(Action::OpenNotesSplit))
+        );
         assert_eq!(
             Action::from_name("split_horizontal"),
             Ok(Some(Action::SplitHorizontal))
@@ -606,6 +619,11 @@ mod tests {
         assert_eq!(b.lookup(&ch("w"), ctrl_shift), Some(Action::ClosePane));
         assert_eq!(b.lookup(&ch(","), ctrl), Some(Action::OpenSettings));
         assert_eq!(b.lookup(&ch(","), ctrl_shift), Some(Action::ReloadConfig));
+        assert_eq!(b.lookup(&ch("n"), ctrl_shift), Some(Action::OpenNotes));
+        assert_eq!(
+            b.lookup(&ch("n"), ctrl_shift | ModifiersState::ALT),
+            Some(Action::OpenNotesSplit)
+        );
         let ctrl_alt = ctrl | ModifiersState::ALT;
         assert_eq!(
             b.lookup(&Key::Named(NamedKey::ArrowLeft), ctrl_alt),
@@ -647,6 +665,10 @@ mod tests {
             Some(Action::ToggleFullscreen)
         );
         assert_eq!(b.lookup(&ch(","), cmd), Some(Action::OpenSettings));
+        assert_eq!(
+            b.lookup(&ch("n"), cmd | ModifiersState::SHIFT),
+            Some(Action::OpenNotes)
+        );
         assert_eq!(
             b.lookup(&ch(","), cmd | ModifiersState::SHIFT),
             Some(Action::ReloadConfig)

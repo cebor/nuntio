@@ -59,7 +59,7 @@ dark = "Tokyo Night"
 dim_inactive = 0.2
 
 [[keybindings]]
-key = "Ctrl+Shift+N"
+key = "Ctrl+Shift+O"
 action = "new_tab"
 ```
 

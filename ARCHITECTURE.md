@@ -22,6 +22,7 @@ Contents:
 [Inline images](#inline-images) ·
 [Configuration and hot reload](#configuration-and-hot-reload) ·
 [nuntio-config](#nuntio-config-settings-tui) ·
+[nuntio-apps](#nuntio-apps-notes) ·
 [WSL panes](#wsl-panes-on-windows) ·
 [Platform differences](#platform-differences) ·
 [Background services](#background-services) ·
@@ -58,10 +59,12 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    nuntio["nuntio<br/>bins: nuntio, nuntio-config"] --> render[nuntio-render]
+    nuntio["nuntio<br/>bins: nuntio, nuntio-config, nuntio-apps"] --> render[nuntio-render]
     nuntio --> term[nuntio-term]
     nuntio --> config[nuntio-config]
     nuntio --> tui[nuntio-config-tui]
+    nuntio --> apps[nuntio-apps]
+    apps --> config
     render --> term
     tui --> config
     term -.->|"cfg(windows): proto only"| wsl[nuntio-wsl]
@@ -69,6 +72,7 @@ flowchart TD
     render --> wgpu[wgpu + cosmic-text]
     nuntio --> winit[winit]
     tui --> ratatui[ratatui]
+    apps --> ratatui
 ```
 
 |Crate|Owns|Must not know about|
@@ -78,10 +82,11 @@ flowchart TD
 |[`nuntio-render`](crates/nuntio-render)|wgpu, fonts, glyph and image atlases. Input is only a `Frame` and `nuntio_term::Snapshot`.|config, tabs, winit beyond raw window handles|
 |[`nuntio-config`](crates/nuntio-config)|Config types, `schema.rs`, loading and validation, `edit.rs`, themes, `keys.rs`, the file watcher, shell and WSL detection (`detect.rs`).|any other nuntio crate|
 |[`nuntio-config-tui`](crates/nuntio-config-tui)|The ratatui settings editor; its logic in `state.rs` sits behind the `Store` trait.|the running nuntio|
+|[`nuntio-apps`](crates/nuntio-apps)|Terminal apps that nuntio opens in panes, one subcommand each: `notes` (Markdown notes). Pure logic in `notes/{store,buffer,markdown,edit,layout,state}.rs`; only `ui.rs`, `mod.rs` and `term.rs` touch the terminal.|the running nuntio|
 |[`nuntio-wsl`](crates/nuntio-wsl)|The Linux-only relay binary and `proto`, which nuntio-term shares on Windows.|nuntio internals|
 |[`xtask`](xtask)|Icons, packaging, changelog, website, `drive`.|nuntio crates: it talks via processes, files and TCP|
 
-Binaries: `nuntio` is a GUI-subsystem binary in release builds on Windows. `nuntio-config` ([`crates/nuntio/src/bin/nuntio-config.rs`](crates/nuntio/src/bin/nuntio-config.rs)) is a shim that calls `nuntio_config_tui::main()` and is a console program on every OS. `nuntio-wsl` is built for Linux only.
+Binaries: `nuntio` is a GUI-subsystem binary in release builds on Windows. `nuntio-config` ([`crates/nuntio/src/bin/nuntio-config.rs`](crates/nuntio/src/bin/nuntio-config.rs)) and `nuntio-apps` ([`crates/nuntio/src/bin/nuntio-apps.rs`](crates/nuntio/src/bin/nuntio-apps.rs)) are shims that call `nuntio_config_tui::main()` and `nuntio_apps::main()`; both are console programs on every OS. `nuntio-wsl` is built for Linux only.
 
 Design rule: pure logic (tabs, pane tree, tab bar layout, key and mouse encoding, config parsing) stays free of GPU and window types, so it can be unit-tested.
 
@@ -320,11 +325,20 @@ sequenceDiagram
 
 `nuntio-config` runs as a separate process inside a nuntio tab and is not linked into nuntio's event loop.
 
-- `Action::OpenSettings` → `Launch::Settings(helper path)`. The helper lives in `pane_env::helper_dir` (next to the exe or in `../lib/nuntio`). It is never on the global PATH, only prepended to the PATH of nuntio's panes.
+- `Action::OpenSettings` → `Launch::Helper { program, .. }` with `pane_env::helper(CONFIG_HELPER)`. The helpers live in `pane_env::helper_dir` (next to the exe or in `../lib/nuntio`). They are never on the global PATH, only prepended to the PATH of nuntio's panes.
 - Config path precedence: `--config`, then `NUNTIO_CONFIG`, then `locate_config`.
 - The `App` sits behind the `Store` trait (`FileStore` in production, in-memory in tests).
 - Every valid edit re-reads the file, applies the change via `ConfigDoc` (toml_edit, keeps comments), validates with `nuntio_config::parse` and writes immediately with `write_config`. `write_config` is atomic: temp file + rename, follows a symlink to its target, fsyncs the directory on Unix.
 - There is no IPC: nuntio's watcher picks up the write, so hot reload is the live preview.
+
+## nuntio-apps (notes)
+
+`nuntio-apps notes` is another helper process: `Action::OpenNotes` opens it in a new tab, `Action::OpenNotesSplit` through `Core::split_with` next to the focused pane, both as `Launch::Helper` with `pane_env::helper(APPS_HELPER)`.
+
+- Notes are flat `.md` files in `notes.directory` (default `<data dir>/nuntio/notes`); `--dir` overrides it, the config path follows the same precedence as `nuntio-config`. Deleted notes move to `.trash/`.
+- `App` (`notes/state.rs`) sits behind the `Store` trait (`DirStore` in production, in-memory in tests). Autosave 1 s after the last edit via `write_config`; a file stamp (mtime + length) detects changes by other programs, which reload a clean note and ask on a dirty one.
+- Live preview: `markdown.rs` renders the whole note with pulldown-cmark into per-line pieces (rendered and raw), `layout.rs` wraps them; the cursor line is shown raw.
+- It blocks in `event::read` while idle; it only polls with a timeout while an autosave is pending. Copy goes out as OSC 52.
 
 ## WSL panes on Windows
 
@@ -405,11 +419,11 @@ Feature `debug-server` (enables `nuntio-render/capture`), never in packages.
 
 Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-|OS|nuntio|nuntio-config|nuntio-wsl|
+|OS|nuntio|nuntio-config, nuntio-apps|nuntio-wsl|
 |---|---|---|---|
-|Linux (tar.gz, deb, AppImage)|`bin/nuntio` (`/usr/bin`)|`lib/nuntio/nuntio-config`|—|
+|Linux (tar.gz, deb, AppImage)|`bin/nuntio` (`/usr/bin`)|`lib/nuntio/`|—|
 |macOS|`nuntio.app/Contents/MacOS/nuntio`|same directory|—|
-|Windows (zip, installer)|`nuntio.exe`|`nuntio-config.exe` next to it|`nuntio-wsl` (musl ELF) next to it|
+|Windows (zip, installer)|`nuntio.exe`|`.exe` next to it|`nuntio-wsl` (musl ELF) next to it|
 
 - CI ([`ci.yml`](.github/workflows/ci.yml)): fmt, clippy and tests on all three OSes, with and without `nuntio/debug-server`; MSRV; docs; cargo-deny; packages; site.
 - [`release.yml`](.github/workflows/release.yml) on `v*` tags: version check → packages → GitHub release with notes from `cargo xtask changelog` (`Changelog:` trailers) → Pages rebuild.

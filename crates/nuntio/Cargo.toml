@@ -12,13 +12,18 @@ readme = "../../README.md"
 keywords = ["terminal", "terminal-emulator", "gpu", "wgpu", "tabs"]
 categories = ["command-line-utilities"]
 publish = false
-# `nuntio-config` is the second binary.
+# `nuntio-config` and `nuntio-apps` are further binaries.
 default-run = "nuntio"
 
 [[bin]]
 name = "nuntio-config"
 path = "src/bin/nuntio-config.rs"
 # Its docs would overwrite those of the `nuntio-config` library.
+doc = false
+
+[[bin]]
+name = "nuntio-apps"
+path = "src/bin/nuntio-apps.rs"
 doc = false
 
 [features]
@@ -32,6 +37,7 @@ nuntio-config.workspace = true
 nuntio-render.workspace = true
 nuntio-term.workspace = true
 nuntio-config-tui.workspace = true
+nuntio-apps.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -90,6 +96,7 @@ assets = [
     ["target/release/nuntio", "usr/bin/", "755"],
     # Only on the PATH inside nuntio's panes.
     ["target/release/nuntio-config", "usr/lib/nuntio/", "755"],
+    ["target/release/nuntio-apps", "usr/lib/nuntio/", "755"],
     ["../../target/THIRD-PARTY-LICENSES.html", "usr/share/doc/nuntio/", "644"],
     ["../../assets/nuntio.desktop", "usr/share/applications/", "644"],
     ["../../assets/nuntio.metainfo.xml", "usr/share/metainfo/io.github.cebor.nuntio.metainfo.xml", "644"],

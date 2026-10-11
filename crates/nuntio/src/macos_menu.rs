@@ -158,6 +158,9 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
     b.action(&shell, "Split Side by Side", Action::SplitVertical);
     b.action(&shell, "Split Top and Bottom", Action::SplitHorizontal);
     b.separator(&shell);
+    b.action(&shell, "Open Notes", Action::OpenNotes);
+    b.action(&shell, "Open Notes in Split", Action::OpenNotesSplit);
+    b.separator(&shell);
     b.action(&shell, "Close Pane", Action::ClosePane);
     b.action(&shell, "Close Tab", Action::CloseTab);
     b.submenu(&bar, &shell);

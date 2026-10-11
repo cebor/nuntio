@@ -45,6 +45,7 @@ nuntio is one window with tabs and split panes, rendered on the GPU and configur
 - **Themes**: twenty built in, your own as TOML or iTerm2 `.itermcolors`, and a light/dark pair that follows the OS appearance.
 - **WSL**: `shell = { wsl = "Ubuntu" }` opens every tab straight in a WSL distribution on Windows.
 - **Config editor**: run `nuntio-config` in a nuntio tab to change settings in a terminal UI that only offers valid values and previews every change live.
+- **Notes**: Markdown notes with a live preview and todo lists, in a tab (<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd>) or next to your shell. Each note is a plain `.md` file in one folder.
 - **Hot reload**: saving the config applies it right away. Mistakes show up as a banner in the window, and the previous settings stay active.
 - **Mouse reporting** (X10, SGR 1006, UTF-8 1005), bracketed paste, IME input, copy on select. <kbd>Shift</kbd>+click extends a selection, and on Linux a middle click pastes the last selection.
 - **Status bar** (optional): live graphs of CPU, memory and network, the battery level and the time.
@@ -134,7 +135,7 @@ dark = "Tokyo Night"
 dim_inactive = 0.2
 
 [[keybindings]]
-key = "Ctrl+Shift+N"
+key = "Ctrl+Shift+O"
 action = "new_tab"
 ```
 
@@ -168,12 +169,13 @@ On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts a
 | Scroll a line | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>↑</kbd> / <kbd>↓</kbd> | <kbd>Cmd</kbd><kbd>↑</kbd> / <kbd>↓</kbd> |
 | Reload config | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>,</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>,</kbd> |
 | Open `nuntio-config` | <kbd>Ctrl</kbd><kbd>,</kbd> | <kbd>Cmd</kbd><kbd>,</kbd> |
+| Open the notes in a new tab / a split | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> / <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>N</kbd> / <kbd>Cmd</kbd><kbd>Opt</kbd><kbd>Shift</kbd><kbd>N</kbd> |
 
 In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>Enter</kbd> to the previous one, <kbd>Alt</kbd><kbd>R</kbd> toggles regex mode and <kbd>Esc</kbd> closes the bar.
 
 ## Architecture
 
-nuntio is a Cargo workspace: the `nuntio` binary (window, tabs, panes, input), `nuntio-term` (PTY and terminal state on top of `alacritty_terminal`), `nuntio-render` (wgpu), `nuntio-config` and its editor `nuntio-config-tui`, and the WSL helper `nuntio-wsl`. [ARCHITECTURE.md](ARCHITECTURE.md) describes the threads, data flows and platform specifics.
+nuntio is a Cargo workspace: the `nuntio` binary (window, tabs, panes, input), `nuntio-term` (PTY and terminal state on top of `alacritty_terminal`), `nuntio-render` (wgpu), `nuntio-config` and its editor `nuntio-config-tui`, the notes app `nuntio-apps`, and the WSL helper `nuntio-wsl`. [ARCHITECTURE.md](ARCHITECTURE.md) describes the threads, data flows and platform specifics.
 
 ## Contributing
 

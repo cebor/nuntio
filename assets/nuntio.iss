@@ -2,8 +2,8 @@
 ; package`. It passes Version, Stage (the directory with the built files),
 ; OutputDir and OutputBase on the command line with /D.
 ;
-; The install directory is not added to PATH: it also holds nuntio-config,
-; which nuntio puts on PATH only inside its own panes.
+; The install directory is not added to PATH: it also holds nuntio-config and
+; nuntio-apps, which nuntio puts on PATH only inside its own panes.
 
 #ifndef Version
   #error Pass the version with /DVersion=<version>
@@ -44,6 +44,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#Stage}\nuntio.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\nuntio-config.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Stage}\nuntio-apps.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Linux helper for WSL panes: a Linux PTY instead of Windows' ConPTY.
 Source: "{#Stage}\nuntio-wsl"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion

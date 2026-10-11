@@ -222,7 +222,10 @@ impl Config {
             profile.shell().validate("profiles").map_err(prefix)?;
         }
         if let Some(dir) = &self.working_directory {
-            validate_working_directory(dir)?;
+            validate_dir("working_directory", dir)?;
+        }
+        if let Some(dir) = &self.notes.directory {
+            validate_dir("notes.directory", dir)?;
         }
         self.status_bar.validate()?;
         Ok(())
@@ -230,7 +233,7 @@ impl Config {
 }
 
 /// Absolute (a Linux path for WSL counts, also on Windows) or at home.
-fn validate_working_directory(dir: &str) -> Result<(), String> {
+fn validate_dir(key: &str, dir: &str) -> Result<(), String> {
     let valid = dir == "~"
         || dir.starts_with("~/")
         || dir.starts_with("~\\")
@@ -240,7 +243,7 @@ fn validate_working_directory(dir: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "`working_directory` must be an absolute path or start with `~`, not `{dir}`"
+            "`{key}` must be an absolute path or start with `~`, not `{dir}`"
         ))
     }
 }
@@ -366,6 +369,13 @@ mod tests {
             let err = parse(&toml).unwrap_err();
             assert!(err.contains("working_directory"), "{dir}: {err}");
         }
+    }
+
+    #[test]
+    fn notes_directories_are_absolute_or_at_home() {
+        assert!(parse("[notes]\ndirectory = \"~/notes\"").is_ok());
+        let err = parse("[notes]\ndirectory = \"notes\"").unwrap_err();
+        assert!(err.contains("notes.directory"), "{err}");
     }
 
     #[test]

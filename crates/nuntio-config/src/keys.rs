@@ -275,6 +275,11 @@ pub static ACTIONS: &[Variant] = &[
     action("clear_scrollback", "Clear the history of the focused pane"),
     action("reload_config", "Reload the config file"),
     action("open_settings", "Open nuntio-config in a new tab"),
+    action("open_notes", "Open the notes in a new tab"),
+    action(
+        "open_notes_split",
+        "Open the notes in a split next to the focused pane",
+    ),
     action("check_for_updates", "Look for a newer nuntio release now"),
     action("open_actions_menu", "Open the menu of actions"),
     action(

@@ -1,7 +1,7 @@
 //! Environment for the shells in nuntio's panes: the config file in use,
-//! and `nuntio-config` on the PATH. The helper isn't installed on the
-//! global PATH, so the command only exists inside nuntio. On macOS also a
-//! UTF-8 locale, which apps started from the Dock don't get.
+//! and `nuntio-config` and `nuntio-apps` on the PATH. The helpers aren't
+//! installed on the global PATH, so the commands only exist inside nuntio.
+//! On macOS also a UTF-8 locale, which apps started from the Dock don't get.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -9,18 +9,23 @@ use std::path::{Path, PathBuf};
 /// Tells `nuntio-config` which file to edit, e.g. with `--config`.
 pub const CONFIG_ENV: &str = "NUNTIO_CONFIG";
 
-fn helper_name() -> String {
-    format!("nuntio-config{}", std::env::consts::EXE_SUFFIX)
+/// The config editor.
+pub const CONFIG_HELPER: &str = "nuntio-config";
+/// The apps (`nuntio-apps notes`).
+pub const APPS_HELPER: &str = "nuntio-apps";
+
+fn helper_name(program: &str) -> String {
+    format!("{program}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// Where `nuntio-config` is installed relative to nuntio's executable:
-/// next to it (development builds, macOS app bundle, Windows zip) or in
+/// Where a helper is installed relative to nuntio's executable: next to it
+/// (development builds, macOS app bundle, Windows zip) or in
 /// `../lib/nuntio/` (Linux packages, so that it stays off the PATH).
-fn helper_dir(exe: &Path, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+fn helper_dir(exe: &Path, program: &str, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let exe_dir = exe.parent()?;
     [exe_dir.to_owned(), exe_dir.join("../lib/nuntio")]
         .into_iter()
-        .find(|dir| exists(&dir.join(helper_name())))
+        .find(|dir| exists(&dir.join(helper_name(program))))
 }
 
 /// `dir` in front of `existing`.
@@ -74,16 +79,17 @@ fn macos_locale() -> Option<(String, String)> {
     })
 }
 
-/// The directory with `nuntio-config`, if it is installed with nuntio.
-fn installed_helper_dir() -> Option<PathBuf> {
+/// The directory with the helper `program`, if it is installed with nuntio.
+fn installed_helper_dir(program: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let dir = helper_dir(&exe, Path::is_file)?;
+    let dir = helper_dir(&exe, program, Path::is_file)?;
     Some(dir.canonicalize().unwrap_or(dir))
 }
 
-/// The `nuntio-config` program installed with nuntio.
-pub fn helper() -> Option<PathBuf> {
-    installed_helper_dir().map(|dir| dir.join(helper_name()))
+/// The helper `program` (`CONFIG_HELPER`, `APPS_HELPER`) installed with
+/// nuntio.
+pub fn helper(program: &str) -> Option<PathBuf> {
+    installed_helper_dir(program).map(|dir| dir.join(helper_name(program)))
 }
 
 /// Variables to add for new panes. Shells in WSL get none: Windows paths
@@ -98,7 +104,8 @@ pub fn pane_env(config_path: Option<&Path>, wsl: bool) -> Vec<(String, String)> 
     if let Some(path) = config_path.and_then(Path::to_str) {
         env.push((CONFIG_ENV.to_owned(), path.to_owned()));
     }
-    match installed_helper_dir() {
+    // Both helpers ship in the same directory.
+    match installed_helper_dir(CONFIG_HELPER) {
         Some(dir) => {
             if let Some(path) = prepend_path(&dir, std::env::var_os("PATH")) {
                 env.push(("PATH".to_owned(), path));
@@ -116,17 +123,18 @@ mod tests {
     #[test]
     fn finds_the_helper_next_to_the_executable_or_in_lib() {
         let exe = Path::new("/opt/nuntio/bin/nuntio");
-        let next_to = Path::new("/opt/nuntio/bin").join(helper_name());
-        let in_lib = Path::new("/opt/nuntio/bin/../lib/nuntio").join(helper_name());
+        let next_to = Path::new("/opt/nuntio/bin").join(helper_name(APPS_HELPER));
+        let in_lib = Path::new("/opt/nuntio/bin/../lib/nuntio").join(helper_name(APPS_HELPER));
         assert_eq!(
-            helper_dir(exe, |p| p == next_to),
+            helper_dir(exe, APPS_HELPER, |p| p == next_to),
             Some(PathBuf::from("/opt/nuntio/bin"))
         );
         assert_eq!(
-            helper_dir(exe, |p| p == in_lib),
+            helper_dir(exe, APPS_HELPER, |p| p == in_lib),
             Some(PathBuf::from("/opt/nuntio/bin/../lib/nuntio"))
         );
-        assert_eq!(helper_dir(exe, |_| false), None);
+        assert_eq!(helper_dir(exe, CONFIG_HELPER, |p| p == next_to), None);
+        assert_eq!(helper_dir(exe, APPS_HELPER, |_| false), None);
     }
 
     #[test]
