@@ -6,12 +6,11 @@
 
 use nuntio_config::StatusItem;
 use nuntio_render::{Rect, UiRect, UiText};
-use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
 use crate::actions::{Action, Bindings};
 use crate::pane_tree::Direction::{Down, Left, Right, Up};
-use crate::style::{UiMetrics, framed_box, hairline, mix, truncate};
+use crate::style::{Palette, UiMetrics, hairline, mix, truncate};
 
 /// Space above the first and below the last row, in logical pixels.
 const PADDING: f64 = 4.0;
@@ -458,10 +457,15 @@ impl Menu {
     }
 
     /// Draw the menu in the colors of the terminal.
-    pub fn draw(&self, view: View, background: Rgb, foreground: Rgb) -> (Vec<UiRect>, Vec<UiText>) {
+    pub fn draw(&self, view: View, palette: &Palette) -> (Vec<UiRect>, Vec<UiText>) {
+        let &Palette {
+            background,
+            foreground,
+            ..
+        } = palette;
         let geometry = self.geometry(view);
         let cell = view.metrics.small;
-        let mut rects = framed_box(geometry.bounds, geometry.border, background, foreground);
+        let mut rects = palette.framed_box(geometry.bounds, geometry.border);
         let mut texts = Vec::new();
 
         let text_color = mix(foreground, background, 0.1);
@@ -522,14 +526,11 @@ impl Menu {
 mod tests {
     use super::*;
     use crate::actions::NAMES;
-    use crate::style::test_metrics::*;
+    use crate::style::{BLACK, WHITE, test_metrics::*};
 
-    const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
-    const WHITE: Rgb = Rgb {
-        r: 255,
-        g: 255,
-        b: 255,
-    };
+    fn palette() -> Palette {
+        Palette::new(BLACK, WHITE)
+    }
 
     fn view(width: f32, height: f32) -> View {
         View {
@@ -669,7 +670,7 @@ mod tests {
         let mut menu = menu(true, 200.0);
         menu.scroll_by(3, view);
         let bounds = menu.geometry(view).bounds;
-        let (_, texts) = menu.draw(view, BLACK, WHITE);
+        let (_, texts) = menu.draw(view, &palette());
         let arrows: Vec<_> = texts
             .iter()
             .filter(|t| t.text == "▲" || t.text == "▼")
@@ -692,7 +693,7 @@ mod tests {
         let mut menu = menu(true, 1172.0);
         menu.select(Step::First, view);
         let bounds = menu.geometry(view).bounds;
-        let (rects, texts) = menu.draw(view, BLACK, WHITE);
+        let (rects, texts) = menu.draw(view, &palette());
         let strings: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
         for expected in ["TABS", "New Tab", "PANES", "Split Side by Side", "NUNTIO"] {
             assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
@@ -733,7 +734,7 @@ mod tests {
             entries(&menu),
             [Action::NewTabWithShell(0), Action::NewTabWithShell(1)]
         );
-        let (_, texts) = menu.draw(view(1000.0, 800.0), BLACK, WHITE);
+        let (_, texts) = menu.draw(view(1000.0, 800.0), &palette());
         let strings: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
         let new_tab = bindings.shortcut(Action::NewTab).unwrap();
         for expected in ["NEW TAB WITH", "Ubuntu", "PowerShell 7", new_tab.as_str()] {
@@ -770,7 +771,7 @@ mod tests {
         assert_eq!(menu.selected_action(), Some(Action::SelectTab(60)));
         let geometry = menu.geometry(view);
         assert!((geometry.first..geometry.first + geometry.visible).contains(&61));
-        let (_, texts) = menu.draw(view, BLACK, WHITE);
+        let (_, texts) = menu.draw(view, &palette());
         assert_eq!(texts.iter().filter(|t| t.text == "•").count(), 1);
         let Row::Entry { label, .. } = &menu.rows[1] else {
             panic!("row 1 is an entry");

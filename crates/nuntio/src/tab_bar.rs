@@ -5,7 +5,7 @@ use std::ops::Range;
 use nuntio_render::{CellMetrics, Rect, UiRect, UiText};
 use nuntio_term::{Rgb, rgb};
 
-use crate::style::{INFO_COLOR, UiMetrics, WHITE, bar_background, hairline, mix, rect, truncate};
+use crate::style::{INFO_COLOR, Palette, UiMetrics, WHITE, hairline, mix, rect, truncate};
 use unicode_width::UnicodeWidthStr;
 
 /// Widest a tab gets, in cells, so a few tabs don't stretch across the window.
@@ -357,15 +357,20 @@ impl TabBar {
         labels: &[TabLabel],
         hovered: Option<BarHit>,
         maximized: bool,
-        background: Rgb,
-        foreground: Rgb,
+        palette: &Palette,
     ) -> (Vec<UiRect>, Vec<UiText>) {
         let hovered_tab = match hovered {
             Some(BarHit::Tab(i) | BarHit::Close(i)) => Some(i),
             _ => None,
         };
         // Darker than the terminal, with the active tab as a lighter pill.
-        let bar_bg = bar_background(background);
+        let &Palette {
+            background,
+            foreground,
+            bar: bar_bg,
+            separator,
+            ..
+        } = palette;
         let active_bg = mix(background, foreground, 0.08);
         let hover_bg = mix(bar_bg, foreground, 0.08);
         let inactive_text = mix(foreground, background, 0.45);
@@ -381,9 +386,7 @@ impl TabBar {
             foreground,
         );
 
-        // A hairline between two neighbouring tabs that have no pill, in the
-        // status bar's separator color.
-        let separator = mix(bar_bg, foreground, 0.15);
+        // A hairline between two neighbouring tabs that have no pill.
         let stroke = hairline(f64::from(self.scale));
         let has_pill = |i: usize| labels[i].active || hovered_tab == Some(i);
 
@@ -497,7 +500,7 @@ impl TabBar {
             self.draw_badge(&mut rects, &mut texts, hovered == Some(BarHit::Update));
         }
         if self.control_width > 0.0 {
-            self.draw_controls(&mut rects, hovered, maximized, bar_bg, foreground);
+            self.draw_controls(&mut rects, hovered, maximized, palette);
         }
         (rects, texts)
     }
@@ -597,8 +600,7 @@ impl TabBar {
         rects: &mut Vec<UiRect>,
         hovered: Option<BarHit>,
         maximized: bool,
-        bar_bg: Rgb,
-        foreground: Rgb,
+        palette: &Palette,
     ) {
         let stroke = hairline(f64::from(self.scale));
         let icon = (CONTROL_ICON as f32 * self.scale).round();
@@ -606,7 +608,7 @@ impl TabBar {
             let hover_bg = if CONTROLS[i] == BarHit::CloseWindow {
                 CLOSE_HOVER
             } else {
-                mix(bar_bg, foreground, 0.12)
+                mix(palette.bar, palette.foreground, 0.12)
             };
             let bx = self.controls_x() + i as f32 * self.control_width;
             let gap = self.gap / 2.0;
@@ -628,7 +630,7 @@ impl TabBar {
             let color = if control == BarHit::CloseWindow && hovered == Some(control) {
                 WHITE
             } else {
-                foreground
+                palette.foreground
             };
 
             // Icon box, centered in the button.
@@ -664,7 +666,7 @@ impl TabBar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::test_metrics::*;
+    use crate::style::{BLACK, test_metrics::*};
 
     #[test]
     fn tabs_share_the_width_up_to_a_maximum() {
@@ -770,15 +772,15 @@ mod tests {
                 bell: false,
             })
             .collect();
-        let (bg, fg) = (Rgb { r: 0, g: 0, b: 0 }, WHITE);
-        let (_, texts) = bar(5).draw(&labels, None, false, bg, fg);
+        let palette = Palette::new(BLACK, WHITE);
+        let (_, texts) = bar(5).draw(&labels, None, false, &palette);
         let shown = |title: &str| texts.iter().any(|t| t.text == title);
         assert!(shown("t5") && shown("t12"));
         assert!(!shown("t4") && !shown("t13"));
 
         // At the first tab the left arrow is disabled and gets no highlight.
         let bar = bar(0);
-        let rects = |hovered| bar.draw(&labels, hovered, false, bg, fg).0.len();
+        let rects = |hovered| bar.draw(&labels, hovered, false, &palette).0.len();
         assert_eq!(rects(Some(BarHit::ScrollLeft)), rects(None));
         assert_eq!(rects(Some(BarHit::ScrollRight)), rects(None) + 1);
     }
@@ -932,7 +934,7 @@ mod tests {
             activity: false,
             bell: false,
         }];
-        let (rects, texts) = bar.draw(&labels, None, false, Rgb { r: 0, g: 0, b: 0 }, WHITE);
+        let (rects, texts) = bar.draw(&labels, None, false, &Palette::new(BLACK, WHITE));
         assert!(rects.iter().any(|r| r.color == INFO_COLOR));
         assert!(texts.iter().any(|t| t.text == "↑"));
     }
@@ -971,12 +973,12 @@ mod tests {
             activity: false,
             bell: false,
         }];
-        let (bg, fg) = (Rgb { r: 0, g: 0, b: 0 }, WHITE);
-        let (plain, _) = bar.draw(&labels, None, false, bg, fg);
-        let (rects, _) = bar.draw(&labels, Some(BarHit::NewTab), false, bg, fg);
+        let palette = Palette::new(BLACK, WHITE);
+        let (plain, _) = bar.draw(&labels, None, false, &palette);
+        let (rects, _) = bar.draw(&labels, Some(BarHit::NewTab), false, &palette);
         assert_eq!(rects.len(), plain.len() + 1);
         // The "+" is drawn in the foreground color when hovered.
-        assert_eq!(rects.iter().filter(|r| r.color == fg).count(), 2);
+        assert_eq!(rects.iter().filter(|r| r.color == WHITE).count(), 2);
     }
 
     #[test]
@@ -988,13 +990,13 @@ mod tests {
             activity: false,
             bell: false,
         });
-        let (bg, fg) = (Rgb { r: 0, g: 0, b: 0 }, WHITE);
+        let (palette, fg) = (Palette::new(BLACK, WHITE), WHITE);
         let close = |texts: &[UiText]| texts.iter().find(|t| t.text == "×").unwrap().color;
 
-        let (plain, texts) = bar.draw(&labels, Some(BarHit::Tab(0)), false, bg, fg);
+        let (plain, texts) = bar.draw(&labels, Some(BarHit::Tab(0)), false, &palette);
         assert_ne!(close(&texts), fg);
 
-        let (rects, texts) = bar.draw(&labels, Some(BarHit::Close(0)), false, bg, fg);
+        let (rects, texts) = bar.draw(&labels, Some(BarHit::Close(0)), false, &palette);
         assert_eq!(rects.len(), plain.len() + 1);
         // Close button of tab 0: 20px square at x 257, inset by 2px.
         let highlight = rects.last().unwrap();
@@ -1017,10 +1019,10 @@ mod tests {
                 bell: false,
             })
         };
-        let (bg, fg) = (Rgb { r: 0, g: 0, b: 0 }, WHITE);
-        let color = mix(bar_background(bg), fg, 0.15);
+        let palette = Palette::new(BLACK, WHITE);
+        let color = palette.separator;
         let separators = |active: usize, hovered: Option<BarHit>| {
-            let (rects, _) = bar.draw(&labels(active), hovered, false, bg, fg);
+            let (rects, _) = bar.draw(&labels(active), hovered, false, &palette);
             rects
                 .into_iter()
                 .filter(|r| r.color == color)

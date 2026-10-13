@@ -6,10 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use nuntio_render::{Rect, UiRect, UiText};
-use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{UiMetrics, framed_box, hairline, truncate, truncate_start};
+use crate::style::{Palette, UiMetrics, hairline, truncate, truncate_start};
 
 /// Distance from the pane's bottom corner, in logical pixels.
 const MARGIN: f64 = 6.0;
@@ -335,8 +334,7 @@ pub fn draw_hint(
     pane: Rect,
     pointer: (f32, f32),
     metrics: UiMetrics,
-    background: Rgb,
-    foreground: Rgb,
+    palette: &Palette,
 ) -> (Vec<UiRect>, Vec<UiText>) {
     let padding = metrics.logical(PADDING);
     let margin = metrics.logical(MARGIN);
@@ -344,8 +342,16 @@ pub fn draw_hint(
         ((pane.width - 2.0 * (margin + padding)) / metrics.small.width as f32).max(0.0) as usize;
     let text = hint_text(url, fits);
     let bounds = hint_bounds(text.width(), pane, pointer, metrics);
-    let rects = framed_box(bounds, hairline(metrics.scale), background, foreground);
-    let texts = vec![UiText::new(bounds.x + padding, bounds.y + padding, text, foreground).small()];
+    let rects = palette.framed_box(bounds, hairline(metrics.scale));
+    let texts = vec![
+        UiText::new(
+            bounds.x + padding,
+            bounds.y + padding,
+            text,
+            palette.foreground,
+        )
+        .small(),
+    ];
     (rects, texts)
 }
 
@@ -353,6 +359,7 @@ pub fn draw_hint(
 mod tests {
     use super::*;
     use crate::style::test_metrics::*;
+    use nuntio_term::Rgb;
 
     const PANE: Rect = Rect {
         x: 0.0,
@@ -599,14 +606,8 @@ mod tests {
         let url = "https://example.com/a/very/long/path";
         let hint = |width| {
             let pane = Rect { width, ..PANE };
-            let (_, texts) = draw_hint(
-                url,
-                pane,
-                (0.0, 0.0),
-                METRICS,
-                Rgb::default(),
-                Rgb::default(),
-            );
+            let palette = Palette::new(Rgb::default(), Rgb::default());
+            let (_, texts) = draw_hint(url, pane, (0.0, 0.0), METRICS, &palette);
             texts[0].text.clone()
         };
         // The host is kept whole, the rest is cut.

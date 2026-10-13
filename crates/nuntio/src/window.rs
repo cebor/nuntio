@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use nuntio_config::{Config, StatusBarPosition, StatusItem, TabTitle};
 use nuntio_render::{CellMetrics, Rect, Renderer, UiRect, UiText};
-use nuntio_term::{Rgb, Snapshot, TermHandle, TermMode, TermSize};
+use nuntio_term::{Snapshot, TermHandle, TermMode, TermSize};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::Modifiers;
 use winit::keyboard::PhysicalKey;
@@ -24,7 +24,7 @@ use crate::search_bar::SearchBar;
 use crate::shell_words::PathSyntax;
 use crate::shells::ShellChoice;
 use crate::status_bar::{Stats, StatusBar};
-use crate::style::{UiMetrics, hairline};
+use crate::style::{BLACK, Palette, UiMetrics, WHITE, hairline};
 use crate::tab_bar::{TabBar, TabBarOptions};
 use crate::tab_title::{self, TitleInfo};
 use crate::tabs::Tabs;
@@ -713,23 +713,10 @@ impl WindowState {
         let datetime = datetime(config);
         // Colors come from the theme, which redraws on its own when it
         // changes; fixed ones compare the rest.
-        let (background, foreground) = (
-            Rgb::default(),
-            Rgb {
-                r: 255,
-                g: 255,
-                b: 255,
-            },
-        );
-        let drawn = self.status_bar(config, stats, &datetime).map(|bar| {
-            bar.draw(
-                stats,
-                &datetime,
-                background,
-                foreground,
-                config.status_bar.rainbow,
-            )
-        });
+        let palette = Palette::new(BLACK, WHITE);
+        let drawn = self
+            .status_bar(config, stats, &datetime)
+            .map(|bar| bar.draw(stats, &datetime, &palette, config.status_bar.rainbow));
         if drawn == self.status_drawn {
             return false;
         }

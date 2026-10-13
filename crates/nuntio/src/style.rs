@@ -47,23 +47,51 @@ pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     }
 }
 
-/// Background of the tab and status bars: darker than the terminal.
-pub fn bar_background(background: Rgb) -> Rgb {
-    mix(background, BLACK, 0.18)
+/// The colors the bars and overlays are drawn in, derived once per frame
+/// from the terminal's `background` and `foreground`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Palette {
+    pub background: Rgb,
+    pub foreground: Rgb,
+    /// Background of the tab and status bars: darker than the terminal.
+    pub bar: Rgb,
+    /// A hairline between neighbouring items of a bar.
+    pub separator: Rgb,
+    /// The lines between panes.
+    pub divider: Rgb,
+    /// Frame of the find bar, link hint and menus.
+    pub frame: Rgb,
+    /// Fill of the find bar, link hint and menus.
+    pub fill: Rgb,
+}
+
+impl Palette {
+    pub fn new(background: Rgb, foreground: Rgb) -> Self {
+        let bar = mix(background, BLACK, 0.18);
+        Self {
+            background,
+            foreground,
+            bar,
+            separator: mix(bar, foreground, 0.15),
+            divider: mix(background, foreground, 0.25),
+            frame: mix(background, foreground, 0.35),
+            fill: mix(background, foreground, 0.12),
+        }
+    }
+
+    /// A box of `bounds` with a `border` pixels wide frame, as the find bar
+    /// and the link hint draw it.
+    pub fn framed_box(&self, bounds: Rect, border: f32) -> Vec<UiRect> {
+        vec![
+            UiRect::fill(bounds, self.frame),
+            UiRect::fill(bounds.inset(border), self.fill),
+        ]
+    }
 }
 
 /// A sharp rectangle filled with `color`.
 pub fn rect(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> UiRect {
     UiRect::fill(Rect::new(x, y, width, height), color)
-}
-
-/// A box of `bounds` with a `border` pixels wide frame, as the find bar
-/// and the link hint draw it.
-pub fn framed_box(bounds: Rect, border: f32, background: Rgb, foreground: Rgb) -> Vec<UiRect> {
-    vec![
-        UiRect::fill(bounds, mix(background, foreground, 0.35)),
-        UiRect::fill(bounds.inset(border), mix(background, foreground, 0.12)),
-    ]
 }
 
 /// Width of a one-pixel line at `scale`, in whole physical pixels.

@@ -5,7 +5,7 @@ use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::{MatchPosition, Rgb, Search, TermHandle, rgb};
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{UiMetrics, framed_box, hairline, mix, tail};
+use crate::style::{Palette, UiMetrics, hairline, mix, tail};
 
 /// Widest the bar gets, in cells.
 const MAX_CELLS: f32 = 44.0;
@@ -141,15 +141,19 @@ impl SearchBar {
         &self,
         pane: Rect,
         metrics: UiMetrics,
-        background: Rgb,
-        foreground: Rgb,
+        palette: &Palette,
     ) -> (Vec<UiRect>, Vec<UiText>) {
+        let &Palette {
+            background,
+            foreground,
+            ..
+        } = palette;
         let cell = metrics.cell;
         let bounds = self.bounds(pane, metrics);
         let padding = (bounds.height - cell.height as f32) / 2.0;
         let columns = ((bounds.width - 2.0 * padding) / cell.width as f32).max(0.0) as usize;
 
-        let rects = framed_box(bounds, hairline(metrics.scale), background, foreground);
+        let rects = palette.framed_box(bounds, hairline(metrics.scale));
 
         // "query▏" on the left, ".* status" on the right, cut to fit.
         let mut right = String::new();
@@ -228,7 +232,8 @@ mod tests {
         bar.query = "foo".into();
         bar.regex = true;
         bar.error = Some("bad".into());
-        let (_, texts) = bar.draw(PANE, METRICS, Rgb::default(), Rgb::default());
+        let palette = Palette::new(Rgb::default(), Rgb::default());
+        let (_, texts) = bar.draw(PANE, METRICS, &palette);
         assert_eq!(texts[0].text, "foo▏");
         assert_eq!(texts[1].text, ".* bad");
         // Right-aligned: 44 columns wide, starting after the padding.
@@ -252,7 +257,8 @@ mod tests {
             width: 120.0,
             ..PANE
         };
-        let (_, texts) = bar.draw(narrow, METRICS, Rgb::default(), Rgb::default());
+        let palette = Palette::new(Rgb::default(), Rgb::default());
+        let (_, texts) = bar.draw(narrow, METRICS, &palette);
         assert!(texts[1].text.width() <= 10);
         assert!(texts[1].x >= narrow.x);
     }

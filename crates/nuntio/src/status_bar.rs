@@ -9,7 +9,7 @@ use nuntio_render::{CellMetrics, UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{UiMetrics, bar_background, hairline, luminance, mix, rect};
+use crate::style::{Palette, UiMetrics, hairline, luminance, mix, rect};
 use crate::sysmon::Sample;
 
 /// Samples kept per graph: one minute at one sample per second.
@@ -238,11 +238,16 @@ impl StatusBar {
         &self,
         stats: &Stats,
         datetime: &str,
-        background: Rgb,
-        foreground: Rgb,
+        palette: &Palette,
         rainbow: bool,
     ) -> (Vec<UiRect>, Vec<UiText>) {
-        let bar_bg = bar_background(background);
+        let &Palette {
+            background,
+            foreground,
+            bar: bar_bg,
+            separator,
+            ..
+        } = palette;
         // Muted, so the bar stays in the background.
         let colors = Colors {
             background: bar_bg,
@@ -251,7 +256,7 @@ impl StatusBar {
             track: mix(bar_bg, foreground, 0.06),
             graph: mix(bar_bg, foreground, 0.45),
             graph_alt: mix(bar_bg, foreground, 0.25),
-            separator: mix(bar_bg, foreground, 0.15),
+            separator,
             pressed: mix(bar_bg, foreground, 0.14),
         };
         let mut out = Output {
@@ -871,7 +876,7 @@ fn format_gib(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::test_metrics::*;
+    use crate::style::{BLACK, WHITE, test_metrics::*};
     use crate::sysmon::{Battery, Memory, Throughput};
     use nuntio_config::arranged;
 
@@ -1049,21 +1054,15 @@ mod tests {
         assert_eq!(bar.item_at(89.0), Some(StatusItem::Update));
         assert_eq!(bar.item_at(90.0), None);
         assert_eq!(bar.item_at(995.0 - 40.0), Some(StatusItem::Datetime));
-        let (_, texts) = bar.draw(&stats, "12:34", Rgb::default(), Rgb::default(), false);
+        let palette = Palette::new(Rgb::default(), Rgb::default());
+        let (_, texts) = bar.draw(&stats, "12:34", &palette, false);
         assert!(texts.iter().any(|t| t.text == "0.1.6"));
     }
 
     #[test]
     fn actions_item_is_clickable_and_can_be_shown_pressed() {
         use StatusItem::{Actions, Cpu, Datetime};
-        let (bg, fg) = (
-            Rgb { r: 0, g: 0, b: 0 },
-            Rgb {
-                r: 255,
-                g: 255,
-                b: 255,
-            },
-        );
+        let palette = Palette::new(BLACK, WHITE);
         let stats = stats(false);
         let items = arranged(&[Actions, Cpu, Datetime]);
         let bar = StatusBar::new(1000.0, 0.0, &items, &stats, "12:34", "", METRICS);
@@ -1072,13 +1071,13 @@ mod tests {
         assert_eq!(bar.item_at(10.0), Some(Actions));
         assert_eq!(bar.item_at(109.0), Some(Actions));
         assert_eq!(bar.item_at(110.0), None);
-        let (_, texts) = bar.draw(&stats, "12:34", bg, fg, false);
+        let (_, texts) = bar.draw(&stats, "12:34", &palette, false);
         assert!(texts.iter().any(|t| t.text == "Actions"));
 
         // Pressed: a background one gap wider than the item, and only then.
-        let pressed = mix(bar_background(bg), fg, 0.14);
+        let pressed = mix(palette.bar, WHITE, 0.14);
         let backgrounds = |bar: &StatusBar| {
-            let (rects, _) = bar.draw(&stats, "12:34", bg, fg, false);
+            let (rects, _) = bar.draw(&stats, "12:34", &palette, false);
             rects
                 .into_iter()
                 .filter(|r| r.color == pressed)
@@ -1113,18 +1112,7 @@ mod tests {
         );
         // Icon, space and "PowerShell 7" (15 cells) after the one-cell margin.
         assert_eq!(bar.item_bounds(Shell), Some((10.0, 150.0)));
-        let black = Rgb { r: 0, g: 0, b: 0 };
-        let (_, texts) = bar.draw(
-            &stats,
-            "12:34",
-            black,
-            Rgb {
-                r: 255,
-                g: 255,
-                b: 255,
-            },
-            false,
-        );
+        let (_, texts) = bar.draw(&stats, "12:34", &Palette::new(BLACK, WHITE), false);
         assert!(texts.iter().any(|t| t.text == "PowerShell 7"));
     }
 
@@ -1148,15 +1136,8 @@ mod tests {
             METRICS,
         );
         assert_eq!(bar.height, 28.0);
-        let (bg, fg) = (
-            Rgb { r: 0, g: 0, b: 0 },
-            Rgb {
-                r: 255,
-                g: 255,
-                b: 255,
-            },
-        );
-        let (rects, texts) = bar.draw(&stats, "12:34", bg, fg, false);
+        let palette = Palette::new(BLACK, WHITE);
+        let (rects, texts) = bar.draw(&stats, "12:34", &palette, false);
         let texts: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
         for expected in [" 50%", " 4.0G", "2.0K", "  0K", " 80%", "12:34"] {
             assert!(texts.contains(&expected), "{expected:?} in {texts:?}");
@@ -1171,20 +1152,13 @@ mod tests {
     #[test]
     fn separators_only_between_neighbours() {
         use StatusItem::*;
-        let (bg, fg) = (
-            Rgb { r: 0, g: 0, b: 0 },
-            Rgb {
-                r: 255,
-                g: 255,
-                b: 255,
-            },
-        );
-        let separator = mix(bar_background(bg), fg, 0.15);
+        let palette = Palette::new(BLACK, WHITE);
+        let separator = palette.separator;
         for rainbow in [false, true] {
             let count = |items: &[StatusItem]| {
                 let stats = stats(false);
                 let bar = StatusBar::new(1200.0, 0.0, items, &stats, "12:34", "", METRICS);
-                let (rects, _) = bar.draw(&stats, "12:34", bg, fg, rainbow);
+                let (rects, _) = bar.draw(&stats, "12:34", &palette, rainbow);
                 rects.iter().filter(|r| r.color == separator).count()
             };
             assert_eq!(count(&[Cpu, Memory, Spring, Datetime]), 1);
@@ -1209,30 +1183,22 @@ mod tests {
         let stats = stats(false);
         let items = [Cpu, Memory, Datetime];
         let bar = StatusBar::new(1200.0, 0.0, &items, &stats, "12:34", "", METRICS);
-        let (_, texts) = bar.draw(&stats, "12:34", bg, fg, rainbow);
+        let (_, texts) = bar.draw(&stats, "12:34", &Palette::new(bg, fg), rainbow);
         texts.iter().map(|t| t.color).collect()
     }
 
     #[test]
     fn rainbow_gives_each_item_its_own_color() {
-        let (black, white) = (
-            Rgb { r: 0, g: 0, b: 0 },
-            Rgb {
-                r: 255,
-                g: 255,
-                b: 255,
-            },
-        );
-        let plain = value_colors(black, white, false);
+        let plain = value_colors(BLACK, WHITE, false);
         assert!(plain.windows(2).all(|w| w[0] == w[1]), "{plain:?}");
-        let colors = value_colors(black, white, true);
+        let colors = value_colors(BLACK, WHITE, true);
         assert_eq!(colors.len(), 3);
         for (i, c) in colors.iter().enumerate() {
             assert_ne!(*c, plain[0]);
             assert!(!colors[..i].contains(c), "{colors:?}");
         }
         // Light on a dark bar, dark on a light one.
-        let light = value_colors(white, black, true);
+        let light = value_colors(WHITE, BLACK, true);
         for (dark_bar, light_bar) in colors.iter().zip(&light) {
             assert!(luminance(*dark_bar) > luminance(*light_bar));
         }

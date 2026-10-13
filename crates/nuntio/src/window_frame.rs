@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use nuntio_config::Config;
 use nuntio_render::{Frame, FrameStatus, PaneView, Rect, Renderer, UiRect, UiText};
-use nuntio_term::{CursorStyle, Link, Rgb, Snapshot, UnderlineStyle};
+use nuntio_term::{CursorStyle, Link, Snapshot, UnderlineStyle};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use super::{WindowState, datetime};
@@ -14,7 +14,7 @@ use crate::ime;
 use crate::link;
 use crate::pane_tree::Layout;
 use crate::status_bar::Stats;
-use crate::style::mix;
+use crate::style::Palette;
 use crate::tab_bar::TabLabel;
 
 /// Radius of the window's corners where nuntio rounds them itself (Linux),
@@ -70,8 +70,8 @@ impl WindowState {
         let layout = self.layout(config);
         let shots = self.pane_shots(config, &layout);
         let first = &shots.first()?.snapshot;
-        let colors = (first.background, first.foreground);
-        let overlay = self.overlay(config, stats, banner, &layout, colors);
+        let palette = Palette::new(first.background, first.foreground);
+        let overlay = self.overlay(config, stats, banner, &layout, &palette);
 
         let split = shots.len() > 1;
         let panes: Vec<PaneView> = shots
@@ -98,7 +98,7 @@ impl WindowState {
             0.0
         };
         let frame = Frame {
-            background: colors.0,
+            background: palette.background,
             background_opacity: config.window.opacity,
             panes: &panes,
             rects: &overlay.rects,
@@ -153,15 +153,14 @@ impl WindowState {
         shots
     }
 
-    /// Everything drawn over the panes, in the colors of the terminal's
-    /// `(background, foreground)`.
+    /// Everything drawn over the panes, in the colors of `palette`.
     fn overlay(
         &mut self,
         config: &Config,
         stats: &Stats,
         banner: Option<&Banner>,
         layout: &Layout,
-        (background, foreground): (Rgb, Rgb),
+        palette: &Palette,
     ) -> Overlay {
         let metrics = self.ui_metrics();
         let mut overlay = Overlay::default();
@@ -171,12 +170,11 @@ impl WindowState {
                 &labels,
                 self.mouse.hovered_bar,
                 self.fills_screen(),
-                background,
-                foreground,
+                palette,
             ));
         }
 
-        let divider_color = mix(background, foreground, 0.25);
+        let divider_color = palette.divider;
         for divider in &layout.dividers {
             overlay
                 .rects
@@ -187,14 +185,14 @@ impl WindowState {
             let datetime = datetime(config);
             if let Some(bar) = self.status_bar(config, stats, &datetime) {
                 let rainbow = config.status_bar.rainbow;
-                overlay.add(bar.draw(stats, &datetime, background, foreground, rainbow));
+                overlay.add(bar.draw(stats, &datetime, palette, rainbow));
             }
         }
 
         if let Some(bar) = &self.search
             && let Some(rect) = layout.rect(self.content().focused)
         {
-            overlay.add(bar.draw(rect, metrics, background, foreground));
+            overlay.add(bar.draw(rect, metrics, palette));
         }
 
         // Where the link under the pointer leads: OSC 8 links may show
@@ -209,9 +207,7 @@ impl WindowState {
                 rect.height = rect.height.min(top - rect.y).max(0.0);
             }
             let pointer = (pos.x as f32, pos.y as f32);
-            overlay.add(link::draw_hint(
-                &link.url, rect, pointer, metrics, background, foreground,
-            ));
+            overlay.add(link::draw_hint(&link.url, rect, pointer, metrics, palette));
         }
 
         if let Some(banner) = banner {
@@ -222,7 +218,7 @@ impl WindowState {
         }
 
         if let Some(menu) = &self.menu {
-            let (rects, texts) = menu.draw(self.menu_view(), background, foreground);
+            let (rects, texts) = menu.draw(self.menu_view(), palette);
             overlay.popup_rects = rects;
             overlay.popup_texts = texts;
         }
@@ -330,7 +326,7 @@ fn underline(snapshot: &mut Snapshot, link: &Link) {
 
 #[cfg(test)]
 mod tests {
-    use nuntio_term::{CellStyle, SnapshotCell};
+    use nuntio_term::{CellStyle, Rgb, SnapshotCell};
 
     use super::*;
 
