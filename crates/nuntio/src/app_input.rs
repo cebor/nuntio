@@ -419,8 +419,7 @@ impl Core {
             state.used_keys.insert(event.physical);
             return;
         }
-        let meta = alt_is_meta(&state.modifiers, self.config.macos.option_as_meta);
-        let key_input = KeyInput::new(event, mods, meta);
+        let key_input = self.key_input(&state.modifiers, event, mods);
         let Some(bytes) = input::encode_key(&key_input, state.term().mode()) else {
             return;
         };
@@ -446,8 +445,7 @@ impl Core {
         if state.search.is_some() && self.search_key(state, event) {
             return false;
         }
-        let latin = input::latin_key(&event.unmodified, event.physical);
-        if let Some(action) = self.lookup_binding(&event.unmodified, latin.as_ref(), mods) {
+        if let Some(action) = self.lookup_binding(event, mods) {
             self.run_action(state, action);
             return false;
         }
@@ -459,15 +457,22 @@ impl Core {
 
     /// The shortcut for a key; on layouts without Latin letters, also
     /// looked up by the key's US character (see `input::latin_key`).
-    fn lookup_binding(
+    fn lookup_binding(&self, event: &KeyPress, mods: ModifiersState) -> Option<Action> {
+        self.bindings.lookup(&event.unmodified, mods).or_else(|| {
+            let latin = input::latin_key(&event.unmodified, event.physical)?;
+            self.bindings.lookup(&latin, mods)
+        })
+    }
+
+    /// `event` as the encoder sees it, with Alt acting as Meta as configured.
+    fn key_input<'a>(
         &self,
-        unmodified: &Key,
-        latin: Option<&Key>,
+        modifiers: &Modifiers,
+        event: &'a KeyPress,
         mods: ModifiersState,
-    ) -> Option<Action> {
-        self.bindings
-            .lookup(unmodified, mods)
-            .or_else(|| self.bindings.lookup(latin?, mods))
+    ) -> KeyInput<'a> {
+        let meta = alt_is_meta(modifiers, self.config.macos.option_as_meta);
+        KeyInput::new(event, mods, meta)
     }
 
     /// Keys for the open actions menu, which takes all of them: the arrows
@@ -498,9 +503,7 @@ impl Core {
                 }
             }
             _ => {
-                let latin = input::latin_key(&event.unmodified, event.physical);
-                let opens = opener.is_some()
-                    && self.lookup_binding(&event.unmodified, latin.as_ref(), mods) == opener;
+                let opens = opener.is_some() && self.lookup_binding(event, mods) == opener;
                 if opens {
                     state.close_actions_menu();
                 }
@@ -534,13 +537,11 @@ impl Core {
             // Alt+R toggles regex mode, like in many editors.
             _ if mods.alt_key() && is_r => bar.toggle_regex(term),
             _ => {
-                let meta = alt_is_meta(&state.modifiers, self.config.macos.option_as_meta);
-                let Some(text) = input::field_text(&KeyInput::new(event, mods, meta)) else {
+                let key_input = self.key_input(&state.modifiers, event, mods);
+                let Some(text) = input::field_text(&key_input) else {
                     // Shortcuts still work; other keys (Tab, F1, Ctrl+W, …)
                     // must not reach the shell behind the bar.
-                    return self
-                        .lookup_binding(unmodified, latin.as_ref(), mods)
-                        .is_none();
+                    return self.lookup_binding(event, mods).is_none();
                 };
                 bar.append(text, term);
             }
