@@ -16,6 +16,7 @@ mod mouse;
 mod pane_env;
 mod pane_tree;
 mod pasted_images;
+mod render_health;
 mod search_bar;
 mod shell_words;
 mod shells;

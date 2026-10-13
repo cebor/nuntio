@@ -236,7 +236,7 @@ Color: the surface format is forced to non-sRGB, so theme sRGB values reach the 
 
 GPU selection honors `WGPU_BACKEND`, `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF`; adapters that can't present to the surface are skipped. On Windows, opaque windows prefer DX12 and present through DirectComposition (`dcomp.rs`); transparent windows stay on Vulkan.
 
-`FrameStatus` handling in `Core::redraw_requested`:
+`FrameStatus` handling: `RenderHealth::on_frame` (`render_health.rs`, one per window) turns each status into a `HealthAction` that `Core::redraw_requested` carries out:
 
 - `Skipped`: retry, up to `MAX_FRAME_RETRIES`.
 - `Paused` (occluded): wait for the next event.

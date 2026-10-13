@@ -22,10 +22,11 @@ use crate::actions::Bindings;
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, MenuCommand, PaneId, PasteSource, Pasted, UserEvent};
 use crate::input::KeyPress;
+use crate::render_health::{GpuProbe, HealthAction};
 use crate::status_bar::Stats;
 use crate::sysmon::{SystemMonitor, is_sampled};
 use crate::update::{self, Build, Checker, Update};
-use crate::window::{self, Chrome, DEFAULT_TITLE, GpuProbe, WindowState};
+use crate::window::{self, Chrome, DEFAULT_TITLE, WindowState};
 
 // Child modules, so that their handlers can reach the app's state.
 #[path = "app_input.rs"]
@@ -47,8 +48,6 @@ const NO_SOFTWARE_RENDERER: &str = "no software renderer available, nuntio keeps
 /// Room for macOS's traffic-light buttons, in logical pixels.
 #[cfg(target_os = "macos")]
 const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
-/// Immediate retries of a skipped frame before waiting for the next event.
-const MAX_FRAME_RETRIES: u32 = 3;
 /// How long an action that asked for confirmation waits to be repeated.
 const CONFIRM_REPEAT: Duration = Duration::from_secs(5);
 
@@ -1160,79 +1159,60 @@ impl Core {
             return;
         }
         let status = self.redraw(state);
-        if status == FrameStatus::Skipped {
-            state.skipped_frames += 1;
-        } else {
-            state.skipped_frames = 0;
-        }
-        if status == FrameStatus::Presented {
-            state.lost_frames = 0;
-        }
-        match status {
-            FrameStatus::Presented | FrameStatus::Paused => {}
-            // Retry a few times; a surface that keeps timing out must not
-            // spin. The next event redraws anyway.
-            FrameStatus::Skipped if state.skipped_frames <= MAX_FRAME_RETRIES => {
-                state.window.request_redraw();
-            }
-            FrameStatus::Skipped => {
+        match state.health.on_frame(status) {
+            HealthAction::Nothing => {}
+            // The next event redraws anyway.
+            HealthAction::Retry => state.window.request_redraw(),
+            HealthAction::GiveUpFrame => {
                 tracing::debug!("giving up on this frame after repeated skips");
             }
-            FrameStatus::Lost => {
-                state.lost_frames += 1;
-                match window::lost_action(state.lost_frames) {
-                    window::LostAction::Rebuild => {
-                        tracing::warn!("surface lost, recreating renderer");
-                        let software = !self.config.window.gpu_acceleration;
-                        match self.rebuild_renderer(state, software, true) {
-                            Ok(warnings) => {
-                                if !software && state.renderer.software() {
-                                    tracing::warn!(
-                                        "no GPU after the device loss, drawing on the CPU until one is back"
-                                    );
-                                    state.gpu_probe = Some(GpuProbe::start(Instant::now()));
-                                }
-                                self.notify(Banner::config(Severity::Warning, warnings));
-                            }
-                            Err(err) => self.fail(event_loop, err),
+            HealthAction::Rebuild => {
+                tracing::warn!("surface lost, recreating renderer");
+                let software = !self.config.window.gpu_acceleration;
+                match self.rebuild_renderer(state, software, true) {
+                    Ok(warnings) => {
+                        if !software && state.renderer.software() {
+                            tracing::warn!(
+                                "no GPU after the device loss, drawing on the CPU until one is back"
+                            );
+                            state
+                                .health
+                                .set_probe(Some(GpuProbe::start(Instant::now())));
                         }
+                        self.notify(Banner::config(Severity::Warning, warnings));
                     }
-                    window::LostAction::GiveUp => self.notify(Banner::new(
-                        Severity::Error,
-                        Topic::Gpu,
-                        vec!["the renderer failed repeatedly; drawing resumes when the window is resized, focused or shown again".into()],
-                    )),
-                    // Resizing, focusing or showing the window tries again.
-                    window::LostAction::Wait => {}
+                    Err(err) => self.fail(event_loop, err),
                 }
             }
+            HealthAction::ShowGpuError => self.notify(Banner::new(
+                Severity::Error,
+                Topic::Gpu,
+                vec!["the renderer failed repeatedly; drawing resumes when the window is resized, focused or shown again".into()],
+            )),
         }
     }
 
     /// Look whether a GPU can draw the window again while a lost device left
     /// it on the CPU, and switch back to it if so.
     fn probe_gpu(&mut self, state: &mut WindowState, event_loop: &ActiveEventLoop, now: Instant) {
-        let Some(probe) = state.gpu_probe else {
+        let Some(probe) = state.health.probe_due(now) else {
             return;
         };
-        if now < probe.next {
-            return;
-        }
         // The user turned the GPU off, or a config switch already got it back.
         if !self.config.window.gpu_acceleration || !state.renderer.software() {
-            state.gpu_probe = None;
+            state.health.set_probe(None);
             return;
         }
         if !state.renderer.offers_gpu(state.window.clone()) {
             tracing::debug!("no GPU yet, looking again in {:?}", probe.interval);
-            state.gpu_probe = Some(probe.again(now));
+            state.health.set_probe(Some(probe.again(now)));
             return;
         }
         tracing::info!("a GPU is back, leaving the software renderer");
         match self.rebuild_renderer(state, false, true) {
             Ok(warnings) => self.notify(Banner::config(Severity::Warning, warnings)),
             Err(err) => {
-                state.gpu_probe = None;
+                state.health.set_probe(None);
                 self.fail(event_loop, err);
                 return;
             }
@@ -1243,9 +1223,9 @@ impl Core {
                 "the GPU couldn't be used, trying again in {:?}",
                 next.interval
             );
-            state.gpu_probe = Some(next);
+            state.health.set_probe(Some(next));
         } else {
-            state.gpu_probe = None;
+            state.health.set_probe(None);
         }
     }
 

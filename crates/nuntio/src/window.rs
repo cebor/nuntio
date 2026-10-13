@@ -20,6 +20,7 @@ use crate::event::PaneId;
 use crate::input;
 use crate::menu::{Anchor, Menu, MenuKind, View};
 use crate::pane_tree::{Direction, Layout, PaneTree};
+use crate::render_health::RenderHealth;
 use crate::search_bar::SearchBar;
 use crate::shell_words::PathSyntax;
 use crate::shells::ShellChoice;
@@ -327,10 +328,8 @@ pub struct WindowState {
     /// The open menu: the actions, the shells or the tabs.
     pub menu: Option<Menu>,
     pub blink: Blink,
-    /// Frames skipped in a row, to stop retrying a stuck surface.
-    pub skipped_frames: u32,
-    /// Frames in a row that reported a lost surface or device.
-    pub lost_frames: u32,
+    /// Skipped and lost frames, and the look-out for a GPU.
+    pub health: RenderHealth,
     /// A bell already asked for attention and nobody has looked since.
     pub attention_requested: bool,
     /// A frame showed cached tab titles; redraw once they expire so they
@@ -338,9 +337,6 @@ pub struct WindowState {
     pub title_refresh: Option<Instant>,
     /// A new pane waiting for its shell's first screen; frames are held.
     pub reveal: Option<Reveal>,
-    /// Set while a lost device left the window on a CPU adapter with
-    /// `window.gpu_acceleration` on: when to look for the GPU again.
-    pub gpu_probe: Option<GpuProbe>,
     /// Cell the IME candidate window was last anchored to.
     ime_cell: Option<(u32, u32)>,
     /// The status bar as of the last new sample, to skip redraws that
@@ -383,12 +379,10 @@ impl WindowState {
                 visible: true,
                 next_toggle: Instant::now(),
             },
-            skipped_frames: 0,
-            lost_frames: 0,
+            health: RenderHealth::default(),
             attention_requested: false,
             title_refresh: None,
             reveal: None,
-            gpu_probe: None,
             ime_cell: None,
             status_drawn: None,
             title: String::new(),
@@ -828,8 +822,7 @@ impl WindowState {
     /// After the renderer was given up on, try drawing again: something
     /// changed (resize, focus, the window was shown).
     pub fn retry_renderer(&mut self) {
-        if self.lost_frames > MAX_RENDERER_REBUILDS {
-            self.lost_frames = 0;
+        if self.health.retry() {
             self.window.request_redraw();
         }
     }
@@ -1091,7 +1084,7 @@ impl WindowState {
             self.blink.active.then_some(self.blink.next_toggle),
             self.title_refresh,
             self.mouse.autoscroll.map(|scroll| scroll.next),
-            self.gpu_probe.map(|probe| probe.next),
+            self.health.next_wakeup(),
         ]
         .into_iter()
         .flatten()
@@ -1175,70 +1168,6 @@ const MIN_GRID: (u16, u16) = (20, 4);
 /// Smallest inner window size that holds `MIN_GRID` in a single pane.
 fn min_window_size(cell: CellMetrics, padding: (f32, f32), bars: f32) -> (u32, u32) {
     window_size(MIN_GRID, cell, padding, bars)
-}
-
-/// Lost-surface frames in a row that still rebuild the renderer.
-pub const MAX_RENDERER_REBUILDS: u32 = 3;
-
-/// What to do about a frame that reported a lost GPU surface or device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LostAction {
-    /// Build a new renderer.
-    Rebuild,
-    /// Tell the user once that rebuilding doesn't help.
-    GiveUp,
-    /// Stay quiet until something (resize, focus, show) retries.
-    Wait,
-}
-
-/// The action for the `consecutive`-th lost frame in a row (1-based).
-pub fn lost_action(consecutive: u32) -> LostAction {
-    match consecutive {
-        ..=MAX_RENDERER_REBUILDS => LostAction::Rebuild,
-        n if n == MAX_RENDERER_REBUILDS + 1 => LostAction::GiveUp,
-        _ => LostAction::Wait,
-    }
-}
-
-/// How often to look whether the GPU is back.
-pub const GPU_PROBE_INTERVAL: Duration = Duration::from_secs(5);
-/// Longest wait between switch attempts that ended on the CPU again.
-pub const GPU_PROBE_MAX_INTERVAL: Duration = Duration::from_secs(60);
-
-/// When to look again whether a GPU can draw the window, while a lost
-/// device left it on a software renderer it didn't ask for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GpuProbe {
-    pub next: Instant,
-    pub interval: Duration,
-}
-
-impl GpuProbe {
-    pub fn start(now: Instant) -> Self {
-        Self {
-            next: now + GPU_PROBE_INTERVAL,
-            interval: GPU_PROBE_INTERVAL,
-        }
-    }
-
-    /// No GPU yet: look again after the same interval.
-    pub fn again(self, now: Instant) -> Self {
-        Self {
-            next: now + self.interval,
-            ..self
-        }
-    }
-
-    /// A GPU was offered but the new renderer ended on the CPU anyway:
-    /// wait twice as long (at most `GPU_PROBE_MAX_INTERVAL`), so a GPU
-    /// that can't be used doesn't cost a rebuild every few seconds.
-    pub fn back_off(self, now: Instant) -> Self {
-        let interval = (self.interval * 2).min(GPU_PROBE_MAX_INTERVAL);
-        Self {
-            next: now + interval,
-            interval,
-        }
-    }
 }
 
 /// How many cells fit into a pane, minus padding.
@@ -1370,33 +1299,5 @@ mod tests {
         };
         let size = grid_size(rect, (8.0, 6.0), CELL);
         assert_eq!((size.columns, size.lines), (20, 4));
-    }
-
-    #[test]
-    fn lost_frames_rebuild_a_few_times_then_give_up() {
-        for consecutive in 1..=MAX_RENDERER_REBUILDS {
-            assert_eq!(lost_action(consecutive), LostAction::Rebuild);
-        }
-        assert_eq!(lost_action(MAX_RENDERER_REBUILDS + 1), LostAction::GiveUp);
-        assert_eq!(lost_action(MAX_RENDERER_REBUILDS + 2), LostAction::Wait);
-        assert_eq!(lost_action(u32::MAX), LostAction::Wait);
-    }
-
-    #[test]
-    fn gpu_probe_backs_off_up_to_a_minute() {
-        let now = Instant::now();
-        let probe = GpuProbe::start(now);
-        assert_eq!(probe.interval, Duration::from_secs(5));
-        assert_eq!(probe.next, now + Duration::from_secs(5));
-        let later = now + Duration::from_secs(7);
-        let again = probe.again(later);
-        assert_eq!(again.interval, Duration::from_secs(5));
-        assert_eq!(again.next, later + Duration::from_secs(5));
-        let mut probe = again;
-        for secs in [10, 20, 40, 60, 60] {
-            probe = probe.back_off(now);
-            assert_eq!(probe.interval, Duration::from_secs(secs));
-            assert_eq!(probe.next, now + probe.interval);
-        }
     }
 }
