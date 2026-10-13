@@ -449,7 +449,7 @@ Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 |Task|Touch|
 |---|---|
-|New action|`Action` + `NAMES` (`actions.rs`), `Bindings::platform_defaults`, `Core::run_action`, `menu::MENU`, `nuntio_config::ACTIONS`, the actions table in the docs|
+|New action|`Action`, `NAMES` and `Action::label` (`actions.rs`; the menus take their titles from it), `Bindings::platform_defaults`, `Core::run_action`, `menu::MENU`, `nuntio_config::ACTIONS`, the actions table in the docs|
 |New setting|the `Config` type, `SETTINGS` in `schema.rs`, `docs/config.md`; apply it in `reload_config` / `apply_config_to_window` or read it per frame|
 |New status item|`nuntio_config::StatusItem`, `status_bar.rs`, `sysmon::is_sampled` / `Sample` if it samples, the click in `mouse_press`|
 |New background source|a `UserEvent` variant in `event.rs`, an arm in `App::user_event`, send through a cloned proxy|

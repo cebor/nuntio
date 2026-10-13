@@ -118,6 +118,50 @@ impl Action {
             .map(|&(_, action)| Some(action))
             .ok_or_else(|| format!("unknown action `{name}`"))
     }
+
+    /// The title menus show for the action; `None` for the actions they
+    /// leave out: `select_tab_N` (the tab bar has the tabs), the menu's own
+    /// action and the entries of the shell menu.
+    pub(crate) fn label(self) -> Option<&'static str> {
+        use Direction::{Down, Left, Right, Up};
+        Some(match self {
+            Self::NewTab => "New Tab",
+            Self::OpenShellMenu => "New Tab With…",
+            Self::CloseTab => "Close Tab",
+            Self::NextTab => "Next Tab",
+            Self::PreviousTab => "Previous Tab",
+            Self::SplitVertical => "Split Side by Side",
+            Self::SplitHorizontal => "Split Top and Bottom",
+            Self::ClosePane => "Close Pane",
+            Self::ZoomPane => "Zoom Pane",
+            Self::FocusPane(Left) => "Focus Pane Left",
+            Self::FocusPane(Right) => "Focus Pane Right",
+            Self::FocusPane(Up) => "Focus Pane Up",
+            Self::FocusPane(Down) => "Focus Pane Down",
+            Self::ResizePane(Left) => "Resize Pane Left",
+            Self::ResizePane(Right) => "Resize Pane Right",
+            Self::ResizePane(Up) => "Resize Pane Up",
+            Self::ResizePane(Down) => "Resize Pane Down",
+            Self::Copy => "Copy",
+            Self::Paste => "Paste",
+            Self::Search => "Find…",
+            Self::ClearScrollback => "Clear Scrollback",
+            Self::FontIncrease => "Bigger",
+            Self::FontDecrease => "Smaller",
+            Self::FontReset => "Actual Size",
+            Self::ToggleFullscreen => "Toggle Full Screen",
+            Self::ScrollPageUp => "Scroll Page Up",
+            Self::ScrollPageDown => "Scroll Page Down",
+            Self::ScrollLineUp => "Scroll Line Up",
+            Self::ScrollLineDown => "Scroll Line Down",
+            Self::OpenNotes => "Open Notes",
+            Self::OpenNotesSplit => "Open Notes in Split",
+            Self::OpenSettings => "Settings…",
+            Self::ReloadConfig => "Reload Config",
+            Self::CheckForUpdates => "Check for Updates…",
+            Self::SelectTab(_) | Self::OpenActionsMenu | Self::NewTabWithShell(_) => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

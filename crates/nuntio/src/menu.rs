@@ -23,72 +23,67 @@ const GAP_CELLS: usize = 3;
 /// Longest tab title the tab list shows, in cells.
 const TAB_MENU_CELLS: usize = 48;
 
-/// Every action the actions menu offers, by category. `select_tab_1` …
-/// `select_tab_9` are left out (the tab bar has the tabs) and so is the
-/// menu's own action; "New Tab With…" opens the shell menu.
-const MENU: &[(&str, &[(&str, Action)])] = &[
+/// Every action the actions menu offers, by category, titled by
+/// `Action::label`. `select_tab_1` … `select_tab_9` are left out (the tab
+/// bar has the tabs) and so is the menu's own action; "New Tab With…" opens
+/// the shell menu.
+const MENU: &[(&str, &[Action])] = &[
     (
         "Tabs",
         &[
-            ("New Tab", Action::NewTab),
-            ("New Tab With…", Action::OpenShellMenu),
-            ("Close Tab", Action::CloseTab),
-            ("Next Tab", Action::NextTab),
-            ("Previous Tab", Action::PreviousTab),
+            Action::NewTab,
+            Action::OpenShellMenu,
+            Action::CloseTab,
+            Action::NextTab,
+            Action::PreviousTab,
         ],
     ),
     (
         "Panes",
         &[
-            ("Split Side by Side", Action::SplitVertical),
-            ("Split Top and Bottom", Action::SplitHorizontal),
-            ("Close Pane", Action::ClosePane),
-            ("Zoom Pane", Action::ZoomPane),
-            ("Focus Pane Left", Action::FocusPane(Left)),
-            ("Focus Pane Right", Action::FocusPane(Right)),
-            ("Focus Pane Up", Action::FocusPane(Up)),
-            ("Focus Pane Down", Action::FocusPane(Down)),
-            ("Resize Pane Left", Action::ResizePane(Left)),
-            ("Resize Pane Right", Action::ResizePane(Right)),
-            ("Resize Pane Up", Action::ResizePane(Up)),
-            ("Resize Pane Down", Action::ResizePane(Down)),
+            Action::SplitVertical,
+            Action::SplitHorizontal,
+            Action::ClosePane,
+            Action::ZoomPane,
+            Action::FocusPane(Left),
+            Action::FocusPane(Right),
+            Action::FocusPane(Up),
+            Action::FocusPane(Down),
+            Action::ResizePane(Left),
+            Action::ResizePane(Right),
+            Action::ResizePane(Up),
+            Action::ResizePane(Down),
         ],
     ),
     (
         "Edit",
         &[
-            ("Copy", Action::Copy),
-            ("Paste", Action::Paste),
-            ("Find…", Action::Search),
-            ("Clear Scrollback", Action::ClearScrollback),
+            Action::Copy,
+            Action::Paste,
+            Action::Search,
+            Action::ClearScrollback,
         ],
     ),
     (
         "View",
         &[
-            ("Bigger", Action::FontIncrease),
-            ("Smaller", Action::FontDecrease),
-            ("Actual Size", Action::FontReset),
-            ("Toggle Full Screen", Action::ToggleFullscreen),
-            ("Scroll Page Up", Action::ScrollPageUp),
-            ("Scroll Page Down", Action::ScrollPageDown),
-            ("Scroll Line Up", Action::ScrollLineUp),
-            ("Scroll Line Down", Action::ScrollLineDown),
+            Action::FontIncrease,
+            Action::FontDecrease,
+            Action::FontReset,
+            Action::ToggleFullscreen,
+            Action::ScrollPageUp,
+            Action::ScrollPageDown,
+            Action::ScrollLineUp,
+            Action::ScrollLineDown,
         ],
     ),
-    (
-        "Notes",
-        &[
-            ("Open Notes", Action::OpenNotes),
-            ("Open Notes in Split", Action::OpenNotesSplit),
-        ],
-    ),
+    ("Notes", &[Action::OpenNotes, Action::OpenNotesSplit]),
     (
         "nuntio",
         &[
-            ("Settings…", Action::OpenSettings),
-            ("Reload Config", Action::ReloadConfig),
-            ("Check for Updates…", Action::CheckForUpdates),
+            Action::OpenSettings,
+            Action::ReloadConfig,
+            Action::CheckForUpdates,
         ],
     ),
 ];
@@ -226,9 +221,12 @@ impl Menu {
         let mut rows = Vec::new();
         for &(title, entries) in MENU {
             rows.push(Row::Heading(title));
-            for &(label, action) in entries {
+            for &action in entries {
                 rows.push(Row::Entry {
-                    label: label.to_owned(),
+                    label: action
+                        .label()
+                        .expect("every action in MENU has a label")
+                        .to_owned(),
                     action,
                     shortcut: bindings.shortcut(action),
                     current: false,
@@ -564,7 +562,7 @@ mod tests {
         let listed = entries(&menu(true, 500.0));
         for &(name, action) in NAMES {
             let count = listed.iter().filter(|&&a| a == action).count();
-            let left_out = matches!(action, Action::SelectTab(_) | Action::OpenActionsMenu);
+            let left_out = action.label().is_none();
             assert_eq!(count, usize::from(!left_out), "{name}");
         }
     }

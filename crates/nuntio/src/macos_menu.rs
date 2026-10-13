@@ -84,7 +84,14 @@ impl Builder {
         self.command_items.push(item);
     }
 
-    fn action(&mut self, menu: &NSMenu, title: &str, action: Action) {
+    /// An item for `action`, titled like its entry in the in-window menu.
+    fn action(&mut self, menu: &NSMenu, action: Action) {
+        let title = action.label().expect("menu bar actions have a label");
+        self.command(menu, title, MenuCommand::Action(action), "");
+    }
+
+    /// An item for `action` with a title of its own.
+    fn titled_action(&mut self, menu: &NSMenu, title: &str, action: Action) {
         self.command(menu, title, MenuCommand::Action(action), "");
     }
 
@@ -134,10 +141,10 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
         sel!(orderFrontStandardAboutPanel:),
         "",
     );
-    b.action(&app_menu, "Check for Updates…", Action::CheckForUpdates);
+    b.action(&app_menu, Action::CheckForUpdates);
     b.separator(&app_menu);
-    b.action(&app_menu, "Settings…", Action::OpenSettings);
-    b.action(&app_menu, "Reload Config", Action::ReloadConfig);
+    b.action(&app_menu, Action::OpenSettings);
+    b.action(&app_menu, Action::ReloadConfig);
     b.separator(&app_menu);
     let services = b.menu("Services");
     let services_item = b.item("Services", None, "");
@@ -154,39 +161,39 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
     b.submenu(&bar, &app_menu);
 
     let shell = b.menu("Shell");
-    b.action(&shell, "New Tab", Action::NewTab);
-    b.action(&shell, "New Tab With…", Action::OpenShellMenu);
+    b.action(&shell, Action::NewTab);
+    b.action(&shell, Action::OpenShellMenu);
     b.separator(&shell);
-    b.action(&shell, "Split Side by Side", Action::SplitVertical);
-    b.action(&shell, "Split Top and Bottom", Action::SplitHorizontal);
+    b.action(&shell, Action::SplitVertical);
+    b.action(&shell, Action::SplitHorizontal);
     b.separator(&shell);
-    b.action(&shell, "Open Notes", Action::OpenNotes);
-    b.action(&shell, "Open Notes in Split", Action::OpenNotesSplit);
+    b.action(&shell, Action::OpenNotes);
+    b.action(&shell, Action::OpenNotesSplit);
     b.separator(&shell);
-    b.action(&shell, "Close Pane", Action::ClosePane);
-    b.action(&shell, "Close Tab", Action::CloseTab);
+    b.action(&shell, Action::ClosePane);
+    b.action(&shell, Action::CloseTab);
     b.submenu(&bar, &shell);
 
     // AppKit adds dictation and the character viewer to a menu titled "Edit".
     let edit = b.menu("Edit");
-    b.action(&edit, "Copy", Action::Copy);
-    b.action(&edit, "Paste", Action::Paste);
+    b.action(&edit, Action::Copy);
+    b.action(&edit, Action::Paste);
     b.separator(&edit);
-    b.action(&edit, "Find…", Action::Search);
-    b.action(&edit, "Clear Scrollback", Action::ClearScrollback);
+    b.action(&edit, Action::Search);
+    b.action(&edit, Action::ClearScrollback);
     b.submenu(&bar, &edit);
 
     let view = b.menu("View");
-    b.action(&view, "Bigger", Action::FontIncrease);
-    b.action(&view, "Smaller", Action::FontDecrease);
-    b.action(&view, "Actual Size", Action::FontReset);
+    b.action(&view, Action::FontIncrease);
+    b.action(&view, Action::FontDecrease);
+    b.action(&view, Action::FontReset);
     b.separator(&view);
-    b.action(&view, "Zoom Pane", Action::ZoomPane);
+    b.action(&view, Action::ZoomPane);
     b.separator(&view);
-    b.action(&view, "Scroll Page Up", Action::ScrollPageUp);
-    b.action(&view, "Scroll Page Down", Action::ScrollPageDown);
-    b.action(&view, "Scroll Line Up", Action::ScrollLineUp);
-    b.action(&view, "Scroll Line Down", Action::ScrollLineDown);
+    b.action(&view, Action::ScrollPageUp);
+    b.action(&view, Action::ScrollPageDown);
+    b.action(&view, Action::ScrollLineUp);
+    b.action(&view, Action::ScrollLineDown);
     b.separator(&view);
     // AppKit retitles it (Enter/Exit Full Screen) and adds no second one.
     let full_screen = b.native(&view, "Enter Full Screen", sel!(toggleFullScreen:), "f");
@@ -199,8 +206,8 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
     b.native(&window, "Minimize", sel!(performMiniaturize:), "m");
     b.native(&window, "Zoom", sel!(performZoom:), "");
     b.separator(&window);
-    b.action(&window, "Show Previous Tab", Action::PreviousTab);
-    b.action(&window, "Show Next Tab", Action::NextTab);
+    b.titled_action(&window, "Show Previous Tab", Action::PreviousTab);
+    b.titled_action(&window, "Show Next Tab", Action::NextTab);
     b.separator(&window);
     for (title, direction) in [
         ("Select Pane Above", Direction::Up),
@@ -208,15 +215,15 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
         ("Select Pane on the Left", Direction::Left),
         ("Select Pane on the Right", Direction::Right),
     ] {
-        b.action(&window, title, Action::FocusPane(direction));
+        b.titled_action(&window, title, Action::FocusPane(direction));
     }
-    for (title, direction) in [
-        ("Resize Pane Left", Direction::Left),
-        ("Resize Pane Right", Direction::Right),
-        ("Resize Pane Up", Direction::Up),
-        ("Resize Pane Down", Direction::Down),
+    for direction in [
+        Direction::Left,
+        Direction::Right,
+        Direction::Up,
+        Direction::Down,
     ] {
-        b.action(&window, title, Action::ResizePane(direction));
+        b.action(&window, Action::ResizePane(direction));
     }
     b.separator(&window);
     b.native(&window, "Bring All to Front", sel!(arrangeInFront:), "");
