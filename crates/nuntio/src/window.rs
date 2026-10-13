@@ -331,6 +331,9 @@ pub struct WindowState {
     pub title_refresh: Option<Instant>,
     /// A new pane waiting for its shell's first screen; frames are held.
     pub reveal: Option<Reveal>,
+    /// Set while a lost device left the window on a CPU adapter with
+    /// `window.gpu_acceleration` on: when to look for the GPU again.
+    pub gpu_probe: Option<GpuProbe>,
     /// Cell the IME candidate window was last anchored to.
     ime_cell: Option<(u32, u32)>,
     /// The status bar as of the last new sample, to skip redraws that
@@ -378,6 +381,7 @@ impl WindowState {
             attention_requested: false,
             title_refresh: None,
             reveal: None,
+            gpu_probe: None,
             ime_cell: None,
             status_drawn: None,
             title: String::new(),
@@ -1057,7 +1061,8 @@ impl WindowState {
     }
 
     /// Run the timers that are due at `now` (cursor blinking, title
-    /// refresh, autoscroll, reveal) and return when the next one is.
+    /// refresh, autoscroll, reveal) and return when the next one is,
+    /// including the GPU probe's wakeup (which the caller runs).
     pub fn run_timers(&mut self, config: &Config, now: Instant) -> Option<Instant> {
         if self.blink.active && now >= self.blink.next_toggle {
             self.blink.visible = !self.blink.visible;
@@ -1078,6 +1083,7 @@ impl WindowState {
             self.blink.active.then_some(self.blink.next_toggle),
             self.title_refresh,
             self.mouse.autoscroll.map(|scroll| scroll.next),
+            self.gpu_probe.map(|probe| probe.next),
         ]
         .into_iter()
         .flatten()
@@ -1187,6 +1193,47 @@ pub fn lost_action(consecutive: u32) -> LostAction {
         ..=MAX_RENDERER_REBUILDS => LostAction::Rebuild,
         n if n == MAX_RENDERER_REBUILDS + 1 => LostAction::GiveUp,
         _ => LostAction::Wait,
+    }
+}
+
+/// How often to look whether the GPU is back.
+pub const GPU_PROBE_INTERVAL: Duration = Duration::from_secs(5);
+/// Longest wait between switch attempts that ended on the CPU again.
+pub const GPU_PROBE_MAX_INTERVAL: Duration = Duration::from_secs(60);
+
+/// When to look again whether a GPU can draw the window, while a lost
+/// device left it on a software renderer it didn't ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuProbe {
+    pub next: Instant,
+    pub interval: Duration,
+}
+
+impl GpuProbe {
+    pub fn start(now: Instant) -> Self {
+        Self {
+            next: now + GPU_PROBE_INTERVAL,
+            interval: GPU_PROBE_INTERVAL,
+        }
+    }
+
+    /// No GPU yet: look again after the same interval.
+    pub fn again(self, now: Instant) -> Self {
+        Self {
+            next: now + self.interval,
+            ..self
+        }
+    }
+
+    /// A GPU was offered but the new renderer ended on the CPU anyway:
+    /// wait twice as long (at most `GPU_PROBE_MAX_INTERVAL`), so a GPU
+    /// that can't be used doesn't cost a rebuild every few seconds.
+    pub fn back_off(self, now: Instant) -> Self {
+        let interval = (self.interval * 2).min(GPU_PROBE_MAX_INTERVAL);
+        Self {
+            next: now + interval,
+            interval,
+        }
     }
 }
 
@@ -1329,5 +1376,23 @@ mod tests {
         assert_eq!(lost_action(MAX_RENDERER_REBUILDS + 1), LostAction::GiveUp);
         assert_eq!(lost_action(MAX_RENDERER_REBUILDS + 2), LostAction::Wait);
         assert_eq!(lost_action(u32::MAX), LostAction::Wait);
+    }
+
+    #[test]
+    fn gpu_probe_backs_off_up_to_a_minute() {
+        let now = Instant::now();
+        let probe = GpuProbe::start(now);
+        assert_eq!(probe.interval, Duration::from_secs(5));
+        assert_eq!(probe.next, now + Duration::from_secs(5));
+        let later = now + Duration::from_secs(7);
+        let again = probe.again(later);
+        assert_eq!(again.interval, Duration::from_secs(5));
+        assert_eq!(again.next, later + Duration::from_secs(5));
+        let mut probe = again;
+        for secs in [10, 20, 40, 60, 60] {
+            probe = probe.back_off(now);
+            assert_eq!(probe.interval, Duration::from_secs(secs));
+            assert_eq!(probe.next, now + probe.interval);
+        }
     }
 }

@@ -368,6 +368,14 @@ impl Renderer {
         self.gpu.offers_software()
     }
 
+    /// A GPU could present to the window now (see `GpuContext::offers_gpu`).
+    pub fn offers_gpu<W>(&self, window: W) -> bool
+    where
+        W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
+    {
+        self.gpu.offers_gpu(window)
+    }
+
     /// Warning about the font given to `new`, if any.
     pub fn take_font_warning(&mut self) -> Option<String> {
         self.font_warning.take()

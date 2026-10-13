@@ -50,6 +50,8 @@ pub struct GpuOptions {
 pub struct GpuContext {
     /// Kept to create the surface anew (see `restore_surface`).
     instance: wgpu::Instance,
+    /// The backends the instance was created with, for `offers_gpu`.
+    backends: wgpu::Backends,
     /// `None` once released for a successor on the same window.
     surface: Option<wgpu::Surface<'static>>,
     pub(crate) device: wgpu::Device,
@@ -107,6 +109,7 @@ impl GpuContext {
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
+        let backends = descriptor.backends;
         let instance = wgpu::Instance::new(descriptor);
         // On Windows, DX12 presents through a DirectComposition visual of
         // our own. A swap chain made from the HWND looks like a game to
@@ -119,7 +122,7 @@ impl GpuContext {
             let context = unsafe { instance.create_surface_unsafe(layer.surface_target()) }
                 .map_err(GpuError::from)
                 .and_then(|surface| {
-                    Self::with_surface(instance.clone(), surface, width, height, options)
+                    Self::with_surface(instance.clone(), backends, surface, width, height, options)
                 });
             match context {
                 Ok(mut context) => {
@@ -131,12 +134,13 @@ impl GpuContext {
             }
         }
         let surface = instance.create_surface(window)?;
-        Self::with_surface(instance, surface, width, height, options)
+        Self::with_surface(instance, backends, surface, width, height, options)
     }
 
     /// Create the context on `surface`, with the first adapter that works.
     fn with_surface(
         instance: wgpu::Instance,
+        backends: wgpu::Backends,
         surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
@@ -157,6 +161,7 @@ impl GpuContext {
                     let lost = watch_device(&device);
                     let context = Self {
                         instance,
+                        backends,
                         surface: Some(surface),
                         device,
                         queue,
@@ -251,25 +256,67 @@ impl GpuContext {
             })
     }
 
+    /// A GPU (not a CPU adapter) could present to the window now. Asks a new
+    /// instance: a DXGI factory keeps listing the adapters it saw when it was
+    /// created, so a GPU that came back after a driver update would stay
+    /// missing from `self.instance`.
+    pub fn offers_gpu<W>(&self, window: W) -> bool
+    where
+        W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
+    {
+        let mut descriptor =
+            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
+        descriptor.backends = self.backends;
+        let instance = wgpu::Instance::new(descriptor);
+        // Never configured, so dropping it leaves the live swapchain alone.
+        let surface = match self.new_surface(&instance, window) {
+            Ok(surface) => surface,
+            Err(err) => {
+                tracing::debug!("no surface to look for a GPU with: {err}");
+                return false;
+            }
+        };
+        pollster::block_on(instance.enumerate_adapters(self.backends))
+            .iter()
+            .any(|adapter| {
+                adapter.get_info().device_type != wgpu::DeviceType::Cpu
+                    && adapter.is_surface_supported(&surface)
+            })
+    }
+
     /// Create the surface for `window` again after `release_surface`, with
     /// the same configuration, for when no successor could be created.
     pub fn restore_surface<W>(&mut self, window: W) -> Result<(), GpuError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
     {
-        #[cfg(windows)]
-        let surface = match &self.layer {
-            // SAFETY: the visual is valid; the surface keeps its own reference.
-            Some(layer) => unsafe { self.instance.create_surface_unsafe(layer.surface_target()) }?,
-            None => self.instance.create_surface(window)?,
-        };
-        #[cfg(not(windows))]
-        let surface = self.instance.create_surface(window)?;
+        let surface = self.new_surface(&self.instance, window)?;
         configure_checked(&surface, &self.device, &self.config)?;
         self.surface = Some(surface);
         self.reconfigure = false;
         self.configured();
         Ok(())
+    }
+
+    /// Create a surface for `window` on `instance`: on the DirectComposition
+    /// visual if the context has one.
+    fn new_surface<W>(
+        &self,
+        instance: &wgpu::Instance,
+        window: W,
+    ) -> Result<wgpu::Surface<'static>, GpuError>
+    where
+        W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
+    {
+        #[cfg(windows)]
+        let surface = match &self.layer {
+            // SAFETY: the visual is valid; the surface keeps its own reference.
+            Some(layer) => unsafe { instance.create_surface_unsafe(layer.surface_target()) }?,
+            None => instance.create_surface(window)?,
+        };
+        #[cfg(not(windows))]
+        let surface = instance.create_surface(window)?;
+        Ok(surface)
     }
 
     /// Have macOS convert the frames from sRGB, which the theme colors are,

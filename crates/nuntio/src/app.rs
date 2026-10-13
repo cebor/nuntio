@@ -25,7 +25,7 @@ use crate::input::KeyPress;
 use crate::status_bar::Stats;
 use crate::sysmon::{SystemMonitor, is_sampled};
 use crate::update::{self, Build, Checker, Update};
-use crate::window::{self, Chrome, DEFAULT_TITLE, WindowState};
+use crate::window::{self, Chrome, DEFAULT_TITLE, GpuProbe, WindowState};
 
 // Child modules, so that their handlers can reach the app's state.
 #[path = "app_input.rs"]
@@ -1165,7 +1165,15 @@ impl Core {
                         tracing::warn!("surface lost, recreating renderer");
                         let software = !self.config.window.gpu_acceleration;
                         match self.rebuild_renderer(state, software, true) {
-                            Ok(warnings) => self.notify(Banner::config(Severity::Warning, warnings)),
+                            Ok(warnings) => {
+                                if !software && state.renderer.software() {
+                                    tracing::warn!(
+                                        "no GPU after the device loss, drawing on the CPU until one is back"
+                                    );
+                                    state.gpu_probe = Some(GpuProbe::start(Instant::now()));
+                                }
+                                self.notify(Banner::config(Severity::Warning, warnings));
+                            }
                             Err(err) => self.fail(event_loop, err),
                         }
                     }
@@ -1178,6 +1186,46 @@ impl Core {
                     window::LostAction::Wait => {}
                 }
             }
+        }
+    }
+
+    /// Look whether a GPU can draw the window again while a lost device left
+    /// it on the CPU, and switch back to it if so.
+    fn probe_gpu(&mut self, state: &mut WindowState, event_loop: &ActiveEventLoop, now: Instant) {
+        let Some(probe) = state.gpu_probe else {
+            return;
+        };
+        if now < probe.next {
+            return;
+        }
+        // The user turned the GPU off, or a config switch already got it back.
+        if !self.config.window.gpu_acceleration || !state.renderer.software() {
+            state.gpu_probe = None;
+            return;
+        }
+        if !state.renderer.offers_gpu(state.window.clone()) {
+            tracing::debug!("no GPU yet, looking again in {:?}", probe.interval);
+            state.gpu_probe = Some(probe.again(now));
+            return;
+        }
+        tracing::info!("a GPU is back, leaving the software renderer");
+        match self.rebuild_renderer(state, false, true) {
+            Ok(warnings) => self.notify(Banner::config(Severity::Warning, warnings)),
+            Err(err) => {
+                state.gpu_probe = None;
+                self.fail(event_loop, err);
+                return;
+            }
+        }
+        if state.renderer.software() {
+            let next = probe.back_off(now);
+            tracing::warn!(
+                "the GPU couldn't be used, trying again in {:?}",
+                next.interval
+            );
+            state.gpu_probe = Some(next);
+        } else {
+            state.gpu_probe = None;
         }
     }
 
@@ -1450,8 +1498,10 @@ impl ApplicationHandler<UserEvent> for App {
         let Some(state) = self.state.as_mut() else {
             return;
         };
+        let now = Instant::now();
+        self.core.probe_gpu(state, event_loop, now);
         // Sleep until the next timer, or until an event if there is none.
-        let deadline = state.run_timers(&self.core.config, Instant::now());
+        let deadline = state.run_timers(&self.core.config, now);
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
