@@ -39,6 +39,8 @@ define_class!(
                 .ok()
                 .and_then(|i| ivars.commands.get(i));
             if let Some(&command) = command {
+                // Fails only once the event loop is gone, when the app is
+                // quitting: there is nobody left to run the command.
                 let _ = ivars.proxy.send_event(UserEvent::Menu(command));
             }
         }
