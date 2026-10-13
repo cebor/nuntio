@@ -38,12 +38,12 @@ impl SearchBar {
         self.search.as_mut()
     }
 
-    #[cfg_attr(not(feature = "debug-server"), allow(dead_code))]
+    #[cfg(feature = "debug-server")]
     pub fn query(&self) -> &str {
         &self.query
     }
 
-    #[cfg_attr(not(feature = "debug-server"), allow(dead_code))]
+    #[cfg(feature = "debug-server")]
     pub fn regex(&self) -> bool {
         self.regex
     }

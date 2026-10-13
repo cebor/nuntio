@@ -202,7 +202,7 @@ impl Pane {
     }
 
     /// Current grid size, once the pane has been laid out.
-    #[cfg_attr(not(feature = "debug-server"), allow(dead_code))]
+    #[cfg(feature = "debug-server")]
     pub fn grid_size(&self) -> Option<TermSize> {
         self.size
     }
