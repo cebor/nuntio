@@ -64,7 +64,7 @@ const BUILTIN: [&str; 20] = [
 
 pub const DEFAULT_THEME: &str = "iTerm2 Default";
 
-pub fn builtin_themes() -> Vec<Theme> {
+fn builtin_themes() -> Vec<Theme> {
     BUILTIN
         .iter()
         .map(|src| toml::from_str(src).expect("built-in themes are valid"))
@@ -167,7 +167,7 @@ fn load_itermcolors(path: &Path) -> Result<Theme, String> {
 /// Convert an iTerm2 color preset. Components are floats in 0..1; color
 /// spaces other than sRGB (e.g. Display P3) are taken as sRGB, which is
 /// close enough for terminal palettes.
-pub fn parse_itermcolors(plist: &plist::Value) -> Result<Theme, String> {
+fn parse_itermcolors(plist: &plist::Value) -> Result<Theme, String> {
     let dict = plist
         .as_dictionary()
         .ok_or("not an iTerm2 color preset (expected a dictionary)")?;

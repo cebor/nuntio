@@ -20,7 +20,7 @@ pub use keys::{ACTIONS, KeyCombo, KeyComboError, KeyName, Mods, NamedKey};
 pub use load::{
     ConfigError, ConfigLocation, Loaded, config_dir, load, locate_config, parse, themes_dir,
 };
-pub use theme::{DEFAULT_THEME, Theme, ThemeSet, builtin_themes, parse_itermcolors};
+pub use theme::{DEFAULT_THEME, Theme, ThemeSet};
 pub use toml_edit;
 pub use watch::ConfigWatcher;
 
