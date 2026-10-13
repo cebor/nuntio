@@ -101,7 +101,13 @@ impl ThemeSet {
             }
         };
 
-        let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        let mut paths = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(entry) => paths.push(entry.path()),
+                Err(err) => warnings.push(format!("themes {}: {err}", dir.display())),
+            }
+        }
         paths.sort();
         // Names of user themes, to report two files with the same name.
         let mut seen: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
