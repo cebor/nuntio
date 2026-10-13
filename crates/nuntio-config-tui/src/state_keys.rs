@@ -3,12 +3,11 @@
 
 use nuntio_config::schema::{Kind, SPRING, Section, Setting};
 use nuntio_config::toml_edit;
-use nuntio_config::{ACTIONS, ConfigDoc, KeyCombo, Keybinding, ThemeSelection};
+use nuntio_config::{ACTIONS, ConfigDoc, KeyCombo, Keybinding, StatusItem, ThemeSelection};
 
 use super::{
     App, Entry, Focus, InputMode, InputTarget, ItemsMode, Key, Mode, PickTarget, PickerMode, Row,
-    SearchMode, ThemeSlot, Tone, UPDATE_ITEM, format_float, format_value, round_to_step,
-    theme_value, value_at,
+    SearchMode, ThemeSlot, Tone, format_float, format_value, round_to_step, theme_value, value_at,
 };
 use crate::args;
 use crate::widgets::{Choice, Pick, Picker, TextInput};
@@ -795,7 +794,7 @@ impl App {
     /// An item of an ordered set that is switched off elsewhere: the
     /// `update` status bar item while its switch under Updates is off.
     pub fn item_disabled(&self, value: &str) -> bool {
-        value == UPDATE_ITEM && !self.config.updates.status_bar
+        value == StatusItem::Update.name() && !self.config.updates.status_bar
     }
 
     fn items_key(&mut self, key: Key, mode: ItemsMode) {

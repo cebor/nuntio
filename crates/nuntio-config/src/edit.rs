@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
-use crate::Keybinding;
+use crate::{Config, Keybinding, StatusItem};
 
 /// A config file as a document that can be edited in place.
 #[derive(Debug, Clone, Default)]
@@ -49,6 +49,48 @@ impl ConfigDoc {
         if was_empty {
             self.keep_comments_on_top();
         }
+    }
+
+    /// Keep the update settings consistent after an edit that turned
+    /// `before` into `after` (the parsed document):
+    ///
+    /// - Switching the status bar indicator on places the `update` item
+    ///   before the last item, which keeps its place at the right edge.
+    ///   Switching it off leaves the items alone.
+    /// - An update check without an indicator must not exist: turning off
+    ///   the last indicator turns the check off too, and the check can't be
+    ///   turned on without one.
+    ///
+    /// Returns the note to show when the check was turned off, or the
+    /// reason the edit must be refused.
+    pub fn settle_update_settings(
+        &mut self,
+        before: &Config,
+        after: &Config,
+    ) -> Result<Option<&'static str>, &'static str> {
+        if after.updates.status_bar
+            && !before.updates.status_bar
+            && !after.status_bar.items.contains(&StatusItem::Update)
+        {
+            let mut items: Vec<&str> = before.status_bar.items.iter().map(|i| i.name()).collect();
+            items.insert(items.len().saturating_sub(1), StatusItem::Update.name());
+            self.set(
+                "status_bar.items",
+                items.into_iter().collect::<toml_edit::Array>(),
+            );
+        }
+        if after.updates.check && !after.update_indicators() {
+            if !before.updates.check {
+                return Err(
+                    "Turn on an update indicator first: banner, tab bar badge or status bar item.",
+                );
+            }
+            self.set("updates.check", false);
+            return Ok(Some(
+                "No update indicator is left, so the update check is off too.",
+            ));
+        }
+        Ok(None)
     }
 
     /// In a file with nothing but comments, the comments are the document's

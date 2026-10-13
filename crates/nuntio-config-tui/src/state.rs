@@ -158,8 +158,6 @@ pub fn bar_preview(entries: &[Entry], width: usize) -> String {
 }
 
 const UPDATES_STATUS_BAR: &str = "updates.status_bar";
-const STATUS_ITEMS: &str = "status_bar.items";
-const UPDATE_ITEM: &str = "update";
 
 /// A line in the settings list.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -525,44 +523,14 @@ impl App {
         let mut doc = self.doc.clone();
         edit(&mut doc);
         let mut note = None;
-        let loaded = nuntio_config::parse(&doc.to_string());
-        // Switching the status bar indicator on places its item, before the
-        // last one, which keeps its place at the right edge. Switching it
-        // off leaves the items alone.
-        if let Ok(loaded) = &loaded
-            && loaded.config.updates.status_bar
-            && !self.config.updates.status_bar
-            && !loaded.config.status_bar.items.contains(&StatusItem::Update)
-        {
-            let mut items: Vec<&str> = value_at(&self.values, STATUS_ITEMS)
-                .and_then(|v| v.as_array())
-                .into_iter()
-                .flatten()
-                .filter_map(|v| v.as_str())
-                .collect();
-            items.insert(items.len().saturating_sub(1), UPDATE_ITEM);
-            doc.set(
-                STATUS_ITEMS,
-                items.into_iter().collect::<toml_edit::Array>(),
-            );
-        }
-        // An update check without an indicator must not exist: turning off
-        // the last indicator turns the check off too, and the check can't
-        // be turned on without one.
-        if let Ok(loaded) = loaded
-            && loaded.config.updates.check
-            && !loaded.config.update_indicators()
-        {
-            if !self.config.updates.check {
-                self.message = Some((
-                    Tone::Warn,
-                    "Turn on an update indicator first: banner, tab bar badge or status bar item."
-                        .into(),
-                ));
-                return false;
+        if let Ok(loaded) = nuntio_config::parse(&doc.to_string()) {
+            match doc.settle_update_settings(&self.config, &loaded.config) {
+                Ok(settled) => note = settled,
+                Err(refusal) => {
+                    self.message = Some((Tone::Warn, refusal.into()));
+                    return false;
+                }
             }
-            doc.set("updates.check", false);
-            note = Some("No update indicator is left, so the update check is off too.");
         }
         let text = doc.to_string();
         if text == self.source {
