@@ -53,6 +53,8 @@ pub struct Config {
     pub theme: ThemeSelection,
     pub mouse: Mouse,
     pub notes: Notes,
+    pub herdr: Herdr,
+    pub tmux: Tmux,
     pub macos: MacOs,
     pub keybindings: Vec<Keybinding>,
     /// Shells the shell menu offers for new tabs, besides `shell`.
@@ -77,6 +79,8 @@ impl Default for Config {
             theme: ThemeSelection::default(),
             mouse: Mouse::default(),
             notes: Notes::default(),
+            herdr: Herdr::default(),
+            tmux: Tmux::default(),
             macos: MacOs::default(),
             keybindings: Vec::new(),
             profiles: Vec::new(),
@@ -349,6 +353,8 @@ pub enum StatusItem {
     Shell,
     /// A newer nuntio release; hidden while there is none.
     Update,
+    /// herdr agents that need attention; opens the agents menu.
+    Agents,
     /// A flexible gap; springs share the free space evenly.
     #[serde(rename = "<->")]
     Spring,
@@ -366,6 +372,7 @@ impl StatusItem {
             Self::Actions => "actions",
             Self::Shell => "shell",
             Self::Update => "update",
+            Self::Agents => "agents",
             Self::Spring => schema::SPRING,
         }
     }
@@ -532,6 +539,52 @@ impl Notes {
             dirs::home_dir(),
             dirs::data_dir(),
         )
+    }
+}
+
+/// herdr, the agent multiplexer: sessions in the shell menu, shortcuts
+/// forwarded into it, and the status of its agents.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Herdr {
+    pub enabled: bool,
+    /// A program name searched for, or an absolute path.
+    pub program: String,
+    /// New tab, split, close, focus, resize and zoom act in herdr.
+    pub forward_actions: bool,
+    /// The `agents` status bar item, tab markers and banners.
+    pub agent_status: bool,
+}
+
+impl Default for Herdr {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            program: "herdr".into(),
+            forward_actions: true,
+            agent_status: true,
+        }
+    }
+}
+
+/// tmux: sessions in the shell menu and shortcuts forwarded into it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Tmux {
+    pub enabled: bool,
+    /// A program name searched for, or an absolute path.
+    pub program: String,
+    /// New tab, split, close, focus, resize and zoom act in tmux.
+    pub forward_actions: bool,
+}
+
+impl Default for Tmux {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            program: "tmux".into(),
+            forward_actions: true,
+        }
     }
 }
 

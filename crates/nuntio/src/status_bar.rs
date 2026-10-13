@@ -67,6 +67,8 @@ pub struct Stats {
     battery_samples: usize,
     latest: Sample,
     update: Option<String>,
+    /// herdr agents that need attention, and the color of the most urgent.
+    agents: Option<(String, Rgb)>,
 }
 
 impl Stats {
@@ -95,6 +97,7 @@ impl Stats {
     pub fn clear(&mut self) {
         *self = Self {
             update: self.update.take(),
+            agents: self.agents.take(),
             ..Self::default()
         };
     }
@@ -102,6 +105,12 @@ impl Stats {
     /// The version of a newer release, for the `update` item.
     pub fn set_update(&mut self, version: Option<String>) {
         self.update = version;
+    }
+
+    /// The summary of herdr's agents and the color of the most urgent
+    /// state, for the `agents` item.
+    pub fn set_agents(&mut self, agents: Option<(String, Rgb)>) {
+        self.agents = agents;
     }
 }
 
@@ -168,6 +177,7 @@ impl StatusBar {
             .filter(|&item| match item {
                 StatusItem::Battery => stats.latest.battery.is_some(),
                 StatusItem::Update => stats.update.is_some(),
+                StatusItem::Agents => stats.agents.is_some(),
                 _ => true,
             })
             .collect();
@@ -370,6 +380,13 @@ impl StatusBar {
                 };
                 self.arrow(out, x, ICON_CELLS, "↑", colors.label);
                 text(CONTENT, version.clone(), colors.value, out);
+            }
+            StatusItem::Agents => {
+                let Some((summary, color)) = &stats.agents else {
+                    return;
+                };
+                text(0, "●".into(), *color, out);
+                text(CONTENT, summary.clone(), colors.value, out);
             }
             StatusItem::Spring => {}
         }
@@ -776,6 +793,8 @@ fn item_cells(item: StatusItem, datetime: &str, shell: &str, stats: &Stats) -> u
         StatusItem::Shell => CONTENT + shell.width(),
         // icon "0.1.6"
         StatusItem::Update => CONTENT + stats.update.as_deref().map_or(0, str::width),
+        // "●" "1 blocked · 2 working"
+        StatusItem::Agents => CONTENT + stats.agents.as_ref().map_or(0, |(t, _)| t.width()),
         StatusItem::Spring => 0,
     }
 }

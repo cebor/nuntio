@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use nuntio_config::{KeyCombo, KeyName};
+use nuntio_config::KeyCombo;
 use nuntio_render::{Capture, FrameStatus};
 use nuntio_term::{Rgb, Snapshot, SnapshotCell};
 use serde::Deserialize;
@@ -24,15 +24,13 @@ use serde_json::{Value, json};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{Modifiers, MouseButton, MouseScrollDelta};
 use winit::event_loop::EventLoopProxy;
-use winit::keyboard::{
-    Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKeyCode, PhysicalKey,
-};
+use winit::keyboard::ModifiersState;
 
 use super::Core;
-use crate::actions::{Action, named_key};
+use crate::actions::Action;
 use crate::banner::Banner;
 use crate::event::{PaneId, UserEvent};
-use crate::input::{KeyEventKind, KeyPress};
+use crate::input::{KeyEventKind, KeyPress, synthetic_press};
 use crate::menu::MenuKind;
 use crate::window::WindowState;
 use nuntio_render::Rect;
@@ -413,7 +411,7 @@ impl Core {
                     .map(|key| KeyCombo::parse(key).map_err(|err| format!("{key}: {err}")))
                     .collect::<Result<Vec<_>, _>>()?;
                 for combo in combos {
-                    let (press, mods) = key_press(&combo);
+                    let (press, mods) = synthetic_press(&combo, KeyEventKind::Press);
                     self.inject_key(state, press, mods);
                 }
                 Ok(Reply::ok(json!({})))
@@ -504,6 +502,7 @@ impl Core {
                     "rect": rect,
                     "grid": grid,
                     "process": pane.term.process_name(),
+                    "multiplexer": crate::mux::pane_mux(pane, &self.config).map(|m| m.tool.name()),
                     "app_title": pane.title,
                     "shell": pane.shell_name,
                 }));
@@ -558,6 +557,7 @@ impl Core {
                     MenuKind::Actions => "actions",
                     MenuKind::Shells => "shells",
                     MenuKind::Tabs => "tabs",
+                    MenuKind::Agents => "agents",
                 },
                 "selected": menu.selected_label(),
                 "entries": menu.labels(),
@@ -728,119 +728,6 @@ fn hold_modifiers(state: &mut WindowState, mods: ModifiersState) -> Modifiers {
 pub fn focus(state: &mut WindowState) {
     state.focused = true;
     state.send_focus(true);
-}
-
-/// A key event for a combination, and the modifiers it needs.
-fn key_press(combo: &KeyCombo) -> (KeyPress, ModifiersState) {
-    let m = combo.mods;
-    let mut mods = ModifiersState::empty();
-    for (on, flag) in [
-        (m.ctrl, ModifiersState::CONTROL),
-        (m.shift, ModifiersState::SHIFT),
-        (m.alt, ModifiersState::ALT),
-        (m.super_key, ModifiersState::SUPER),
-    ] {
-        if on {
-            mods |= flag;
-        }
-    }
-    let press = match combo.key {
-        KeyName::Char(c) => {
-            let shifted = if m.shift {
-                c.to_uppercase().next().unwrap_or(c)
-            } else {
-                c
-            };
-            let physical = char_code(c).map_or(
-                PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
-                PhysicalKey::Code,
-            );
-            KeyPress {
-                logical: Key::Character(shifted.to_string().into()),
-                unmodified: Key::Character(c.to_string().into()),
-                // Like winit: Ctrl and Cmd combinations type nothing.
-                text: (!m.ctrl && !m.super_key).then(|| shifted.to_string()),
-                location: KeyLocation::Standard,
-                physical,
-                kind: KeyEventKind::Press,
-            }
-        }
-        KeyName::Named(name) => {
-            let named = named_key(name);
-            let text = match named {
-                NamedKey::Enter => Some("\r"),
-                NamedKey::Tab => Some("\t"),
-                NamedKey::Space => Some(" "),
-                NamedKey::Backspace => Some("\u{8}"),
-                NamedKey::Escape => Some("\u{1b}"),
-                NamedKey::Delete => Some("\u{7f}"),
-                _ => None,
-            };
-            KeyPress {
-                logical: Key::Named(named),
-                unmodified: Key::Named(named),
-                text: text.map(str::to_owned),
-                location: KeyLocation::Standard,
-                physical: named_code(named).map_or(
-                    PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
-                    PhysicalKey::Code,
-                ),
-                kind: KeyEventKind::Press,
-            }
-        }
-    };
-    (press, mods)
-}
-
-/// The US-layout key for a letter or digit.
-fn char_code(c: char) -> Option<KeyCode> {
-    use KeyCode::*;
-    const LETTERS: [KeyCode; 26] = [
-        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
-        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
-    ];
-    const DIGITS: [KeyCode; 10] = [
-        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
-    ];
-    match c {
-        'a'..='z' => Some(LETTERS[(c as u8 - b'a') as usize]),
-        '0'..='9' => Some(DIGITS[(c as u8 - b'0') as usize]),
-        _ => None,
-    }
-}
-
-fn named_code(key: NamedKey) -> Option<KeyCode> {
-    let code = match key {
-        NamedKey::Enter => KeyCode::Enter,
-        NamedKey::Tab => KeyCode::Tab,
-        NamedKey::Escape => KeyCode::Escape,
-        NamedKey::Space => KeyCode::Space,
-        NamedKey::Backspace => KeyCode::Backspace,
-        NamedKey::Delete => KeyCode::Delete,
-        NamedKey::Insert => KeyCode::Insert,
-        NamedKey::Home => KeyCode::Home,
-        NamedKey::End => KeyCode::End,
-        NamedKey::PageUp => KeyCode::PageUp,
-        NamedKey::PageDown => KeyCode::PageDown,
-        NamedKey::ArrowUp => KeyCode::ArrowUp,
-        NamedKey::ArrowDown => KeyCode::ArrowDown,
-        NamedKey::ArrowLeft => KeyCode::ArrowLeft,
-        NamedKey::ArrowRight => KeyCode::ArrowRight,
-        NamedKey::F1 => KeyCode::F1,
-        NamedKey::F2 => KeyCode::F2,
-        NamedKey::F3 => KeyCode::F3,
-        NamedKey::F4 => KeyCode::F4,
-        NamedKey::F5 => KeyCode::F5,
-        NamedKey::F6 => KeyCode::F6,
-        NamedKey::F7 => KeyCode::F7,
-        NamedKey::F8 => KeyCode::F8,
-        NamedKey::F9 => KeyCode::F9,
-        NamedKey::F10 => KeyCode::F10,
-        NamedKey::F11 => KeyCode::F11,
-        NamedKey::F12 => KeyCode::F12,
-        _ => return None,
-    };
-    Some(code)
 }
 
 fn parse_mods(names: &[String]) -> Result<ModifiersState, String> {
@@ -1114,27 +1001,6 @@ mod tests {
             })
         );
         assert!(request(r#"{"token":"secret","cmd":"fly"}"#).is_err());
-    }
-
-    #[test]
-    fn combos_become_key_presses() {
-        let (press, mods) = key_press(&KeyCombo::parse("ctrl+c").unwrap());
-        assert_eq!(mods, ModifiersState::CONTROL);
-        assert_eq!(press.unmodified, Key::Character("c".into()));
-        assert_eq!(press.physical, PhysicalKey::Code(KeyCode::KeyC));
-        assert_eq!(press.text, None);
-
-        let (press, mods) = key_press(&KeyCombo::parse("shift+a").unwrap());
-        assert_eq!(mods, ModifiersState::SHIFT);
-        assert_eq!(press.logical, Key::Character("A".into()));
-        assert_eq!(press.unmodified, Key::Character("a".into()));
-        assert_eq!(press.text.as_deref(), Some("A"));
-
-        let (press, mods) = key_press(&KeyCombo::parse("enter").unwrap());
-        assert_eq!(mods, ModifiersState::empty());
-        assert_eq!(press.logical, Key::Named(NamedKey::Enter));
-        assert_eq!(press.physical, PhysicalKey::Code(KeyCode::Enter));
-        assert_eq!(press.text.as_deref(), Some("\r"));
     }
 
     fn cell(c: char, wide: bool) -> SnapshotCell {

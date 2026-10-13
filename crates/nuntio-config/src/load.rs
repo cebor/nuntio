@@ -241,6 +241,14 @@ impl Config {
         if let Some(dir) = &self.notes.directory {
             validate_dir("notes.directory", dir)?;
         }
+        for (key, program) in [
+            ("herdr.program", &self.herdr.program),
+            ("tmux.program", &self.tmux.program),
+        ] {
+            if program.trim().is_empty() {
+                return Err(format!("`{key}` must not be empty"));
+            }
+        }
         self.status_bar.validate()?;
         Ok(())
     }

@@ -37,6 +37,10 @@ pub const WHITE: Rgb = rgb(0xffffff);
 pub const BLACK: Rgb = rgb(0x000000);
 /// The blue of informational banners and the update badge.
 pub const INFO_COLOR: Rgb = rgb(0x1f5fa8);
+/// herdr agents: one needs input, one finished, one works.
+pub const AGENT_BLOCKED: Rgb = rgb(0xe06c75);
+pub const AGENT_DONE: Rgb = rgb(0x98c379);
+pub const AGENT_WORKING: Rgb = rgb(0x61afef);
 
 /// Perceived brightness, 0.0 (black) to 1.0 (white).
 pub fn luminance(c: Rgb) -> f32 {

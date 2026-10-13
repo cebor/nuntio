@@ -90,12 +90,13 @@ impl Core {
     // ----- Starting panes ----------------------------------------------------
 
     /// Start `launch` in a new pane of `size`, in `dir` if it suits the
-    /// shell.
+    /// shell, with the environment variables `extra_env` on top.
     fn spawn_pane(
         &mut self,
         dir: Option<StartDir>,
         launch: Launch,
         size: TermSize,
+        extra_env: Vec<(String, String)>,
     ) -> Result<Pane> {
         let id = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
@@ -142,7 +143,12 @@ impl Core {
             },
             term: term_options(&self.config),
             palette: self.palette.clone(),
-            env: crate::pane_env::pane_env(self.config_path.as_deref(), distro.is_some()),
+            env: {
+                let mut env =
+                    crate::pane_env::pane_env(self.config_path.as_deref(), distro.is_some());
+                env.extend(extra_env);
+                env
+            },
             window_id: self.window_id,
             transport,
         };
@@ -166,7 +172,7 @@ impl Core {
         };
         let dir = first_pane_dir(asked, dir, dirs::home_dir());
         let may_fall_back = matches!(&launch, Launch::Shell(ShellChoice { shell: Some(_), .. }));
-        let err = match self.spawn_pane(dir, launch, INITIAL_GRID) {
+        let err = match self.spawn_pane(dir, launch, INITIAL_GRID, Vec::new()) {
             Ok(pane) => return Ok(pane),
             Err(err) => err,
         };
@@ -178,7 +184,12 @@ impl Core {
             name: shells::shell_name(None),
             shell: None,
         });
-        let fallback = self.spawn_pane(dirs::home_dir().map(StartDir::Local), system, INITIAL_GRID);
+        let fallback = self.spawn_pane(
+            dirs::home_dir().map(StartDir::Local),
+            system,
+            INITIAL_GRID,
+            Vec::new(),
+        );
         let Ok(pane) = fallback else {
             return Err(err);
         };
@@ -206,13 +217,35 @@ impl Core {
         launch: Launch,
         inherit: bool,
     ) -> Option<Pane> {
-        let target = launch.distro();
-        let dir = inherit
-            .then(|| self.focused_dir(state, target.as_ref()))
+        let dir = self.start_dir(state, launch.distro().as_ref(), inherit);
+        self.spawn_reported(dir, launch, state.grid(), Vec::new())
+    }
+
+    /// Where a new tab or split whose shell runs in `target` (WSL) or on
+    /// the host starts: in the focused pane's directory with `inherit`,
+    /// otherwise (or if it's unknown) in `working_directory` or at home.
+    pub(super) fn start_dir(
+        &mut self,
+        state: &WindowState,
+        target: Option<&Distro>,
+        inherit: bool,
+    ) -> Option<StartDir> {
+        inherit
+            .then(|| self.focused_dir(state, target))
             .flatten()
-            .or_else(|| self.configured_dir(target.as_ref()))
-            .or_else(|| dirs::home_dir().map(StartDir::Local));
-        self.spawn_pane(dir, launch, state.grid())
+            .or_else(|| self.configured_dir(target))
+            .or_else(|| dirs::home_dir().map(StartDir::Local))
+    }
+
+    /// `spawn_pane`, with failures shown in a banner.
+    fn spawn_reported(
+        &mut self,
+        dir: Option<StartDir>,
+        launch: Launch,
+        size: TermSize,
+        extra_env: Vec<(String, String)>,
+    ) -> Option<Pane> {
+        self.spawn_pane(dir, launch, size, extra_env)
             .inspect_err(|err| {
                 self.notify(Banner::new(
                     Severity::Error,
@@ -255,7 +288,7 @@ impl Core {
     }
 
     /// `dir` in `distro` as an absolute path: `~` too becomes absolute.
-    fn wsl_absolute(&mut self, distro: &Distro, dir: &str) -> Option<String> {
+    pub(super) fn wsl_absolute(&mut self, distro: &Distro, dir: &str) -> Option<String> {
         if dir == "~" {
             return self.wsl_homes.get(&distro.name, distro.user.as_deref());
         }
@@ -265,7 +298,11 @@ impl Core {
     /// The directory of the focused pane, for a new pane whose shell runs in
     /// `target` (WSL) or on the host. Translated between WSL and Windows;
     /// `None` from one distribution to another.
-    fn focused_dir(&mut self, state: &WindowState, target: Option<&Distro>) -> Option<StartDir> {
+    pub(super) fn focused_dir(
+        &mut self,
+        state: &WindowState,
+        target: Option<&Distro>,
+    ) -> Option<StartDir> {
         let pane = state.content().focused_pane();
         let Some(source) = pane.wsl.clone() else {
             let path = pane.term.working_directory()?;
@@ -306,9 +343,22 @@ impl Core {
         placement: Placement,
     ) {
         let inherit = self.config.tabs.inherit_directory;
-        let Some(pane) = self.spawn_for_focused(state, launch, inherit) else {
-            return;
-        };
+        let dir = self.start_dir(state, launch.distro().as_ref(), inherit);
+        self.new_tab_in(state, launch, placement, dir, Vec::new());
+    }
+
+    /// Open a tab that runs `launch` at `placement`, in `dir`, with the
+    /// environment variables `extra_env` on top of the usual ones. Returns
+    /// the new pane, now focused.
+    pub(super) fn new_tab_in(
+        &mut self,
+        state: &mut WindowState,
+        launch: Launch,
+        placement: Placement,
+        dir: Option<StartDir>,
+        extra_env: Vec<(String, String)>,
+    ) -> Option<PaneId> {
+        let pane = self.spawn_reported(dir, launch, state.grid(), extra_env)?;
         let id = pane.id;
         state.send_focus(false);
         state.tabs.open(TabContent::new(pane), placement);
@@ -319,17 +369,22 @@ impl Core {
         // The first extra tab may show the tab bar and shrink the grid.
         state.resize_terms(&self.config);
         state.window.request_redraw();
+        Some(id)
     }
 
     /// Split the focused pane; the new pane runs the focused pane's shell in
     /// the same directory.
     pub(super) fn split(&mut self, state: &mut WindowState, axis: Axis) {
-        let launch = state
-            .content()
-            .focused_pane()
-            .shell
-            .clone()
-            .map_or_else(|| self.default_launch(), Launch::Shell);
+        let focused = state.content().focused_pane();
+        // A second client of the same multiplexer would only mirror it.
+        let launch = if crate::mux::pane_mux(focused, &self.config).is_some() {
+            self.default_launch()
+        } else {
+            focused
+                .shell
+                .clone()
+                .map_or_else(|| self.default_launch(), Launch::Shell)
+        };
         self.split_with(state, launch, axis);
     }
 

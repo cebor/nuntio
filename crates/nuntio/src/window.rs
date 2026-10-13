@@ -2,7 +2,7 @@
 //! and the keyboard state that belongs to the window. Pointer input is in
 //! `window_pointer`, putting frames together in `window_frame`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,7 +18,10 @@ use crate::actions::Bindings;
 use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::input;
-use crate::menu::{Anchor, Menu, MenuKind, View};
+use crate::menu::{Anchor, Menu, MenuEntry, MenuKind, MenuSection, View};
+use crate::mux::MuxPane;
+use crate::mux::agents::SessionKey;
+use crate::mux::herdr::AgentStatus;
 use crate::pane_tree::{Direction, Layout, PaneTree};
 use crate::render_health::RenderHealth;
 use crate::search_bar::SearchBar;
@@ -102,6 +105,10 @@ pub struct Pane {
     pub shell: Option<ShellChoice>,
     /// Title set by the application (OSC 0/2).
     pub title: Option<String>,
+    /// The multiplexer session nuntio started in this pane from the shell
+    /// menu; `None` for any other pane (a multiplexer started by hand is
+    /// found by its process name, see `mux::pane_mux`).
+    pub mux: Option<MuxPane>,
     /// Current grid size, to skip redundant resizes.
     size: Option<TermSize>,
     /// When the grid size last changed.
@@ -159,6 +166,7 @@ impl Pane {
             size: None,
             resized: None,
             title_cache: None,
+            mux: None,
         }
     }
 
@@ -327,6 +335,9 @@ pub struct WindowState {
     pub search: Option<SearchBar>,
     /// The open menu: the actions, the shells or the tabs.
     pub menu: Option<Menu>,
+    /// The most urgent status of each herdr session's agents, for the tab
+    /// markers.
+    pub agent_status: HashMap<SessionKey, AgentStatus>,
     pub blink: Blink,
     /// Skipped and lost frames, and the look-out for a GPU.
     pub health: RenderHealth,
@@ -374,6 +385,7 @@ impl WindowState {
             preedit: None,
             search: None,
             menu: None,
+            agent_status: HashMap::new(),
             blink: Blink {
                 active: false,
                 visible: true,
@@ -591,8 +603,9 @@ impl WindowState {
         self.show_menu(Menu::new(anchor, bindings));
     }
 
-    /// Open the menu of shells `names` for a new tab: below the tab bar's
-    /// "+" with `at_new_tab`, otherwise at the `shell` status bar item, the
+    /// Open the menu of shells `names` for a new tab, followed by the
+    /// multiplexer sections `extra`: below the tab bar's "+" with
+    /// `at_new_tab`, otherwise at the `shell` status bar item, the
     /// `actions` one or the "+", or at the top of the terminal area.
     pub fn open_shell_menu(
         &mut self,
@@ -600,6 +613,7 @@ impl WindowState {
         stats: &Stats,
         bindings: &Bindings,
         names: &[String],
+        extra: &[MenuSection],
         at_new_tab: bool,
     ) {
         let anchor = if at_new_tab {
@@ -610,7 +624,35 @@ impl WindowState {
                 .or_else(|| self.new_tab_anchor(config))
         };
         let anchor = anchor.unwrap_or_else(|| self.centered_anchor(config));
-        self.show_menu(Menu::shells(anchor, names, bindings));
+        self.show_menu(Menu::shells(anchor, names, extra, bindings));
+    }
+
+    /// Rebuild the open shell menu with new multiplexer sections, keeping
+    /// its place and selection. Nothing when another menu, or none, is open.
+    pub fn refresh_shell_menu(
+        &mut self,
+        names: &[String],
+        extra: &[MenuSection],
+        bindings: &Bindings,
+    ) {
+        let Some(old) = self.menu.as_ref().filter(|m| m.kind() == MenuKind::Shells) else {
+            return;
+        };
+        let mut menu = Menu::shells(old.anchor(), names, extra, bindings);
+        menu.keep_position(old);
+        if self.menu.as_ref() != Some(&menu) {
+            self.menu = Some(menu);
+            self.window.request_redraw();
+        }
+    }
+
+    /// Open the list of herdr agents at the `agents` status bar item, or
+    /// at the top of the terminal area.
+    pub fn open_agents_menu(&mut self, config: &Config, stats: &Stats, entries: &[MenuEntry]) {
+        let anchor = self
+            .status_item_anchor(config, stats, StatusItem::Agents)
+            .unwrap_or_else(|| self.centered_anchor(config));
+        self.show_menu(Menu::agents(anchor, entries));
     }
 
     /// Below or above the status bar `item`, if it is shown.

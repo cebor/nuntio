@@ -1,8 +1,11 @@
 //! The menus that open from the status bar: the menu of all actions that
 //! the `actions` item opens, a list with a heading per category, each entry
-//! with its shortcut, and the menu of shells for a new tab. Also the list of
-//! all tabs that the tab bar's ⌄ button opens. They are laid out in the
-//! cells of the small UI font (`UiMetrics::small`).
+//! with its shortcut, the menu of shells for a new tab (with herdr and tmux
+//! sessions) and the list of herdr agents. Also the list of all tabs that
+//! the tab bar's ⌄ button opens. They are laid out in the cells of the
+//! small UI font (`UiMetrics::small`).
+
+use std::borrow::Cow;
 
 use nuntio_config::StatusItem;
 use nuntio_render::{Rect, UiRect, UiText};
@@ -18,7 +21,7 @@ const PADDING: f64 = 4.0;
 const ROW_PADDING: f64 = 2.0;
 /// Space to the window's left and right edges, in logical pixels.
 const MARGIN: f64 = 2.0;
-/// Space between label and shortcut, in cells.
+/// Space between label and detail, in cells.
 const GAP_CELLS: usize = 3;
 /// Longest tab title the tab list shows, in cells.
 const TAB_MENU_CELLS: usize = 48;
@@ -33,6 +36,7 @@ const MENU: &[(&str, &[Action])] = &[
         &[
             Action::NewTab,
             Action::OpenShellMenu,
+            Action::OpenAgentsMenu,
             Action::CloseTab,
             Action::NextTab,
             Action::PreviousTab,
@@ -94,6 +98,7 @@ pub enum MenuKind {
     Actions,
     Shells,
     Tabs,
+    Agents,
 }
 
 impl MenuKind {
@@ -103,6 +108,7 @@ impl MenuKind {
         match self {
             Self::Actions => Some(Action::OpenActionsMenu),
             Self::Shells => Some(Action::OpenShellMenu),
+            Self::Agents => Some(Action::OpenAgentsMenu),
             Self::Tabs => None,
         }
     }
@@ -112,6 +118,7 @@ impl MenuKind {
         match self {
             Self::Actions => Some(StatusItem::Actions),
             Self::Shells => Some(StatusItem::Shell),
+            Self::Agents => Some(StatusItem::Agents),
             Self::Tabs => None,
         }
     }
@@ -140,14 +147,42 @@ pub struct View {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Row {
-    Heading(&'static str),
+    Heading(Cow<'static, str>),
     Entry {
         label: String,
         action: Action,
-        shortcut: Option<String>,
-        /// The active tab, marked in the tab list.
+        /// Right-aligned and muted: a shortcut or a state.
+        detail: Option<String>,
+        /// Marked with a dot: the active tab, an open session.
         current: bool,
     },
+}
+
+/// A heading with entries, for the parts of a menu built elsewhere.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MenuSection {
+    pub heading: String,
+    pub entries: Vec<MenuEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MenuEntry {
+    pub label: String,
+    pub detail: Option<String>,
+    pub current: bool,
+    pub action: Action,
+}
+
+fn push_sections(rows: &mut Vec<Row>, sections: &[MenuSection]) {
+    for section in sections {
+        rows.push(Row::Heading(section.heading.clone().into()));
+        rows.extend(section.entries.iter().map(|e| Row::Entry {
+            label: truncate(&e.label, TAB_MENU_CELLS),
+            action: e.action,
+            detail: e.detail.clone(),
+            current: e.current,
+        }));
+    }
 }
 
 impl Row {
@@ -220,7 +255,7 @@ impl Menu {
     pub fn new(anchor: Anchor, bindings: &Bindings) -> Self {
         let mut rows = Vec::new();
         for &(title, entries) in MENU {
-            rows.push(Row::Heading(title));
+            rows.push(Row::Heading(title.into()));
             for &action in entries {
                 rows.push(Row::Entry {
                     label: action
@@ -228,7 +263,7 @@ impl Menu {
                         .expect("every action in MENU has a label")
                         .to_owned(),
                     action,
-                    shortcut: bindings.shortcut(action),
+                    detail: bindings.shortcut(action),
                     current: false,
                 });
             }
@@ -238,30 +273,57 @@ impl Menu {
 
     /// The menu of shells for a new tab: entry `i` runs
     /// `Action::NewTabWithShell(i)`; the first, the default shell, shows the
-    /// `new_tab` shortcut.
-    pub fn shells(anchor: Anchor, names: &[String], bindings: &Bindings) -> Self {
-        let mut rows = vec![Row::Heading("New Tab With")];
+    /// `new_tab` shortcut. The multiplexer sections follow.
+    pub fn shells(
+        anchor: Anchor,
+        names: &[String],
+        extra: &[MenuSection],
+        bindings: &Bindings,
+    ) -> Self {
+        let mut rows = vec![Row::Heading("New Tab With".into())];
         rows.extend(names.iter().enumerate().map(|(i, name)| Row::Entry {
             label: name.clone(),
             action: Action::NewTabWithShell(i),
-            shortcut: if i == 0 {
+            detail: if i == 0 {
                 bindings.shortcut(Action::NewTab)
             } else {
                 None
             },
             current: false,
         }));
+        push_sections(&mut rows, extra);
         Self::with_rows(MenuKind::Shells, anchor, rows)
+    }
+
+    /// The list of herdr agents, most urgent first.
+    pub fn agents(anchor: Anchor, entries: &[MenuEntry]) -> Self {
+        let mut rows = Vec::new();
+        push_sections(
+            &mut rows,
+            &[MenuSection {
+                heading: "Agents".into(),
+                entries: entries.to_vec(),
+            }],
+        );
+        if entries.is_empty() {
+            rows.push(Row::Entry {
+                label: "No agents".into(),
+                action: Action::OpenAgentsMenu,
+                detail: None,
+                current: false,
+            });
+        }
+        Self::with_rows(MenuKind::Agents, anchor, rows)
     }
 
     /// The list of all tabs: entry `i` runs `Action::SelectTab(i)`. The
     /// active tab is marked, selected and scrolled into view.
     pub fn tabs(anchor: Anchor, titles: &[String], active: usize, view: View) -> Self {
-        let mut rows = vec![Row::Heading("Tabs")];
+        let mut rows = vec![Row::Heading("Tabs".into())];
         rows.extend(titles.iter().enumerate().map(|(i, title)| Row::Entry {
             label: truncate(title, TAB_MENU_CELLS),
             action: Action::SelectTab(i),
-            shortcut: None,
+            detail: None,
             current: i == active,
         }));
         let mut menu = Self::with_rows(MenuKind::Tabs, anchor, rows);
@@ -285,6 +347,23 @@ impl Menu {
         self.kind
     }
 
+    /// Where the menu grows from.
+    pub fn anchor(&self) -> Anchor {
+        self.anchor
+    }
+
+    /// Keep the selection and scroll position of `old`, the menu this one
+    /// replaces, when it lists the same kind of thing.
+    pub fn keep_position(&mut self, old: &Menu) {
+        if self.kind != old.kind {
+            return;
+        }
+        self.selected = old
+            .selected
+            .filter(|&row| self.rows.get(row).is_some_and(Row::is_entry));
+        self.scroll = old.scroll.min(self.rows.len().saturating_sub(1));
+    }
+
     fn geometry(&self, view: View) -> Geometry {
         let View { window, metrics } = view;
         let cell = metrics.small;
@@ -298,17 +377,12 @@ impl Menu {
             Row::Heading(title) => title.width(),
             Row::Entry { label, .. } => 1 + label.width(),
         });
-        let shortcuts = self.rows.iter().filter_map(|row| match row {
-            Row::Entry { shortcut, .. } => shortcut.as_deref().map(str::width),
+        let details = self.rows.iter().filter_map(|row| match row {
+            Row::Entry { detail, .. } => detail.as_deref().map(str::width),
             Row::Heading(_) => None,
         });
-        let (labels, shortcuts) = (labels.max().unwrap_or(0), shortcuts.max().unwrap_or(0));
-        let text_cells = labels
-            + if shortcuts > 0 {
-                GAP_CELLS + shortcuts
-            } else {
-                0
-            };
+        let (labels, details) = (labels.max().unwrap_or(0), details.max().unwrap_or(0));
+        let text_cells = labels + if details > 0 { GAP_CELLS + details } else { 0 };
         // A cell to the left, two to the right: the scroll arrows go there.
         let width = ((text_cells + 3) as f32 * cw)
             .min(window.0 - 2.0 * margin)
@@ -483,7 +557,7 @@ impl Menu {
                 }
                 Row::Entry {
                     label,
-                    shortcut,
+                    detail,
                     current,
                     ..
                 } => {
@@ -496,11 +570,10 @@ impl Menu {
                     }
                     let label_x = x + geometry.cell_width;
                     texts.push(UiText::new(label_x, y, label.clone(), text_color).small());
-                    if let Some(shortcut) = shortcut {
-                        let width = shortcut.width() as f32 * geometry.cell_width;
+                    if let Some(detail) = detail {
+                        let width = detail.width() as f32 * geometry.cell_width;
                         texts.push(
-                            UiText::new((right - width).floor(), y, shortcut.clone(), muted)
-                                .small(),
+                            UiText::new((right - width).floor(), y, detail.clone(), muted).small(),
                         );
                     }
                 }
@@ -629,7 +702,7 @@ mod tests {
         assert_eq!(menu.selected_action(), Some(Action::CheckForUpdates));
         menu.select(Step::Next, view);
         assert_eq!(menu.selected_action(), Some(Action::NewTab));
-        for _ in 0..5 {
+        for _ in 0..6 {
             menu.select(Step::Next, view);
         }
         // Past the last tab entry, over the "Panes" heading.
@@ -726,7 +799,7 @@ mod tests {
         };
         let names = ["Ubuntu".to_owned(), "PowerShell 7".to_owned()];
         let bindings = Bindings::platform_defaults();
-        let menu = Menu::shells(anchor, &names, &bindings);
+        let menu = Menu::shells(anchor, &names, &[], &bindings);
         assert_eq!(menu.kind(), MenuKind::Shells);
         assert_eq!(
             entries(&menu),

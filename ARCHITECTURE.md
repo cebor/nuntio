@@ -20,6 +20,7 @@ Contents:
 [Idle and timers](#idle-and-timers) ·
 [Pane lifecycle](#pane-lifecycle) ·
 [Inline images](#inline-images) ·
+[herdr and tmux](#herdr-and-tmux) ·
 [Configuration and hot reload](#configuration-and-hot-reload) ·
 [nuntio-config](#nuntio-config-settings-tui) ·
 [nuntio-apps](#nuntio-apps-notes) ·
@@ -103,7 +104,7 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |---|---|---|---|
 |main|`main::run` → `run_app`|runs winit|process exit|
 |`PTY reader`|`nuntio-term` `IoLoop::spawn`|one per pane: polls the backend, parses into `Term`, writes input|`Msg::Shutdown` or child exit|
-|unnamed scoped worker|`IoLoop` `decode_serving`|decodes one image while the PTY thread keeps serving|the decode finishes|
+|unnamed scoped worker|`IoLoop` `work_serving`|decodes one image while the PTY thread keeps serving|the decode finishes|
 |`nuntio-wsl input/stdout/stderr/waiter`|`wsl_pipe.rs` (Windows)|the pipe transport of WSL panes|the pane closes|
 |`config watcher`|`nuntio-config` `watch.rs`|debounces notify events, calls `on_change`|`ConfigWatcher` dropped (it holds only a `Weak`)|
 |`sysmon`|`sysmon.rs` `SystemMonitor::start`|samples for the status bar|`SystemMonitor` dropped|
@@ -111,6 +112,8 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |`update-check-now`|`update::check_now`|one manual check|after one check|
 |`clipboard-read`|`Core::request_paste`|reads the clipboard off the main thread|after one read|
 |`link-open`|`Core::open_url`|runs `link::check` and opens the link|after one link|
+|`multiplexers`|`mux/service.rs` `MuxService::start`|finds herdr/tmux (also in WSL), lists sessions, machines, key bindings and the project every 60 s and when the shell menu opens; owns the agent monitors|`MuxService` dropped|
+|`herdr agents`|`mux/agents.rs` `Monitor::start`|one per running herdr session: `agent.list` and `events.subscribe` on its socket|`Monitor` dropped or the session ends|
 |`font preload`|`nuntio_render::preload_fonts`|builds the `FontSystem` while the window and GPU start|joined by `Fonts::new`|
 |`debug-server` + one unnamed thread per connection|`debug_server::start` (feature)|the TCP accept loop / `serve`|process exit / connection close|
 
@@ -126,6 +129,9 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |`Debug(DebugCall)` (feature `debug-server`)|debug connections|`debug_call`|
 |`Paste(ClipboardPaste)`|clipboard-read|`clipboard_pasted`|
 |`LinkFailed(String)`|link-open|banner|
+|`Mux(Box<MuxSnapshot>)`|multiplexers|`mux_snapshot`: kept for the shell menu and forwarding|
+|`Agents(AgentsUpdate)`|herdr agents|`agents_update`: status bar item, tab markers, banner|
+|`MuxOpen(MuxOpen)`|multiplexers|`open_mux`: switch to the session's tab or open one|
 
 `TermEvent` handling on the main thread:
 
@@ -172,7 +178,7 @@ sequenceDiagram
     R-->>M: FrameStatus
 ```
 
-- Read pipeline ([`crates/nuntio-term/src/io_loop.rs`](crates/nuntio-term/src/io_loop.rs)): `CwdScanner` (OSC 7 / OSC 9;9 → `ReportedDir`) → `ImageScanner` (takes out OSC 1337 `File=` and `CSI 16 t`) → the `alacritty_terminal` vte parser.
+- Read pipeline ([`crates/nuntio-term/src/io_loop.rs`](crates/nuntio-term/src/io_loop.rs)): `CwdScanner` (OSC 7 / OSC 9;9 → `ReportedDir`) → `ImageScanner` (takes out OSC 1337 `File=`, Kitty APC graphics and `CSI 16 t`) → the `alacritty_terminal` vte parser.
 - Term lock: `term.lease()` reserves the next turn of the `FairMutex`. The lock is released after `MAX_LOCKED_READ` bytes, so the main thread can draw during floods.
 - Wakeups are coalesced: `wakeup_pending` is cleared by the next snapshot. DEC 2026 synchronized updates hold the wakeup until the update ends or `sync_timeout` fires.
 - No damage tracking: each frame copies the whole visible grid into a pooled `Snapshot` (`WindowState::shot_pool`); `Snapshot::refresh` resolves colors, selection and search highlights.
@@ -278,16 +284,34 @@ Close:
 3. In `IoLoop`, `Backend` is the last field, because dropping the PTY can block until the child exits; the grid and images are freed first.
 4. `ExitGuard` closes the pane even when the PTY thread panics.
 
-`confirm_close` asks before closing when `foreground_is_shell() == Some(false)`. It doesn't apply on Windows and in WSL panes, where the foreground process isn't visible.
+`confirm_close` asks before closing when `foreground_is_shell() == Some(false)`. It doesn't apply to native Windows panes, where the foreground process isn't visible.
 
 ## Inline images
 
-1. `ImageScanner` ([`image_scan.rs`](crates/nuntio-term/src/image_scan.rs)) cuts OSC 1337 `File=` sequences out of the stream before the parser sees them.
+1. `ImageScanner` ([`image_scan.rs`](crates/nuntio-term/src/image_scan.rs)) cuts OSC 1337 `File=` sequences (and Kitty APC graphics, below) out of the stream before the parser sees them.
 2. `parse_args` → `decode` runs on a scoped worker thread: base64, the `image` crate, EXIF orientation, scaling to cells, premultiplied RGBA.
 3. The per-pane `ImageStore` dedupes by `ImageKey` and evicts by `IMAGE_MEMORY_BUDGET` / `IMAGE_MEMORY_LIMIT`.
 4. `image::place` ([`image.rs`](crates/nuntio-term/src/image.rs)) writes placeholder cells: char `PLACEHOLDER` (U+10EEEE), fg = the 24-bit image id, and two zero-width marks for row and column. Images therefore scroll, reflow, clear and get overwritten like text. If `ESC 7 CSI n A` comes right before the image (omp draws images upward from their last row), rows that would lie above line 0 are left out (`rows_above_screen`) instead of shifting the whole image down.
 5. `Snapshot.images` (runs of `ImagePiece`) feeds the renderer's image atlas.
 6. `CSI 16 t` is answered with the cell size. Copy (`strip_image_text`) and URL detection skip placeholder cells.
+
+Kitty graphics ([`kitty.rs`](crates/nuntio-term/src/kitty.rs)), which herdr sends to its outer terminal:
+
+- `ImageScanner` also cuts out APC `ESC _ G … ESC \`. `Transfers` joins `m=1` chunks; `plan` → `prepare` (decoding on the worker) → `apply` (under the term lock).
+- Transmitted images are kept per Kitty id in the `ImageStore` (`KITTY_SOURCE_LIMIT`, oldest dropped first). Each placement is rendered (source rect, offset, `c`×`r` cells) into its own `TermImage` and written as ordinary placeholder cells, `C=1` with `place_fixed` (cursor unchanged). Images replace the text in their cells; `z` only matters for deletes.
+- Placing the same image and placement id again erases the old cells first (`erase_image`); `a=d` erases by the predicates of the visible cells.
+- Not supported (answered `EINVAL`): Unicode placeholders, relative placements, animation, media other than direct (`t=d`).
+
+## herdr and tmux
+
+Opt-in (`[herdr]`, `[tmux]`); the code is in [`crates/nuntio/src/mux/`](crates/nuntio/src/mux/) and [`app_mux.rs`](crates/nuntio/src/app_mux.rs).
+
+- `main` removes `HERDR_*`, `TMUX` and `TMUX_PANE` from nuntio's own environment before any thread starts: panes inherit it, and herdr refuses to start "nested".
+- A pane runs a multiplexer if nuntio started it there from the shell menu (`Pane::mux`) or its foreground process is called `herdr…`/`tmux…` (`mux::pane_mux`; in WSL through the helper's `fg` markers).
+- `run_action` first offers the action to `forward_to_mux`: new tab, split, close pane, focus, resize and zoom become the tool's own keys (herdr's `[keys]` config, tmux's `list-keys -T prefix`), encoded for the pane's keyboard mode by `input::chord_bytes`. Tab switching and closing tabs stay nuntio's. Unbound actions fall through to nuntio; a nuntio split of such a pane runs the default shell, not a second client.
+- The service thread resolves programs like a login shell would (`mux/resolve.rs`), on Windows also in every WSL distribution, and runs the tools' CLIs with a timeout (`command::output_within`). The shell menu shows its last snapshot and asks for a new one, which replaces the menu's sections in place.
+- Agents: one monitor per running herdr session lists them over the socket and re-lists on pushed events. The main thread keeps them per `SessionKey` for the `agents` item, the tab markers (`WindowState::agent_status`) and the banner when one becomes blocked out of view.
+- herdr clients that nuntio starts get `PI_FORCE_IMAGE_PROTOCOL=kitty` (not through ConPTY), so herdr's panes send images that herdr passes on as Kitty graphics.
 
 ## Configuration and hot reload
 
@@ -371,7 +395,7 @@ wsl.exe -d <distro> [-u <user>] --cd <dir> --exec /bin/sh -c 'exec "$(wslpath -u
 Wire protocol ([`crates/nuntio-wsl/src/proto.rs`](crates/nuntio-wsl/src/proto.rs)):
 
 - nuntio → helper (stdin): frames `[kind: u8][len: u32 LE][payload]`. `DATA = 0` carries input bytes; `RESIZE = 1` carries `columns, lines, cell_width, cell_height`, each u16 LE. A payload is at most `MAX_FRAME` (1 MiB). The first frame must be `RESIZE`.
-- helper → nuntio (stdout): raw PTY bytes, preceded once by the marker `ESC ] nuntio-wsl;ready BEL`. stderr carries helper messages.
+- helper → nuntio (stdout): raw PTY bytes with in-band markers `ESC ] nuntio-wsl;<body> BEL`: `ready` once at the start, then `fg;…` foreground reports. `MarkerFilter` strips them; `wsl_pipe.rs` stores the foreground in `TermHandle`'s `remote_foreground`, which `foreground` and `foreground_is_shell` fall back to. stderr carries helper messages.
 
 Relay ([`crates/nuntio-wsl/src/relay.rs`](crates/nuntio-wsl/src/relay.rs)):
 
@@ -379,10 +403,13 @@ Relay ([`crates/nuntio-wsl/src/relay.rs`](crates/nuntio-wsl/src/relay.rs)):
 - One `poll` loop over stdin, the PTY master and a SIGCHLD self-pipe.
 - Back-pressure on input; stdin EOF hangs up the shell.
 - Exit code 127 for a missing program, 2 for data before the first size.
+- After each PTY read and SIGCHLD (and polling for a second after input or output), `tcgetpgrp` on the master: a new foreground group is reported as `ESC ] nuntio-wsl;fg;<0|1>;<comm> BEL` (1: the shell itself) before the bytes of that read.
 
 Windows pipes can't be polled, so `WslPipe` ([`wsl_pipe.rs`](crates/nuntio-term/src/wsl_pipe.rs)) posts IOCP completion packets to the `Poller`. Output is buffered with a cap (back-pressure).
 
 Fallback: if wsl.exe exits before READY, `BackendEvent::HelperFailed` → `IoLoop::fall_back` starts ConPTY with the same shell → `TermEvent::HelperFailed` shows a banner. Without a helper binary, WSL panes use plain ConPTY from the start.
+
+`nuntio-wsl socket <path>` is a second mode: it copies between its standard streams and a Unix socket inside the distribution, so that nuntio on Windows can talk to a herdr server in WSL (`mux/agents.rs`).
 
 Build: [`crates/nuntio/build.rs`](crates/nuntio/build.rs) cross-builds `nuntio-wsl` for `x86_64-unknown-linux-musl` (rust-lld) next to `nuntio.exe`. Without that target installed it only prints a cargo warning.
 
@@ -393,7 +420,7 @@ Build: [`crates/nuntio/build.rs`](crates/nuntio/build.rs) cross-builds `nuntio-w
 |PTY|forkpty (alacritty `tty`)|forkpty + `login(1)`|ConPTY; WSL via `nuntio-wsl`|
 |Default shell|`$SHELL` / passwd|`$SHELL` / passwd|`powershell`|
 |Window chrome|System; undecorated with own rounded corners (transparent window) for `decorations = "custom"` or under WSLg, whose Weston crashes on winit's client-side decorations|`Chrome::TitlebarInset` or native titlebar; menu bar in `macos_menu.rs`|Undecorated custom chrome with DWM rounded corners, or system|
-|Foreground process / cwd|`/proc`|`proc_pidinfo`|none (OSC 7 / 9;9 only)|
+|Foreground process / cwd|`/proc`|`proc_pidinfo`|none for native panes (OSC 7 / 9;9 only); WSL panes through the helper get the foreground's name from `fg` markers|
 |Clipboard|arboard + primary selection (middle click)|arboard|arboard|
 |GPU|Vulkan, GL only as fallback (avoids EGL noise on WSLg)|Metal, sRGB layer|DX12 + DirectComposition when opaque, else Vulkan|
 |Startup errors|log only|NSAlert|MessageBoxW; `restrict_dll_search` against a foreign `conpty.dll`|
@@ -457,5 +484,6 @@ Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 |New procedural glyph|`box_drawing::rasterize`|
 |New underline style|`decoration.rs` + `push_underline`|
 |New escape sequence nuntio intercepts|`image_scan.rs` (before the parser) or `osc_cwd.rs`; everything else belongs to `alacritty_terminal`|
+|New multiplexer action to forward|`MuxAction` and the binding parsers in `mux/keys.rs`, `mux_action` in `app_mux.rs`|
 |New debug command|`debug_server::Request`, `Core::debug_request`, `xtask/src/drive.rs`|
 |New built-in theme|a file in `crates/nuntio-config/themes/`, the `BUILTIN` array in `theme.rs`, the theme list in the docs|

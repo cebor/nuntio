@@ -2,10 +2,10 @@
 //! `wsl.exe` and whose processes it can't see.
 
 use std::collections::HashMap;
-use std::io::{self, Read};
-use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+#[cfg(windows)]
+use std::process::Command;
+#[cfg(windows)]
+use std::time::Duration;
 
 use nuntio_term::ReportedDir;
 
@@ -170,60 +170,18 @@ impl Homes {
 #[cfg(windows)]
 const HOME_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// `Command::output`, but a command that runs longer than `limit` is
-/// killed and gives `None`. Stderr isn't captured.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn output_within(command: &mut Command, limit: Duration) -> io::Result<Option<Output>> {
-    let mut child = command.stdout(Stdio::piped()).spawn()?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("no stdout"))?;
-    // Read on the side, so that a full pipe doesn't stall the command.
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout.read_to_end(&mut bytes);
-        let _ = sender.send(bytes);
-    });
-    let deadline = Instant::now() + limit;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let stdout = receiver
-                .recv_timeout(Duration::from_secs(1))
-                .unwrap_or_default();
-            return Ok(Some(Output {
-                status,
-                stdout,
-                stderr: Vec::new(),
-            }));
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(None);
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
 #[cfg(windows)]
 fn query_home(distro: &str, user: Option<&str>) -> Option<String> {
-    use std::os::windows::process::CommandExt;
-
-    // No console window flashing up.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new("wsl.exe");
     command.args(["-d", distro]);
     if let Some(user) = user {
         command.args(["-u", user]);
     }
-    command
-        .args(["--exec", "sh", "-c", r#"printf %s "$HOME""#])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW);
-    let output = match output_within(&mut command, HOME_LOOKUP_TIMEOUT) {
+    command.args(["--exec", "sh", "-c", r#"printf %s "$HOME""#]);
+    let output = match crate::command::output_within(
+        crate::command::no_window(&mut command),
+        HOME_LOOKUP_TIMEOUT,
+    ) {
         Ok(Some(output)) => output,
         Ok(None) => {
             tracing::warn!(distro, "wsl.exe did not answer in time");
@@ -383,28 +341,5 @@ mod tests {
             Some("/root".into())
         });
         assert_eq!(other, Some("/root".into()), "another user asks again");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn slow_commands_are_killed() {
-        use std::process::Command;
-
-        let started = Instant::now();
-        let slow = output_within(
-            Command::new("sh").args(["-c", "sleep 5"]),
-            Duration::from_millis(100),
-        )
-        .unwrap();
-        assert!(slow.is_none());
-        assert!(started.elapsed() < Duration::from_secs(2));
-
-        let quick = output_within(
-            Command::new("sh").args(["-c", "printf %s hi"]),
-            Duration::from_secs(5),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(quick.stdout, b"hi");
     }
 }

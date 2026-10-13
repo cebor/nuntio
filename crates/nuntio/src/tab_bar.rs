@@ -79,6 +79,8 @@ pub struct TabLabel {
     pub active: bool,
     pub activity: bool,
     pub bell: bool,
+    /// The color of the most urgent herdr agent in the tab.
+    pub agent: Option<Rgb>,
 }
 
 #[derive(Debug, Clone)]
@@ -430,6 +432,8 @@ impl TabBar {
             if slot.width >= self.padding + side {
                 if label.bell {
                     texts.push(UiText::new(indicator_x, self.top, "●", BELL_COLOR));
+                } else if let Some(color) = label.agent {
+                    texts.push(UiText::new(indicator_x, self.top, "●", color));
                 } else if label.activity {
                     texts.push(UiText::new(indicator_x, self.top, "•", inactive_text));
                 }
@@ -771,6 +775,7 @@ mod tests {
                 active: i == 0,
                 activity: false,
                 bell: false,
+                agent: None,
             })
             .collect();
         let palette = Palette::new(BLACK, WHITE);
@@ -934,6 +939,7 @@ mod tests {
             active: true,
             activity: false,
             bell: false,
+            agent: None,
         }];
         let (rects, texts) = bar.draw(&labels, None, false, &Palette::new(BLACK, WHITE));
         assert!(rects.iter().any(|r| r.color == INFO_COLOR));
@@ -973,6 +979,7 @@ mod tests {
             active: true,
             activity: false,
             bell: false,
+            agent: None,
         }];
         let palette = Palette::new(BLACK, WHITE);
         let (plain, _) = bar.draw(&labels, None, false, &palette);
@@ -990,6 +997,7 @@ mod tests {
             active,
             activity: false,
             bell: false,
+            agent: None,
         });
         let (palette, fg) = (Palette::new(BLACK, WHITE), WHITE);
         let close = |texts: &[UiText]| texts.iter().find(|t| t.text == "×").unwrap().color;
@@ -1018,6 +1026,7 @@ mod tests {
                 active: i == active,
                 activity: false,
                 bell: false,
+                agent: None,
             })
         };
         let palette = Palette::new(BLACK, WHITE);

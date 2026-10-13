@@ -1,6 +1,8 @@
 use nuntio_term::TermEvent;
 
 use crate::actions::Action;
+use crate::mux::agents::AgentsUpdate;
+use crate::mux::service::{MuxOpen, MuxSnapshot};
 use crate::sysmon::Sample;
 use crate::update::Checked;
 
@@ -55,6 +57,12 @@ pub enum UserEvent {
     Paste(ClipboardPaste),
     /// Opening a link failed or was refused; the text is for the user.
     LinkFailed(String),
+    /// What the multiplexer service found.
+    Mux(Box<MuxSnapshot>),
+    /// The agents of a herdr session changed.
+    Agents(AgentsUpdate),
+    /// A herdr workspace was prepared: open its client or switch to it.
+    MuxOpen(MuxOpen),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

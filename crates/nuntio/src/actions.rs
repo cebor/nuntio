@@ -51,6 +51,13 @@ pub enum Action {
     OpenShellMenu,
     /// Open a new tab with entry N of the open shell menu.
     NewTabWithShell(usize),
+    /// Open, or switch to, entry N of the multiplexer sections of the
+    /// open shell menu.
+    OpenMuxEntry(usize),
+    /// Open the list of herdr agents.
+    OpenAgentsMenu,
+    /// Switch to agent N of the open agents menu.
+    FocusAgent(usize),
 }
 
 /// Every action by its name in the config (`nuntio_config::ACTIONS`
@@ -89,6 +96,7 @@ pub(crate) const NAMES: &[(&str, Action)] = {
         ("check_for_updates", CheckForUpdates),
         ("open_actions_menu", OpenActionsMenu),
         ("open_shell_menu", OpenShellMenu),
+        ("open_agents_menu", OpenAgentsMenu),
         ("close_pane", ClosePane),
         ("split_vertical", SplitVertical),
         ("split_horizontal", SplitHorizontal),
@@ -159,7 +167,12 @@ impl Action {
             Self::OpenSettings => "Settings…",
             Self::ReloadConfig => "Reload Config",
             Self::CheckForUpdates => "Check for Updates…",
-            Self::SelectTab(_) | Self::OpenActionsMenu | Self::NewTabWithShell(_) => return None,
+            Self::OpenAgentsMenu => "Agents…",
+            Self::SelectTab(_)
+            | Self::OpenActionsMenu
+            | Self::NewTabWithShell(_)
+            | Self::OpenMuxEntry(_)
+            | Self::FocusAgent(_) => return None,
         })
     }
 }
@@ -377,8 +390,8 @@ fn config_named_key(key: NamedKey) -> Option<nuntio_config::NamedKey> {
     })
 }
 
-/// The key a debug server request names, as winit reports it.
-#[cfg(feature = "debug-server")]
+/// The key a debug server request or a multiplexer binding names, as winit
+/// reports it.
 pub(crate) fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
     match key {
         Named::Enter => NamedKey::Enter,

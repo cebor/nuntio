@@ -33,6 +33,8 @@ pub enum Topic {
     Paste,
     Close,
     Gpu,
+    /// A herdr agent needs input.
+    Agents,
     #[cfg(windows)]
     Wsl,
 }
@@ -55,6 +57,7 @@ impl Topic {
             Self::Paste => "Paste",
             Self::Close => "Close",
             Self::Gpu => "GPU error",
+            Self::Agents => "herdr",
             #[cfg(windows)]
             Self::Wsl => "WSL",
         }

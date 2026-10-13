@@ -282,6 +282,7 @@ pub static ACTIONS: &[Variant] = &[
         "open_shell_menu",
         "Open the menu of shells to start a new tab with",
     ),
+    variant("open_agents_menu", "Open the list of herdr agents"),
     variant(
         "none",
         "Unbind the key combination; it goes to the terminal",

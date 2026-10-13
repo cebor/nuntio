@@ -4,6 +4,7 @@
 mod actions;
 mod app;
 mod banner;
+mod command;
 mod event;
 mod ime;
 mod input;
@@ -13,6 +14,7 @@ mod link;
 mod macos_menu;
 mod menu;
 mod mouse;
+mod mux;
 mod pane_env;
 mod pane_tree;
 mod pasted_images;
@@ -221,7 +223,26 @@ fn attach_parent_console() {}
 /// can't fix (no GL driver, no data control protocol, no settings portal).
 const DEFAULT_LOG_FILTER: &str = "info,wgpu_hal=warn,wgpu_core=warn,arboard=error,sctk_adwaita=off";
 
+/// Variables that tell herdr and tmux they run inside themselves. nuntio
+/// started from a herdr or tmux pane would hand them to its own panes,
+/// where herdr then refuses to start ("nested herdr is disabled").
+const INHERITED_MUX_ENV: [&str; 9] = [
+    "HERDR_ENV",
+    "HERDR_SOCKET_PATH",
+    "HERDR_BIN_PATH",
+    "HERDR_PANE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_SESSION",
+    "TMUX",
+    "TMUX_PANE",
+];
+
 fn main() -> Result<()> {
+    for name in INHERITED_MUX_ENV {
+        // SAFETY: no other thread exists yet.
+        unsafe { std::env::remove_var(name) };
+    }
     let Err(err) = run() else {
         return Ok(());
     };

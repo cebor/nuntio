@@ -29,10 +29,10 @@ doc = false
 [features]
 # Remote control for debugging (`--debug-server`, driven by `cargo xtask
 # drive`). Not in release packages.
-debug-server = ["dep:serde_json", "nuntio-render/capture"]
+debug-server = ["nuntio-render/capture"]
 
 [dependencies]
-serde_json = { workspace = true, optional = true }
+serde_json.workspace = true
 nuntio-config.workspace = true
 nuntio-render.workspace = true
 nuntio-term.workspace = true
@@ -69,9 +69,6 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [build-dependencies]
 winresource = "0.1"

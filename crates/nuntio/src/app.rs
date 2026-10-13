@@ -31,6 +31,8 @@ use crate::window::{self, Chrome, DEFAULT_TITLE, WindowState};
 // Child modules, so that their handlers can reach the app's state.
 #[path = "app_input.rs"]
 mod app_input;
+#[path = "app_mux.rs"]
+mod app_mux;
 #[path = "app_panes.rs"]
 mod app_panes;
 #[cfg(feature = "debug-server")]
@@ -377,6 +379,8 @@ struct Core {
     /// Input comes from the debug server, not the user: nothing may grab
     /// the real pointer (window drags).
     synthetic_input: bool,
+    /// herdr and tmux: the service watching them and what it found.
+    mux: app_mux::MuxState,
     #[cfg(feature = "debug-server")]
     debug: debug_server::DebugState,
 }
@@ -471,11 +475,13 @@ impl Core {
             #[cfg(target_os = "macos")]
             menu_bar: None,
             synthetic_input: false,
+            mux: Default::default(),
             #[cfg(feature = "debug-server")]
             debug: Default::default(),
         };
         let theme_warning = core.update_palette(None);
         core.sync_system_monitor();
+        core.sync_mux(None);
         core.sync_update_checker(None);
         core.notify(Banner::config(
             Severity::Warning,
@@ -800,6 +806,7 @@ impl Core {
         warnings.extend(self.update_palette(state.as_deref_mut()));
         self.sync_system_monitor();
         self.sync_update_checker(state.as_deref_mut());
+        self.sync_mux(state.as_deref_mut());
         if old.updates.banner && !self.config.updates.banner {
             self.dismiss_banner(Topic::Update);
         }
@@ -1547,6 +1554,15 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Debug(call) => core.debug_call(state, call),
             UserEvent::LinkFailed(problem) => {
                 core.notify(Banner::new(Severity::Warning, Topic::Link, vec![problem]));
+            }
+            UserEvent::Mux(snapshot) => core.mux_snapshot(state, *snapshot),
+            UserEvent::Agents(update) => core.agents_update(state, update),
+            UserEvent::MuxOpen(open) => {
+                if let Some(state) = state
+                    && core.mux_running()
+                {
+                    core.open_mux(state, open);
+                }
             }
             // The rest needs the window.
             UserEvent::Term(pane, event) => {

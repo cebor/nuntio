@@ -174,6 +174,17 @@ copy_on_select = false
 # Folder of the notes. Default: <data dir>/nuntio/notes.
 # directory = "~/notes"
 
+[herdr]
+enabled = false
+program = "herdr"
+forward_actions = true
+agent_status = true
+
+[tmux]
+enabled = false
+program = "tmux"
+forward_actions = true
+
 [macos]
 option_as_meta = "none"
 
@@ -261,6 +272,7 @@ Each item starts with an icon:
 - `actions`: a button that opens a menu of actions (all but `select_tab_1` … `select_tab_9`), grouped by category and with their shortcuts. Click an entry to run it, or use <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>Enter</kbd>; <kbd>Esc</kbd> closes the menu. It is not in the default list; add it to `items`, or bind the `open_actions_menu` action to open the menu from the keyboard.
 - `shell`: the name of the focused pane's shell. Click it for the [shell menu](#profiles), which opens a new tab with another shell. It is not in the default list.
 - `update`: the version of a newer nuntio release; click it to open the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one and `updates.status_bar` is on.
+- `agents`: herdr agents that are blocked, working or done, such as `● 1 blocked · 2 working`, colored by the most urgent one; click it for the list of agents, and an entry to jump to that agent. Hidden while there is none. Needs `herdr.enabled` and `herdr.agent_status`.
 
 #### Springs
 
@@ -303,6 +315,29 @@ With `check` on, nuntio asks GitHub once a day whether a newer release exists. N
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `directory` | string | `<data dir>/nuntio/notes` | Folder of the Markdown notes that `nuntio-apps notes` shows: an absolute path, `~` or `~/…`. Created when missing. The default is `~/.local/share/nuntio/notes` on Linux, `~/Library/Application Support/nuntio/notes` on macOS and `%APPDATA%\nuntio\notes` on Windows. |
+
+### `[herdr]`
+
+[herdr](https://herdr.dev) is a terminal multiplexer for coding agents. With `enabled` on, the [shell menu](#profiles) gets a herdr section: running sessions, a workspace for the project of the focused pane (the Git repository around its directory) and the machines saved with `herdr machine add`. An entry whose session is already open in a tab switches to that tab. On Windows, nuntio also looks for herdr in every WSL distribution and lists it as `herdr · <distribution>`.
+
+In a pane running herdr, new tab, split, close pane, focus, resize and zoom shortcuts send herdr's own keys for that action (read from herdr's `[keys]` config), so they act inside herdr. Switching and closing nuntio tabs stays with nuntio.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Offer herdr sessions in the shell menu and work with herdr running in a pane. |
+| `program` | string | `"herdr"` | The herdr program: a name searched like a shell would, or an absolute path. WSL distributions always use `herdr` found inside them. |
+| `forward_actions` | bool | `true` | In a pane running herdr, new tab, split, close pane, focus, resize and zoom shortcuts act in herdr. |
+| `agent_status` | bool | `true` | Follow herdr's agents: the `agents` status bar item, tab markers and a banner when an agent needs input. |
+
+### `[tmux]`
+
+With `enabled` on, the [shell menu](#profiles) gets a tmux section: running sessions and a session for the project of the focused pane. In a pane running tmux, nuntio's pane shortcuts send tmux's prefix key bindings, as with herdr.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | `false` | Offer tmux sessions in the shell menu and work with tmux running in a pane. |
+| `program` | string | `"tmux"` | The tmux program: a name searched like a shell would, or an absolute path. WSL distributions always use `tmux` found inside them. |
+| `forward_actions` | bool | `true` | In a pane running tmux, new tab, split, close pane, focus, resize and zoom shortcuts act in tmux. |
 
 ### `[macos]`
 
@@ -507,5 +542,6 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `open_notes_split` | Open the notes in a split next to the focused pane (default <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd>, <kbd>Cmd</kbd><kbd>Opt</kbd><kbd>Shift</kbd><kbd>N</kbd> on macOS) |
 | `open_actions_menu` | Open the menu of actions (the `actions` status bar item opens it too) |
 | `open_shell_menu` | Open the menu of shells to start a new tab with (see [Profiles](#profiles)) |
+| `open_agents_menu` | Open the list of herdr agents (the `agents` status bar item opens it too; see [`[herdr]`](#herdr)) |
 | `check_for_updates` | Look for a newer nuntio release now, even with `updates.check` off |
 | `none` | Unbind the key combination |

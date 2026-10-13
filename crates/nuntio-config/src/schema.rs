@@ -27,11 +27,13 @@ pub enum Section {
     Notes,
     MacOs,
     Shell,
+    Herdr,
+    Tmux,
     Keybindings,
 }
 
 impl Section {
-    pub const ALL: [Section; 13] = [
+    pub const ALL: [Section; 15] = [
         Section::General,
         Section::Theme,
         Section::Font,
@@ -42,6 +44,8 @@ impl Section {
         Section::Mouse,
         Section::Notes,
         Section::Shell,
+        Section::Herdr,
+        Section::Tmux,
         Section::Updates,
         Section::Keybindings,
         Section::MacOs,
@@ -61,6 +65,8 @@ impl Section {
             Section::Notes => "Notes",
             Section::MacOs => "macOS",
             Section::Shell => "Shell",
+            Section::Herdr => "herdr",
+            Section::Tmux => "tmux",
             Section::Keybindings => "Keybindings",
         }
     }
@@ -200,6 +206,10 @@ pub static STATUS_ITEMS: &[Variant] = &[
     variant(
         "update",
         "A newer nuntio release, once the update check found one; click it for the release page.",
+    ),
+    variant(
+        "agents",
+        "herdr agents that are blocked, working or done; click for the list. Needs `herdr.enabled`.",
     ),
     variant(
         SPRING,
@@ -508,6 +518,57 @@ pub static SETTINGS: &[Setting] = &[
         ),
         "<data dir>/nuntio/notes",
     ),
+    setting(
+        "herdr.enabled",
+        Section::Herdr,
+        "Enabled",
+        Kind::Bool,
+        "Offer herdr sessions in the shell menu and work with herdr running in a pane.",
+    ),
+    setting(
+        "herdr.program",
+        Section::Herdr,
+        "Program",
+        Kind::Text,
+        "The herdr program: a name searched like a shell would, or an absolute path. \
+         WSL distributions always use `herdr` found inside them.",
+    ),
+    setting(
+        "herdr.forward_actions",
+        Section::Herdr,
+        "Forward actions",
+        Kind::Bool,
+        "In a pane running herdr, new tab, split, close pane, focus, resize and zoom shortcuts act in herdr.",
+    ),
+    setting(
+        "herdr.agent_status",
+        Section::Herdr,
+        "Agent status",
+        Kind::Bool,
+        "Follow herdr's agents: the `agents` status bar item, tab markers and a banner when an agent needs input.",
+    ),
+    setting(
+        "tmux.enabled",
+        Section::Tmux,
+        "Enabled",
+        Kind::Bool,
+        "Offer tmux sessions in the shell menu and work with tmux running in a pane.",
+    ),
+    setting(
+        "tmux.program",
+        Section::Tmux,
+        "Program",
+        Kind::Text,
+        "The tmux program: a name searched like a shell would, or an absolute path. \
+         WSL distributions always use `tmux` found inside them.",
+    ),
+    setting(
+        "tmux.forward_actions",
+        Section::Tmux,
+        "Forward actions",
+        Kind::Bool,
+        "In a pane running tmux, new tab, split, close pane, focus, resize and zoom shortcuts act in tmux.",
+    ),
     only_on(
         setting(
             "macos.option_as_meta",
@@ -788,6 +849,7 @@ mod tests {
             | StatusItem::Actions
             | StatusItem::Shell
             | StatusItem::Update
+            | StatusItem::Agents
             | StatusItem::Spring => (),
         };
         check(
@@ -801,6 +863,7 @@ mod tests {
                 StatusItem::Actions,
                 StatusItem::Shell,
                 StatusItem::Update,
+                StatusItem::Agents,
                 StatusItem::Spring,
             ],
         );

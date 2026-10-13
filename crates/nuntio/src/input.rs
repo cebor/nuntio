@@ -4,11 +4,15 @@
 //! ESC prefix. Programs that turn on the kitty keyboard protocol get
 //! `kitty_keys` instead.
 
+use nuntio_config::{KeyCombo, KeyName};
 use nuntio_term::TermMode;
 
+use crate::actions::named_key;
 use crate::kitty_keys;
 use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey};
+use winit::keyboard::{
+    Key, KeyCode, KeyLocation, ModifiersState, NamedKey, NativeKeyCode, PhysicalKey,
+};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +392,134 @@ pub fn is_modifier(key: &Key) -> bool {
     )
 }
 
+/// The key event a combination stands for, and the modifiers it needs:
+/// what the debug server and multiplexer bindings press on a pane's behalf.
+pub fn synthetic_press(combo: &KeyCombo, kind: KeyEventKind) -> (KeyPress, ModifiersState) {
+    let m = combo.mods;
+    let mut mods = ModifiersState::empty();
+    for (on, flag) in [
+        (m.ctrl, ModifiersState::CONTROL),
+        (m.shift, ModifiersState::SHIFT),
+        (m.alt, ModifiersState::ALT),
+        (m.super_key, ModifiersState::SUPER),
+    ] {
+        if on {
+            mods |= flag;
+        }
+    }
+    let press = match combo.key {
+        KeyName::Char(c) => {
+            let shifted = if m.shift {
+                c.to_uppercase().next().unwrap_or(c)
+            } else {
+                c
+            };
+            let physical = char_code(c).map_or(
+                PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
+                PhysicalKey::Code,
+            );
+            KeyPress {
+                logical: Key::Character(shifted.to_string().into()),
+                unmodified: Key::Character(c.to_string().into()),
+                // Like winit: Ctrl and Cmd combinations type nothing.
+                text: (!m.ctrl && !m.super_key).then(|| shifted.to_string()),
+                location: KeyLocation::Standard,
+                physical,
+                kind,
+            }
+        }
+        KeyName::Named(name) => {
+            let named = named_key(name);
+            let text = match named {
+                NamedKey::Enter => Some("\r"),
+                NamedKey::Tab => Some("\t"),
+                NamedKey::Space => Some(" "),
+                NamedKey::Backspace => Some("\u{8}"),
+                NamedKey::Escape => Some("\u{1b}"),
+                NamedKey::Delete => Some("\u{7f}"),
+                _ => None,
+            };
+            KeyPress {
+                logical: Key::Named(named),
+                unmodified: Key::Named(named),
+                text: text.map(str::to_owned),
+                location: KeyLocation::Standard,
+                physical: named_code(named).map_or(
+                    PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
+                    PhysicalKey::Code,
+                ),
+                kind,
+            }
+        }
+    };
+    (press, mods)
+}
+
+/// What a program in a pane receives when `combo` is typed: the key press
+/// and, in the kitty protocol's event-type mode, its release.
+pub fn chord_bytes(combo: &KeyCombo, mode: TermMode) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for kind in [KeyEventKind::Press, KeyEventKind::Release] {
+        let (press, mods) = synthetic_press(combo, kind);
+        let input = KeyInput::new(&press, mods, combo.mods.alt);
+        if let Some(encoded) = encode_key(&input, mode) {
+            bytes.extend_from_slice(&encoded);
+        }
+    }
+    bytes
+}
+
+/// The US-layout key for a letter or digit.
+fn char_code(c: char) -> Option<KeyCode> {
+    use KeyCode::*;
+    const LETTERS: [KeyCode; 26] = [
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
+        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+    ];
+    const DIGITS: [KeyCode; 10] = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
+    match c {
+        'a'..='z' => Some(LETTERS[(c as u8 - b'a') as usize]),
+        '0'..='9' => Some(DIGITS[(c as u8 - b'0') as usize]),
+        _ => None,
+    }
+}
+
+fn named_code(key: NamedKey) -> Option<KeyCode> {
+    let code = match key {
+        NamedKey::Enter => KeyCode::Enter,
+        NamedKey::Tab => KeyCode::Tab,
+        NamedKey::Escape => KeyCode::Escape,
+        NamedKey::Space => KeyCode::Space,
+        NamedKey::Backspace => KeyCode::Backspace,
+        NamedKey::Delete => KeyCode::Delete,
+        NamedKey::Insert => KeyCode::Insert,
+        NamedKey::Home => KeyCode::Home,
+        NamedKey::End => KeyCode::End,
+        NamedKey::PageUp => KeyCode::PageUp,
+        NamedKey::PageDown => KeyCode::PageDown,
+        NamedKey::ArrowUp => KeyCode::ArrowUp,
+        NamedKey::ArrowDown => KeyCode::ArrowDown,
+        NamedKey::ArrowLeft => KeyCode::ArrowLeft,
+        NamedKey::ArrowRight => KeyCode::ArrowRight,
+        NamedKey::F1 => KeyCode::F1,
+        NamedKey::F2 => KeyCode::F2,
+        NamedKey::F3 => KeyCode::F3,
+        NamedKey::F4 => KeyCode::F4,
+        NamedKey::F5 => KeyCode::F5,
+        NamedKey::F6 => KeyCode::F6,
+        NamedKey::F7 => KeyCode::F7,
+        NamedKey::F8 => KeyCode::F8,
+        NamedKey::F9 => KeyCode::F9,
+        NamedKey::F10 => KeyCode::F10,
+        NamedKey::F11 => KeyCode::F11,
+        NamedKey::F12 => KeyCode::F12,
+        _ => return None,
+    };
+    Some(code)
+}
+
 /// The unshifted character of a key on a US layout.
 pub(crate) fn us_char(code: KeyCode) -> Option<char> {
     use KeyCode::*;
@@ -444,7 +576,6 @@ fn control_byte(s: &str) -> Option<u8> {
 #[cfg(test)]
 pub(crate) mod test_keys {
     use super::*;
-    use winit::keyboard::NativeKeyCode;
 
     /// A key press with the modifiers held, changed with the builder methods.
     #[derive(Clone)]
@@ -914,5 +1045,48 @@ mod tests {
             encode_key(&press.input(), TermMode::empty()).unwrap(),
             [0x03]
         );
+    }
+
+    #[test]
+    fn combos_become_key_presses() {
+        let press_of = |combo: &str, kind| synthetic_press(&KeyCombo::parse(combo).unwrap(), kind);
+        let (press, mods) = press_of("ctrl+c", KeyEventKind::Press);
+        assert_eq!(mods, ModifiersState::CONTROL);
+        assert_eq!(press.unmodified, Key::Character("c".into()));
+        assert_eq!(press.physical, PhysicalKey::Code(KeyCode::KeyC));
+        assert_eq!(press.text, None);
+
+        let (press, mods) = press_of("shift+a", KeyEventKind::Press);
+        assert_eq!(mods, ModifiersState::SHIFT);
+        assert_eq!(press.logical, Key::Character("A".into()));
+        assert_eq!(press.unmodified, Key::Character("a".into()));
+        assert_eq!(press.text.as_deref(), Some("A"));
+
+        let (press, mods) = press_of("enter", KeyEventKind::Release);
+        assert_eq!(mods, ModifiersState::empty());
+        assert_eq!(press.logical, Key::Named(NamedKey::Enter));
+        assert_eq!(press.physical, PhysicalKey::Code(KeyCode::Enter));
+        assert_eq!(press.text.as_deref(), Some("\r"));
+        assert_eq!(press.kind, KeyEventKind::Release);
+    }
+
+    #[test]
+    fn chords_encode_like_typed_keys() {
+        let ctrl_b = KeyCombo::parse("ctrl+b").unwrap();
+        assert_eq!(chord_bytes(&ctrl_b, TermMode::empty()), [0x02]);
+        assert_eq!(
+            chord_bytes(&ctrl_b, TermMode::DISAMBIGUATE_ESC_CODES),
+            b"\x1b[98;5u"
+        );
+        let minus = KeyCombo::parse("minus").unwrap();
+        assert_eq!(chord_bytes(&minus, TermMode::empty()), b"-");
+        assert_eq!(chord_bytes(&minus, TermMode::DISAMBIGUATE_ESC_CODES), b"-");
+    }
+
+    #[test]
+    fn chords_in_event_mode_end_with_the_release() {
+        let ctrl_b = KeyCombo::parse("ctrl+b").unwrap();
+        let mode = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES;
+        assert_eq!(chord_bytes(&ctrl_b, mode), b"\x1b[98;5u\x1b[98;5:3u");
     }
 }

@@ -175,6 +175,10 @@ impl Core {
     // ----- Actions -----------------------------------------------------------
 
     pub(super) fn run_action(&mut self, state: &mut WindowState, action: Action) {
+        if self.forward_to_mux(state, action) {
+            state.window.request_redraw();
+            return;
+        }
         match action {
             Action::Copy => self.copy_selection(state),
             Action::Paste => self.paste_clipboard(state),
@@ -225,6 +229,9 @@ impl Core {
                     self.new_tab(state, Launch::Shell(choice), self.shell_menu_placement);
                 }
             }
+            Action::OpenMuxEntry(index) => self.open_mux_entry(state, index),
+            Action::OpenAgentsMenu => self.open_agents_menu(state),
+            Action::FocusAgent(index) => self.focus_agent(state, index),
         }
         state.window.request_redraw();
     }
@@ -244,13 +251,16 @@ impl Core {
             detect::wsl_distributions(),
         );
         let names: Vec<String> = self.shell_choices.iter().map(|c| c.name.clone()).collect();
+        let sections = self.mux_sections(state);
         state.open_shell_menu(
             &self.config,
             &self.stats,
             &self.bindings,
             &names,
+            &sections,
             at_new_tab,
         );
+        self.refresh_mux(state);
     }
 
     /// A launch for the helper `program` with `args`, whose tab is named
@@ -592,6 +602,10 @@ impl Core {
                 self.run_action(state, Action::OpenShellMenu);
                 return;
             }
+            Some(StatusItem::Agents) if left => {
+                self.run_action(state, Action::OpenAgentsMenu);
+                return;
+            }
             _ => {}
         }
         if state.search_bar_contains(&self.config, pos)
@@ -895,7 +909,12 @@ impl Core {
         let over_update = bar_hit == Some(BarHit::Update)
             || matches!(
                 state.status_item_at(&self.config, &self.stats, pos),
-                Some(StatusItem::Update | StatusItem::Actions | StatusItem::Shell)
+                Some(
+                    StatusItem::Update
+                        | StatusItem::Actions
+                        | StatusItem::Shell
+                        | StatusItem::Agents
+                )
             );
         state.window.set_cursor(if over_link || over_update {
             CursorIcon::Pointer
