@@ -323,9 +323,9 @@ fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// Source text as drawn: tabs as 4 spaces.
+/// Source text as drawn: tabs as `TAB_WIDTH` spaces.
 fn shown(text: &str) -> String {
-    text.replace('\t', "    ")
+    text.replace('\t', &" ".repeat(usize::from(markdown::TAB_WIDTH)))
 }
 
 fn row_spans(

@@ -11,10 +11,7 @@ use ratatui::style::Style;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::markdown::{Piece, PieceKind};
-
-/// Display width of a tab, in cells.
-const TAB_WIDTH: u16 = 4;
+use super::markdown::{Piece, PieceKind, TAB_WIDTH};
 
 /// One screen row of a line.
 #[derive(Debug, Clone, PartialEq)]

@@ -59,7 +59,7 @@ pub struct LineView {
 }
 
 /// Display width of a tab, in cells.
-const TAB_WIDTH: u16 = 4;
+pub const TAB_WIDTH: u16 = 4;
 
 const BULLETS: [&str; 3] = ["•", "◦", "▪"];
 
