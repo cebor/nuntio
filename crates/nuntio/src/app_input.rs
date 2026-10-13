@@ -257,40 +257,42 @@ impl Core {
         );
     }
 
+    /// A launch for the helper `program` with `args`, tabbed `name`. Without
+    /// the helper installed next to nuntio, a banner says so.
+    fn helper_launch(
+        &mut self,
+        program: &str,
+        args: &[&str],
+        name: &'static str,
+    ) -> Option<Launch> {
+        let Some(path) = crate::pane_env::helper(program) else {
+            self.notify(Banner::new(
+                Severity::Warning,
+                name,
+                vec![format!("{program} is not installed next to nuntio")],
+            ));
+            return None;
+        };
+        Some(Launch::Helper {
+            program: path.to_string_lossy().into_owned(),
+            args: args.iter().map(|&arg| arg.to_owned()).collect(),
+            name,
+        })
+    }
+
     /// Open `nuntio-config` in a new tab.
     fn open_settings(&mut self, state: &mut WindowState) {
-        match crate::pane_env::helper(crate::pane_env::CONFIG_HELPER) {
-            Some(helper) => {
-                let launch = Launch::Helper {
-                    program: helper.to_string_lossy().into_owned(),
-                    args: Vec::new(),
-                    name: "Settings",
-                };
-                self.new_tab(state, launch, Placement::AfterActive);
-            }
-            None => self.notify(Banner::new(
-                Severity::Warning,
-                "Settings",
-                vec!["nuntio-config is not installed next to nuntio".into()],
-            )),
+        if let Some(launch) = self.helper_launch(crate::pane_env::CONFIG_HELPER, &[], "Settings") {
+            self.new_tab(state, launch, Placement::AfterActive);
         }
     }
 
     /// Open `nuntio-apps notes` in a new tab, or with `split` next to the
     /// focused pane.
     fn open_notes(&mut self, state: &mut WindowState, split: bool) {
-        let Some(helper) = crate::pane_env::helper(crate::pane_env::APPS_HELPER) else {
-            self.notify(Banner::new(
-                Severity::Warning,
-                "Notes",
-                vec!["nuntio-apps is not installed next to nuntio".into()],
-            ));
+        let Some(launch) = self.helper_launch(crate::pane_env::APPS_HELPER, &["notes"], "Notes")
+        else {
             return;
-        };
-        let launch = Launch::Helper {
-            program: helper.to_string_lossy().into_owned(),
-            args: vec!["notes".into()],
-            name: "Notes",
         };
         if split {
             self.split_with(state, launch, Axis::Vertical);
