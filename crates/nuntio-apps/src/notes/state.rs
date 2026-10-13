@@ -3,6 +3,7 @@
 //! events.
 
 use std::collections::HashMap;
+use std::io;
 use std::time::{Duration, Instant, SystemTime};
 
 use nuntio_tui::style::Tone;
@@ -112,6 +113,19 @@ impl Todos {
     pub fn open_count(&self) -> usize {
         self.items.iter().filter(|i| !i.checked).count()
     }
+}
+
+/// What saving the open note led to. A conflict has opened
+/// `Prompt::Conflict` and a failure has set `App::message`, so nothing is
+/// left to report.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use]
+enum SaveOutcome {
+    Saved,
+    /// The note changed on disk and was not written.
+    Conflict,
+    /// Writing failed, for this reason.
+    Failed(String),
 }
 
 pub enum Prompt {
@@ -375,7 +389,7 @@ impl App {
         if self.open.as_ref().is_some_and(|o| o.title == title) {
             return true;
         }
-        if self.save().is_err() {
+        if !self.save_and_continue() {
             return false;
         }
         if let Some(open) = self.open.take() {
@@ -421,36 +435,46 @@ impl App {
     // ----- Saving ------------------------------------------------------------
 
     /// Write the open note if it has unsaved changes. A conflict with a
-    /// change on disk opens `Prompt::Conflict` instead. The error is the
-    /// reason it isn't saved.
-    pub fn save(&mut self) -> Result<(), String> {
+    /// change on disk opens `Prompt::Conflict` instead, a failure sets
+    /// `message`: the outcome only says which happened.
+    fn save(&mut self) -> SaveOutcome {
         let Some(open) = &mut self.open else {
-            return Ok(());
+            return SaveOutcome::Saved;
         };
         if !open.dirty() {
-            return Ok(());
+            return SaveOutcome::Saved;
         }
         match self.store.stamp(&open.title) {
             Ok(Some(stamp)) if Some(stamp) != open.stamp => {
                 open.edited = None;
                 self.prompt = Some(Prompt::Conflict);
-                return Err("The note changed on disk".into());
+                return SaveOutcome::Conflict;
             }
             Ok(_) => {}
             Err(err) => {
                 open.edited = None;
-                let reason = format!("Couldn't save: {err}");
-                self.message = Some((Tone::Error, reason.clone()));
-                return Err(reason);
+                return self.save_failed(&err);
             }
         }
         self.write_open()
     }
 
+    /// Save where nothing depends on the result: the user has already been
+    /// told about a conflict or a failure, and the note stays open and dirty.
+    fn save_reported(&mut self) {
+        let _ = self.save();
+    }
+
+    /// Save before leaving the open note; returns whether it is safe to
+    /// leave.
+    fn save_and_continue(&mut self) -> bool {
+        self.save() == SaveOutcome::Saved
+    }
+
     /// Write the open note without looking at the file on disk.
-    fn write_open(&mut self) -> Result<(), String> {
+    fn write_open(&mut self) -> SaveOutcome {
         let Some(open) = &mut self.open else {
-            return Ok(());
+            return SaveOutcome::Saved;
         };
         open.edited = None;
         match self.store.write(&open.title, &open.buffer.text()) {
@@ -462,27 +486,37 @@ impl App {
                     entry.modified = stamp.modified;
                 }
                 self.update_open_counts();
-                Ok(())
+                SaveOutcome::Saved
             }
-            Err(err) => {
-                let reason = format!("Couldn't save: {err}");
-                self.message = Some((Tone::Error, reason.clone()));
-                Err(reason)
-            }
+            Err(err) => self.save_failed(&err),
         }
+    }
+
+    /// Write the open note over the file on disk after a conflict.
+    fn overwrite(&mut self) {
+        let _ = self.write_open();
+    }
+
+    fn save_failed(&mut self, err: &io::Error) -> SaveOutcome {
+        let reason = format!("Couldn't save: {err}");
+        self.message = Some((Tone::Error, reason.clone()));
+        SaveOutcome::Failed(reason)
     }
 
     /// Time passed: autosave when due.
     pub fn tick(&mut self, now: Instant) {
         if self.deadline().is_some_and(|at| at <= now) && self.prompt.is_none() {
-            let _ = self.save();
+            self.save_reported();
         }
     }
 
     fn quit_save(&mut self) {
         match self.save() {
-            Ok(()) => self.quit = true,
-            Err(reason) => self.prompt = Some(Prompt::QuitUnsaved(reason)),
+            SaveOutcome::Saved => self.quit = true,
+            SaveOutcome::Conflict => {
+                self.prompt = Some(Prompt::QuitUnsaved("The note changed on disk".into()));
+            }
+            SaveOutcome::Failed(reason) => self.prompt = Some(Prompt::QuitUnsaved(reason)),
         }
     }
 
@@ -624,7 +658,7 @@ impl App {
                 if let Some(open) = &mut self.open {
                     open.paused = false;
                 }
-                let _ = self.save();
+                self.save_reported();
                 return true;
             }
             _ => {}
@@ -789,7 +823,7 @@ impl App {
                         b.move_to(at, false);
                     });
                 } else {
-                    let _ = self.save();
+                    self.save_reported();
                     self.focus = Focus::List;
                 }
             }
@@ -981,7 +1015,7 @@ impl App {
             Prompt::Conflict => match key.code {
                 KeyCode::Char('o') => {
                     self.prompt = None;
-                    let _ = self.write_open();
+                    self.overwrite();
                 }
                 KeyCode::Char('r') => {
                     self.prompt = None;
@@ -1206,7 +1240,7 @@ impl App {
             Err(message) => return self.set_prompt_error(message),
         };
         self.prompt = None;
-        if self.save().is_err() {
+        if !self.save_and_continue() {
             return;
         }
         if let Err(err) = self.store.create(&title) {
@@ -1242,7 +1276,7 @@ impl App {
             return;
         }
         let is_open = self.open.as_ref().is_some_and(|o| o.title == old);
-        if is_open && self.save().is_err() {
+        if is_open && !self.save_and_continue() {
             return;
         }
         if let Err(err) = self.store.rename(&old, &title) {
@@ -1269,7 +1303,7 @@ impl App {
         let index = self.selected;
         if self.open.as_ref().is_some_and(|o| o.title == title) {
             // The trash gets the latest text; the note goes either way.
-            let _ = self.save();
+            self.save_reported();
             self.prompt = None;
         }
         if let Err(err) = self.store.trash(&title) {
@@ -1296,7 +1330,7 @@ impl App {
             self.todos = None;
             return;
         }
-        let _ = self.save();
+        self.save_reported();
         self.build_todos(false);
     }
 
@@ -1388,7 +1422,7 @@ impl App {
         open.buffer.begin(EditKind::Other);
         open.buffer.set_line(item.line, line.clone());
         self.edited(now);
-        let _ = self.save();
+        self.save_reported();
         Some(line)
     }
 
@@ -1655,7 +1689,7 @@ mod tests {
         memory.set_external("A", "theirs\n");
         app.refresh();
         assert!(app.dirty(), "unsaved changes are kept");
-        assert!(app.save().is_err());
+        assert_eq!(app.save(), SaveOutcome::Conflict);
         assert!(matches!(app.prompt, Some(Prompt::Conflict)));
         assert_eq!(memory.text("A").unwrap(), "theirs\n");
         // Overwrite.
