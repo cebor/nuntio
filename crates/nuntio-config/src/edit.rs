@@ -4,6 +4,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
@@ -281,10 +282,14 @@ fn has_comment(item: &Item) -> bool {
         .any(|raw| raw.as_str().is_some_and(|s| s.contains('#')))
 }
 
-/// Write `contents` to `path` in one step, so a watcher never sees a
-/// half-written file. A symlinked config is written at its target; missing
-/// directories are created.
-pub fn write_config(path: &Path, contents: &str) -> io::Result<()> {
+/// Unique temporary names within this process.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write `contents` to `path` in one step, so a watcher (or a crash) never
+/// sees a half-written file. A symlinked file is written at its target;
+/// missing directories are created. Safe to call from several threads, also
+/// for the same path.
+pub fn write_atomically(path: &Path, contents: &str) -> io::Result<()> {
     let target = write_target(path)?;
     let dir = match target.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir.to_owned(),
@@ -295,9 +300,10 @@ pub fn write_config(path: &Path, contents: &str) -> io::Result<()> {
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a file path"))?;
     let temp = dir.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{}.{}.tmp",
         name.to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let permissions = std::fs::metadata(&target).ok().map(|m| m.permissions());
     write_new(&temp, contents, permissions.as_ref())?;
@@ -598,12 +604,33 @@ mod tests {
     fn writes_new_files_and_directories() {
         let dir = temp_dir("new");
         let path = dir.join("sub/config.toml");
-        write_config(&path, "scrollback = 1\n").unwrap();
+        write_atomically(&path, "scrollback = 1\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "scrollback = 1\n");
-        write_config(&path, "scrollback = 2\n").unwrap();
+        write_atomically(&path, "scrollback = 2\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "scrollback = 2\n");
         let leftovers = std::fs::read_dir(dir.join("sub")).unwrap().count();
         assert_eq!(leftovers, 1, "no temp files left behind");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // Windows refuses to replace a file another thread is replacing at the
+    // same moment, whatever the temp files are called.
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_writes_to_one_file_do_not_collide() {
+        let dir = temp_dir("concurrent");
+        let path = dir.join("config.toml");
+        std::thread::scope(|scope| {
+            for n in 0..8 {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        write_atomically(path, &format!("scrollback = {n}\n")).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -616,7 +643,7 @@ mod tests {
         std::fs::write(&target, "").unwrap();
         let link = dir.join("config.toml");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        write_config(&link, "scrollback = 3\n").unwrap();
+        write_atomically(&link, "scrollback = 3\n").unwrap();
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
         assert_eq!(
             std::fs::read_to_string(&target).unwrap(),
@@ -634,18 +661,30 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(&path, "").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        // A stale temp file, even a symlink, is replaced rather than written through.
-        let temp = dir.join(format!(".config.toml.{}.tmp", std::process::id()));
-        let elsewhere = dir.join("elsewhere");
-        std::os::unix::fs::symlink(&elsewhere, &temp).unwrap();
-        write_config(&path, "scrollback = 4\n").unwrap();
+        write_atomically(&path, "scrollback = 4\n").unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         let text = std::fs::read_to_string(&path).unwrap();
-        let followed = elsewhere.exists();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(text, "scrollback = 4\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_temp_file_is_replaced_not_followed() {
+        let dir = temp_dir("stale");
+        std::fs::create_dir_all(&dir).unwrap();
+        let temp = dir.join(".config.toml.tmp");
+        let elsewhere = dir.join("elsewhere");
+        std::os::unix::fs::symlink(&elsewhere, &temp).unwrap();
+        write_new(&temp, "scrollback = 4\n", None).unwrap();
+        let followed = elsewhere.exists();
+        let is_link = temp.symlink_metadata().unwrap().file_type().is_symlink();
+        let text = std::fs::read_to_string(&temp).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
         assert!(!followed, "wrote through the planted symlink");
+        assert!(!is_link);
+        assert_eq!(text, "scrollback = 4\n");
     }
 
     #[cfg(unix)]
@@ -659,7 +698,7 @@ mod tests {
         let absolute = dir.join("a-link.toml");
         let a_target = dir.join("missing/a.toml");
         std::os::unix::fs::symlink(&a_target, &absolute).unwrap();
-        write_config(&absolute, "scrollback = 1\n").unwrap();
+        write_atomically(&absolute, "scrollback = 1\n").unwrap();
         assert!(is_link(&absolute));
         assert_eq!(
             std::fs::read_to_string(&a_target).unwrap(),
@@ -669,7 +708,7 @@ mod tests {
         // Relative target.
         let relative = dir.join("r-link.toml");
         std::os::unix::fs::symlink("real-r.toml", &relative).unwrap();
-        write_config(&relative, "scrollback = 2\n").unwrap();
+        write_atomically(&relative, "scrollback = 2\n").unwrap();
         assert!(is_link(&relative));
         assert_eq!(
             std::fs::read_to_string(dir.join("real-r.toml")).unwrap(),
@@ -680,7 +719,7 @@ mod tests {
         let (first, second) = (dir.join("first.toml"), dir.join("second.toml"));
         std::os::unix::fs::symlink("second.toml", &first).unwrap();
         std::os::unix::fs::symlink("chain/end.toml", &second).unwrap();
-        write_config(&first, "scrollback = 3\n").unwrap();
+        write_atomically(&first, "scrollback = 3\n").unwrap();
         assert!(is_link(&first) && is_link(&second));
         assert_eq!(
             std::fs::read_to_string(dir.join("chain/end.toml")).unwrap(),
@@ -697,7 +736,7 @@ mod tests {
         let (a, b) = (dir.join("a.toml"), dir.join("b.toml"));
         std::os::unix::fs::symlink("b.toml", &a).unwrap();
         std::os::unix::fs::symlink("a.toml", &b).unwrap();
-        let err = write_config(&a, "x = 1\n").unwrap_err();
+        let err = write_atomically(&a, "x = 1\n").unwrap_err();
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(err.to_string().contains("symbolic links"), "{err}");
     }

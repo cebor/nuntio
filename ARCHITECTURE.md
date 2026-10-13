@@ -302,7 +302,7 @@ sequenceDiagram
     participant FS as File system
     participant W as config watcher thread
     participant M as Main thread
-    E->>FS: save (nuntio-config: write_config = temp file + rename)
+    E->>FS: save (nuntio-config: write_atomically = temp file + rename)
     FS-->>W: notify event on the parent directory
     W->>W: 150 ms debounce, re-resolve symlinks
     W-->>M: UserEvent::ConfigChanged
@@ -329,7 +329,7 @@ sequenceDiagram
 - `Action::OpenSettings` → `Launch::Helper { program, .. }` with `pane_env::helper(CONFIG_HELPER)`. The helpers live in `pane_env::helper_dir` (next to the exe or in `../lib/nuntio`). They are never on the global PATH, only prepended to the PATH of nuntio's panes.
 - Config path precedence: `--config`, then `NUNTIO_CONFIG`, then `locate_config` (`nuntio_config::config_path`, shared with `nuntio-apps`; nuntio itself sets `nuntio_config::CONFIG_ENV` in its panes).
 - The `App` sits behind the `Store` trait (`FileStore` in production, in-memory in tests).
-- Every valid edit re-reads the file, applies the change via `ConfigDoc` (toml_edit, keeps comments), validates with `nuntio_config::parse` and writes immediately with `write_config`. `write_config` is atomic: temp file + rename, follows a symlink to its target, fsyncs the directory on Unix.
+- Every valid edit re-reads the file, applies the change via `ConfigDoc` (toml_edit, keeps comments), validates with `nuntio_config::parse` and writes immediately with `write_atomically`. It is atomic: temp file + rename, follows a symlink to its target, fsyncs the directory on Unix. The notes app and the update check state use it too.
 - There is no IPC: nuntio's watcher picks up the write, so hot reload is the live preview.
 
 ## nuntio-apps (notes)
@@ -337,7 +337,7 @@ sequenceDiagram
 `nuntio-apps notes` is another helper process: `Action::OpenNotes` opens it in a new tab, `Action::OpenNotesSplit` through `Core::split_with` next to the focused pane, both as `Launch::Helper` with `pane_env::helper(APPS_HELPER)`.
 
 - Notes are flat `.md` files in `notes.directory` (default `<data dir>/nuntio/notes`); `--dir` overrides it, the config path follows the same precedence as `nuntio-config`. Deleted notes move to `.trash/`.
-- `App` (`notes/state.rs`) sits behind the `Store` trait (`DirStore` in production, in-memory in tests). Autosave 1 s after the last edit via `write_config`; a file stamp (mtime + length) detects changes by other programs, which reload a clean note and ask on a dirty one.
+- `App` (`notes/state.rs`) sits behind the `Store` trait (`DirStore` in production, in-memory in tests). Autosave 1 s after the last edit via `write_atomically`; a file stamp (mtime + length) detects changes by other programs, which reload a clean note and ask on a dirty one.
 - Live preview: `markdown.rs` renders the whole note with pulldown-cmark into per-line pieces (rendered and raw), `layout.rs` wraps them; the cursor line is shown raw.
 - It blocks in `event::read` while idle; it only polls with a timeout while an autosave is pending. Copy goes out as OSC 52.
 

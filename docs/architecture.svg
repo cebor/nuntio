@@ -302,7 +302,7 @@
   <text x="1528" y="630" class="small end">run in a nuntio tab</text>
   <text x="1212" y="650" class="desc">nuntio-config: ratatui settings editor</text>
   <text x="1212" y="666" class="desc">every valid edit: ConfigDoc (toml_edit)</text>
-  <text x="1212" y="682" class="desc">validate → write_config (temp + rename)</text>
+  <text x="1212" y="682" class="desc">validate → write_atomically (temp + rename)</text>
   <text x="1212" y="698" class="desc">no IPC: hot reload is the live preview</text>
   <text x="1212" y="714" class="desc">nuntio-apps notes: Markdown files in</text>
   <text x="1212" y="730" class="desc">notes.directory · autosave · .trash/</text>

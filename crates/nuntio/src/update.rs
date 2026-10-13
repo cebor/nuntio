@@ -4,9 +4,7 @@
 
 use std::cmp::Ordering;
 use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -220,23 +218,6 @@ fn decide_against(
     }
 }
 
-/// Unique temporary names within this process.
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Write `text` to `path` in one step, so a reader (or a crash) never sees a
-/// half-written file.
-fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
-    let name = path
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let counter = TEMP_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
-    let temp = path.with_file_name(format!("{name}.{}.{counter}.tmp", std::process::id()));
-    fs::write(&temp, text)?;
-    fs::rename(&temp, path).inspect_err(|_| {
-        let _ = fs::remove_file(&temp);
-    })
-}
-
 /// What is kept between runs, in the cache directory.
 #[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
@@ -265,10 +246,7 @@ impl State {
 
     fn save(&self) {
         let saved = Self::path().context("no cache directory").and_then(|path| {
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)?;
-            }
-            write_atomically(&path, &toml::to_string(self)?)?;
+            nuntio_config::write_atomically(&path, &toml::to_string(self)?)?;
             Ok(())
         });
         if let Err(err) = saved {
@@ -641,18 +619,6 @@ mod tests {
             ours.clone().with_dismissal_of(&State::default()).dismissed,
             ours.dismissed
         );
-    }
-
-    #[test]
-    fn writes_replace_the_file_in_one_step() {
-        let dir = std::env::temp_dir().join(format!("nuntio-update-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("update.toml");
-        write_atomically(&path, "a").unwrap();
-        write_atomically(&path, "b").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "b");
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

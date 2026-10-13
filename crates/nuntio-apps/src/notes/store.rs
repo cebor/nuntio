@@ -133,7 +133,7 @@ impl Store for DirStore {
 
     fn write(&mut self, title: &str, text: &str) -> io::Result<Stamp> {
         let path = self.path(title);
-        nuntio_config::write_config(&path, text)?;
+        nuntio_config::write_atomically(&path, text)?;
         stamp_of(&fs::metadata(&path)?)
     }
 

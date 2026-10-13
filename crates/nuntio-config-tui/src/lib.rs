@@ -31,7 +31,7 @@ impl Store for FileStore {
     }
 
     fn write(&mut self, contents: &str) -> io::Result<()> {
-        nuntio_config::write_config(&self.0, contents)
+        nuntio_config::write_atomically(&self.0, contents)
     }
 }
 
