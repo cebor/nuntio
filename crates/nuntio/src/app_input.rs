@@ -15,7 +15,7 @@ use winit::keyboard::{
 use winit::window::{CursorIcon, ResizeDirection, Window};
 
 use super::app_panes::CloseTarget;
-use super::{CONFIRM_REPEAT, Core};
+use super::{Confirmation, Core};
 use crate::actions::Action;
 use crate::actions_menu::{MenuKind, Step};
 use crate::banner::{Banner, Severity};
@@ -32,14 +32,6 @@ use crate::window::{TabDrag, WindowState};
 
 /// Title of the banner that asks to confirm a paste.
 const PASTE_BANNER: &str = "Paste";
-
-/// A paste that would run commands at once and waits to be repeated.
-#[derive(Debug, Clone)]
-pub struct PendingPaste {
-    pane: PaneId,
-    text: String,
-    until: Instant,
-}
 
 /// Why pasting `text` without bracketed paste needs confirmation: each
 /// line break works like Enter, so the shell runs the lines at once.
@@ -375,23 +367,21 @@ impl Core {
             return;
         };
         let bracketed = target.term.mode().contains(TermMode::BRACKETED_PASTE);
-        let pending = self.pending_paste.take();
         self.dismiss_banner(PASTE_BANNER);
-        let now = Instant::now();
-        if self.config.confirm_paste
-            && !bracketed
-            && let Some(message) = paste_warning(&text)
-            && !pending.is_some_and(|p| p.pane == pane && p.text == text && now < p.until)
-        {
-            self.pending_paste = Some(PendingPaste {
-                pane,
-                text,
-                until: now + CONFIRM_REPEAT,
-            });
-            self.ask_to_repeat(PASTE_BANNER, message);
+        let warning = if self.config.confirm_paste && !bracketed {
+            paste_warning(&text)
+        } else {
+            None
+        };
+        let Some(message) = warning else {
+            self.pending_paste = None;
+            target.term.paste(&text);
             return;
+        };
+        match Confirmation::confirm(&mut self.pending_paste, (pane, text), Instant::now()) {
+            Some((_, text)) => target.term.paste(&text),
+            None => self.ask_to_repeat(PASTE_BANNER, message),
         }
-        target.term.paste(&text);
     }
 
     /// Paste a dropped file's path into the pane under the pointer.

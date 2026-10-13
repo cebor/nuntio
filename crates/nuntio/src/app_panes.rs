@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::Result;
 use nuntio_term::{Shell, SpawnOptions, TermHandle, TermSize, Transport};
 
-use super::{CONFIRM_REPEAT, Core, INITIAL_GRID, Startup, term_options};
+use super::{Confirmation, Core, INITIAL_GRID, Startup, term_options};
 use crate::banner::{Banner, Severity};
 use crate::event::{PaneId, UserEvent};
 use crate::pane_tree::Axis;
@@ -43,13 +43,6 @@ pub enum CloseTarget {
     /// The tab holding this pane.
     Tab(PaneId),
     Pane(PaneId),
-}
-
-/// A close that named running programs and waits to be repeated.
-#[derive(Debug, Clone, Copy)]
-pub struct PendingClose {
-    target: CloseTarget,
-    until: Instant,
 }
 
 /// Where a new pane starts.
@@ -445,9 +438,8 @@ impl Core {
     /// run in it, the first request names them in a banner, and only the
     /// same request again within `CONFIRM_REPEAT` closes it.
     fn confirm_close(&mut self, state: &WindowState, target: CloseTarget) -> bool {
-        let now = Instant::now();
-        let pending = self.pending_close.take();
         if !self.config.window.confirm_close {
+            self.pending_close = None;
             return true;
         }
         let tabs = state.tabs.iter().map(|t| &t.content);
@@ -466,13 +458,13 @@ impl Core {
             .map(|p| p.term.process_name())
             .collect();
         self.dismiss_banner(CLOSE_BANNER);
-        if running.is_empty() || pending.is_some_and(|p| p.target == target && now < p.until) {
+        if running.is_empty() {
+            self.pending_close = None;
             return true;
         }
-        self.pending_close = Some(PendingClose {
-            target,
-            until: now + CONFIRM_REPEAT,
-        });
+        if Confirmation::confirm(&mut self.pending_close, target, Instant::now()).is_some() {
+            return true;
+        }
         self.ask_to_repeat(CLOSE_BANNER, close_message(&running, target));
         false
     }

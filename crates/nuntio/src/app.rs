@@ -36,8 +36,7 @@ mod app_panes;
 #[path = "debug_server.rs"]
 pub(crate) mod debug_server;
 
-use app_input::PendingPaste;
-use app_panes::{CloseTarget, PendingClose};
+use app_panes::CloseTarget;
 
 const MIN_FONT_SIZE: f32 = 4.0;
 const MAX_FONT_SIZE: f32 = 72.0;
@@ -52,6 +51,32 @@ const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
 const MAX_FRAME_RETRIES: u32 = 3;
 /// How long an action that asked for confirmation waits to be repeated.
 const CONFIRM_REPEAT: Duration = Duration::from_secs(5);
+
+/// A request (`key`) that waits to be repeated within `CONFIRM_REPEAT`.
+#[derive(Debug, Clone)]
+struct Confirmation<K> {
+    key: K,
+    until: Instant,
+}
+
+impl<K: PartialEq> Confirmation<K> {
+    /// Takes the request in `pending` and hands `key` back if it repeats
+    /// that one in time. Otherwise `key` replaces it, waiting to be
+    /// repeated, and the result is `None`.
+    fn confirm(pending: &mut Option<Self>, key: K, now: Instant) -> Option<K> {
+        let repeated = pending
+            .take()
+            .is_some_and(|p| p.key == key && now < p.until);
+        if repeated {
+            return Some(key);
+        }
+        *pending = Some(Self {
+            key,
+            until: now + CONFIRM_REPEAT,
+        });
+        None
+    }
+}
 /// Size of a pane spawned before the window is laid out; the first
 /// `resize_terms` corrects it.
 const INITIAL_GRID: TermSize = TermSize {
@@ -343,9 +368,9 @@ struct Core {
     /// The last tab was closed; quit at the next opportunity.
     exit_requested: bool,
     /// A close waiting for confirmation (`window.confirm_close`).
-    pending_close: Option<PendingClose>,
+    pending_close: Option<Confirmation<CloseTarget>>,
     /// A paste waiting for confirmation (`confirm_paste`).
-    pending_paste: Option<PendingPaste>,
+    pending_paste: Option<Confirmation<(PaneId, String)>>,
     /// A fatal error that ended the event loop.
     error: Option<anyhow::Error>,
     #[cfg(target_os = "macos")]
@@ -1573,5 +1598,25 @@ impl ApplicationHandler<UserEvent> for App {
         if let Some(state) = self.state.as_mut() {
             self.core.window_event(state, event_loop, event);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_is_confirmed_by_repeating_it_in_time() {
+        let t0 = Instant::now();
+        let mut pending = None;
+        assert_eq!(Confirmation::confirm(&mut pending, "a", t0), None);
+        assert_eq!(Confirmation::confirm(&mut pending, "a", t0), Some("a"));
+        // Confirming used the request up.
+        assert_eq!(Confirmation::confirm(&mut pending, "a", t0), None);
+        // A different request replaces it, and a late repeat starts over.
+        assert_eq!(Confirmation::confirm(&mut pending, "b", t0), None);
+        assert_eq!(Confirmation::confirm(&mut pending, "a", t0), None);
+        let late = t0 + CONFIRM_REPEAT;
+        assert_eq!(Confirmation::confirm(&mut pending, "a", late), None);
     }
 }
