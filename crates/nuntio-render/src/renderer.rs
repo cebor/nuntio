@@ -69,25 +69,20 @@ struct Instance {
 }
 
 impl Instance {
-    fn solid_rect(rect: Rect, color: Rgb) -> Self {
-        Self::solid(rect.x, rect.y, rect.width, rect.height, color)
+    fn solid(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> Self {
+        Self::tinted(Rect::new(x, y, width, height), rgba(color))
     }
 
-    fn solid(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> Self {
+    /// A solid rectangle of an RGBA `color`.
+    fn tinted(rect: Rect, color: [f32; 4]) -> Self {
         Self {
-            pos: [x, y],
-            size: [width, height],
+            pos: [rect.x, rect.y],
+            size: [rect.width, rect.height],
             uv: [0.0; 4],
-            color: rgba(color),
+            color,
             kind: KIND_SOLID,
             _pad: [0; 3],
         }
-    }
-
-    fn fill(rect: Rect, color: [f32; 4]) -> Self {
-        let mut i = Self::solid_rect(rect, Rgb { r: 0, g: 0, b: 0 });
-        i.color = color;
-        i
     }
 }
 
@@ -808,18 +803,23 @@ impl Renderer {
 
     /// The frame's background, as the color the pass starts from.
     fn clear_color(&self, frame: &Frame) -> wgpu::Color {
-        let c = base_color(
-            frame.background,
-            frame.background_opacity,
-            self.gpu.transparent(),
-            self.gpu.premultiplied(),
-        );
+        let c = self.background(frame, frame.background);
         wgpu::Color {
             r: f64::from(c[0]),
             g: f64::from(c[1]),
             b: f64::from(c[2]),
             a: f64::from(c[3]),
         }
+    }
+
+    /// `color` as a default background of `frame`, in the surface's alpha mode.
+    fn background(&self, frame: &Frame, color: Rgb) -> [f32; 4] {
+        base_color(
+            color,
+            frame.background_opacity,
+            self.gpu.transparent(),
+            self.gpu.premultiplied(),
+        )
     }
 
     fn build_instances(&mut self, frame: &Frame) -> Result<(), AtlasFull> {
@@ -830,19 +830,18 @@ impl Renderer {
             // filled first, so `push_pane` can skip runs equal to it.
             let fill = pane.snapshot.background != frame.background;
             if fill {
-                let color = base_color(
-                    pane.snapshot.background,
-                    frame.background_opacity,
-                    self.gpu.transparent(),
-                    self.gpu.premultiplied(),
-                );
-                self.layout.instances.push(Instance::fill(pane.area, color));
+                let color = self.background(frame, pane.snapshot.background);
+                self.layout
+                    .instances
+                    .push(Instance::tinted(pane.area, color));
             }
             self.push_pane(pane.snapshot, pane.x, pane.y)?;
             if pane.dim > 0.0 {
-                let mut veil = Instance::solid_rect(pane.area, pane.snapshot.background);
-                veil.color[3] = pane.dim.min(1.0);
-                self.layout.instances.push(veil);
+                let mut color = rgba(pane.snapshot.background);
+                color[3] = pane.dim.min(1.0);
+                self.layout
+                    .instances
+                    .push(Instance::tinted(pane.area, color));
             }
             let end = self.layout.instances.len() as u32;
             self.layout.panes.push(PaneBatch {
