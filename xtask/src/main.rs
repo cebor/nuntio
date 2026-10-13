@@ -14,6 +14,7 @@
 //! - `drive <command>`: start nuntio with its debug server and remote-control
 //!   it: screenshots, screen text, keys, mouse, frame recordings.
 
+mod args;
 mod drive;
 
 use std::collections::BTreeSet;
@@ -22,6 +23,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
+
+use crate::args::Args;
 
 const NAME: &str = "nuntio";
 /// The config editor and the apps (notes), built from the same package. They
@@ -36,14 +39,27 @@ const LINUX_ICON_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
 const METAINFO_ID: &str = "io.github.cebor.nuntio";
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("icons") => icons(),
-        Some("package") => package(),
-        Some("site") => site(args.get(1).is_some_and(|a| a == "serve")),
-        Some("drive") => drive::main(&args[1..]),
+    let mut args = Args::new(std::env::args().skip(1));
+    let command = args.positional();
+    match command.as_deref() {
+        Some("icons") => {
+            args.finish("icons")?;
+            icons()
+        }
+        Some("package") => {
+            args.finish("package")?;
+            package()
+        }
+        Some("site") => {
+            let serve = args.flag("serve");
+            args.finish("site")?;
+            site(serve)
+        }
+        Some("drive") => drive::main(args),
         Some("changelog") => {
-            print!("{}", changelog(args.get(1).map_or("HEAD", String::as_str))?);
+            let range = args.positional();
+            args.finish("changelog")?;
+            print!("{}", changelog(range.as_deref().unwrap_or("HEAD"))?);
             Ok(())
         }
         _ => {

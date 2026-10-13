@@ -16,6 +16,7 @@ use anyhow::{Context, Result, bail, ensure};
 use resvg::tiny_skia::{IntSize, Paint, Pixmap, PixmapPaint, Rect, Transform};
 use serde_json::{Value, json};
 
+use crate::args::Args;
 use crate::{on_path, root, run};
 
 const USAGE: &str = "\
@@ -57,36 +58,39 @@ usage: cargo xtask drive <command>
   log [-n 50]             the end of the log
 ";
 
-pub fn main(args: &[String]) -> Result<()> {
-    let Some((command, args)) = args.split_first() else {
+pub fn main(mut args: Args) -> Result<()> {
+    let Some(command) = args.positional() else {
         eprint!("{USAGE}");
         std::process::exit(2);
     };
-    let mut args = Args::new(args);
     match command.as_str() {
         "start" => start(&mut args),
-        "stop" => stop(),
+        "stop" => {
+            args.finish("stop")?;
+            stop()
+        }
         "state" => {
+            args.finish("state")?;
             let reply = request(json!({ "cmd": "state" }))?;
             println!("{}", serde_json::to_string_pretty(&reply.json)?);
             Ok(())
         }
         "text" => {
             let pane = args.option_u64("--pane")?;
+            args.finish("text")?;
             let reply = request(json!({ "cmd": "text", "pane": pane }))?;
             print_text(&reply.json);
             Ok(())
         }
         "cells" => {
             let line = args.option_u64("--line")?.context("--line is required")?;
-            let request_json = json!({
-                "cmd": "cells",
-                "line": line,
-                "from": args.option_u64("--from")?.unwrap_or(0),
-                "to": args.option_u64("--to")?,
-                "pane": args.option_u64("--pane")?,
-            });
-            let reply = request(request_json)?;
+            let from = args.option_u64("--from")?.unwrap_or(0);
+            let to = args.option_u64("--to")?;
+            let pane = args.option_u64("--pane")?;
+            args.finish("cells")?;
+            let reply = request(
+                json!({ "cmd": "cells", "line": line, "from": from, "to": to, "pane": pane }),
+            )?;
             for cell in reply.json["cells"].as_array().into_iter().flatten() {
                 println!("{cell}");
             }
@@ -97,6 +101,7 @@ pub fn main(args: &[String]) -> Result<()> {
             let path = args
                 .positional()
                 .map_or_else(|| dir().join("shot.png"), PathBuf::from);
+            args.finish("shot")?;
             let reply = request(json!({ "cmd": "screenshot", "pane": pane }))?;
             let (width, height) = size(&reply.json);
             save_png(&path, width, height, reply.binary)?;
@@ -121,6 +126,7 @@ pub fn main(args: &[String]) -> Result<()> {
         }
         "action" => {
             let name = args.positional().context("action: name the action")?;
+            args.finish("action")?;
             request(json!({ "cmd": "action", "name": name }))?;
             Ok(())
         }
@@ -128,11 +134,14 @@ pub fn main(args: &[String]) -> Result<()> {
         "resize" => {
             let width: u32 = args.positional().context("resize: width")?.parse()?;
             let height: u32 = args.positional().context("resize: height")?.parse()?;
+            args.finish("resize")?;
             request(json!({ "cmd": "resize", "width": width, "height": height }))?;
             Ok(())
         }
         "window" => {
-            let request_json = match args.positional().as_deref() {
+            let which = args.positional();
+            args.finish("window")?;
+            let request_json = match which.as_deref() {
                 Some("minimize") => json!({ "cmd": "window", "minimized": true }),
                 Some("maximize") => json!({ "cmd": "window", "maximized": true }),
                 // Like the OS: a minimized window comes back as it was,
@@ -153,6 +162,7 @@ pub fn main(args: &[String]) -> Result<()> {
         "wait-idle" => {
             let ms = args.option_u64("--ms")?.unwrap_or(300);
             let timeout = timeout(&mut args)?;
+            args.finish("wait-idle")?;
             wait(timeout, "output to stop", || {
                 let reply = request(json!({ "cmd": "state" }))?;
                 // No output yet counts as idle.
@@ -172,6 +182,7 @@ pub fn main(args: &[String]) -> Result<()> {
         "record" => match args.positional().as_deref() {
             Some("start") => {
                 let max = args.option_u64("--max")?;
+                args.finish("record start")?;
                 request(json!({ "cmd": "record_start", "max_frames": max }))?;
                 Ok(())
             }
@@ -180,6 +191,7 @@ pub fn main(args: &[String]) -> Result<()> {
         },
         "log" => {
             let n = args.option_u64("-n")?.unwrap_or(50) as usize;
+            args.finish("log")?;
             let log = fs::read_to_string(dir().join("nuntio.log")).context("no log yet")?;
             let lines: Vec<&str> = log.lines().collect();
             for line in &lines[lines.len().saturating_sub(n)..] {
@@ -188,6 +200,7 @@ pub fn main(args: &[String]) -> Result<()> {
             Ok(())
         }
         "help" | "--help" | "-h" => {
+            args.finish("help")?;
             print!("{USAGE}");
             Ok(())
         }
@@ -212,43 +225,6 @@ fn debug_dir(windows: bool, local_app_data: Option<OsString>, root: &Path) -> Pa
 
 fn state_file() -> PathBuf {
     dir().join("state.json")
-}
-
-/// Command line arguments, taken out as they are used.
-struct Args(Vec<String>);
-
-impl Args {
-    fn new(args: &[String]) -> Self {
-        Self(args.to_vec())
-    }
-
-    fn flag(&mut self, name: &str) -> bool {
-        let found = self.0.iter().position(|a| a == name);
-        found.map(|i| self.0.remove(i)).is_some()
-    }
-
-    fn option(&mut self, name: &str) -> Result<Option<String>> {
-        let Some(i) = self.0.iter().position(|a| a == name) else {
-            return Ok(None);
-        };
-        ensure!(i + 1 < self.0.len(), "{name} needs a value");
-        self.0.remove(i);
-        Ok(Some(self.0.remove(i)))
-    }
-
-    fn option_u64(&mut self, name: &str) -> Result<Option<u64>> {
-        self.option(name)?
-            .map(|v| v.parse().with_context(|| format!("{name}: not a number")))
-            .transpose()
-    }
-
-    fn positional(&mut self) -> Option<String> {
-        (!self.0.is_empty()).then(|| self.0.remove(0))
-    }
-
-    fn rest(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.0)
-    }
 }
 
 fn timeout(args: &mut Args) -> Result<Duration> {
@@ -304,15 +280,12 @@ fn wait(timeout: Duration, what: &str, mut done: impl FnMut() -> Result<bool>) -
 
 fn start(args: &mut Args) -> Result<()> {
     // Everything after `--` is the command, not options for `start`.
-    let command = match args.0.iter().position(|a| a == "--") {
-        Some(i) => args.0.split_off(i).split_off(1),
-        None => Vec::new(),
-    };
+    let command = args.split_off_after("--");
     let release = args.flag("--release");
     let visible = args.flag("--visible");
     let size = args.option("--size")?;
     let config = args.option("--config")?;
-    ensure!(args.0.is_empty(), "start: unexpected {:?}", args.0);
+    args.finish("start")?;
     if request(json!({ "cmd": "state" })).is_ok() {
         bail!("nuntio is already running; `cargo xtask drive stop` first");
     }
@@ -624,11 +597,9 @@ fn mouse(args: &mut Args) -> Result<()> {
         .positional()
         .context("mouse: move, down, up, click or scroll")?;
     let mut request_json = json!({ "cmd": "mouse", "kind": kind });
-    if let Some(i) = args.0.iter().position(|a| a == "--cell") {
-        ensure!(i + 2 < args.0.len(), "--cell <column> <line>");
-        let cell: Vec<String> = args.0.drain(i..i + 3).collect();
-        request_json["column"] = cell[1].parse::<u64>()?.into();
-        request_json["line"] = cell[2].parse::<u64>()?.into();
+    if let Some(cell) = args.option_values("--cell", 2)? {
+        request_json["column"] = cell[0].parse::<u64>()?.into();
+        request_json["line"] = cell[1].parse::<u64>()?.into();
     }
     if let Some(pane) = args.option_u64("--pane")? {
         request_json["pane"] = pane.into();
@@ -650,7 +621,7 @@ fn mouse(args: &mut Args) -> Result<()> {
         request_json["x"] = x.parse::<f64>()?.into();
         request_json["y"] = y.parse::<f64>()?.into();
     }
-    ensure!(args.0.is_empty(), "mouse: unexpected {:?}", args.0);
+    args.finish("mouse")?;
     request(request_json)?;
     Ok(())
 }
@@ -661,6 +632,7 @@ fn record_stop(args: &mut Args) -> Result<()> {
         .map_or_else(|| dir().join("recording"), PathBuf::from);
     let sheet = args.flag("--sheet");
     let video = args.option("--video")?;
+    args.finish("record stop")?;
     let reply = request(json!({ "cmd": "record_stop" }))?;
 
     // A new recording replaces the old one's frames.
@@ -953,13 +925,5 @@ mod tests {
             debug_dir(false, Some("/ignored".into()), root),
             root.join("target").join("nuntio-debug")
         );
-    }
-
-    #[test]
-    fn args_are_taken_out() {
-        let mut args = Args::new(&["a".into(), "--pane".into(), "3".into(), "b".into()]);
-        assert_eq!(args.option_u64("--pane").unwrap(), Some(3));
-        assert_eq!(args.positional().as_deref(), Some("a"));
-        assert_eq!(args.rest(), ["b"]);
     }
 }
