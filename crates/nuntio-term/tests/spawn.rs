@@ -86,6 +86,51 @@ fn inline_image_is_placed_at_the_cursor() {
 }
 
 #[test]
+fn kitty_image_arrives_in_chunks_and_is_placed() {
+    let data = blue_pixel_png();
+    let (first, second) = data.split_at(data.len() / 8 * 4);
+    let (handle, rx) = spawn(&format!(
+        "printf '\\033_Ga=T,f=100,i=1,c=2,r=1,q=2,m=1;%s\\033\\\\' '{first}'; \
+         printf '\\033_Gm=0;%s\\033\\\\X' '{second}'"
+    ));
+    wait_for_exit(&rx);
+
+    let snapshot = handle.snapshot();
+    let pieces: Vec<_> = snapshot
+        .images
+        .iter()
+        .map(|p| (p.line, p.column, p.columns))
+        .collect();
+    assert_eq!(pieces, [(0, 0, 2)]);
+    assert_eq!(snapshot.cell(2, 0).c, 'X');
+}
+
+#[test]
+fn kitty_image_is_deleted() {
+    let data = blue_pixel_png();
+    let (handle, rx) = spawn(&format!(
+        "printf '\\033_Ga=T,f=100,i=1,c=2,r=1,q=2;%s\\033\\\\' '{data}'; \
+         printf '\\033_Ga=d,d=I,i=1,q=2\\033\\\\X'"
+    ));
+    wait_for_exit(&rx);
+
+    let snapshot = handle.snapshot();
+    assert!(snapshot.images.is_empty());
+    assert_eq!(snapshot.cell(2, 0).c, 'X');
+}
+
+#[test]
+fn kitty_replies_come_back_in_order() {
+    let (handle, rx) = spawn(
+        "stty raw -echo; printf '\\033_Ga=q,i=31,f=32,s=1,v=1;AAAAAA==\\033\\\\\\033[c'; \
+         r=$(dd bs=1 count=17 2>/dev/null); stty sane; \
+         case \"$r\" in *'i=31;OK'*'[?6c'*) printf OK;; *) printf NO;; esac",
+    );
+    answer_queries_until_exit(&handle, &rx);
+    assert!(screen_contains(&handle, "OK"));
+}
+
+#[test]
 fn image_drawn_up_past_the_top_is_cropped() {
     let data = blue_pixel_png();
     // As omp draws images: save the cursor on the last row, move up to the

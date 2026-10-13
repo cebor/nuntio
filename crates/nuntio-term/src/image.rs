@@ -31,6 +31,7 @@ use image::{ColorType, DynamicImage, ImageDecoder, ImageReader, Limits, RgbaImag
 use thiserror::Error;
 
 use crate::image_scan::ImageRequest;
+use crate::kitty::{FIRST_TERMINAL_ID, KITTY_SOURCE_LIMIT, Source};
 
 /// The character of every image cell.
 pub(crate) const PLACEHOLDER: char = '\u{10EEEE}';
@@ -47,17 +48,22 @@ const IMAGE_MEMORY_LIMIT: usize = 512 << 20;
 /// Longest side of an image bitmap; larger ones are scaled down. One less
 /// than the 4096 texels of the smallest GPU limit, so the atlas's 1-texel
 /// padding still fits.
-const MAX_BITMAP_SIDE: u64 = 4095;
+pub(crate) const MAX_BITMAP_SIDE: u64 = 4095;
 /// Most rows an image may cover, at most.
-const MAX_LINES: u64 = 10_000;
+pub(crate) const MAX_LINES: u64 = 10_000;
 /// Most rows an image may cover, in screens of the terminal it was sent to.
-const MAX_SCREENS: u64 = 16;
+pub(crate) const MAX_SCREENS: u64 = 16;
 /// Most columns an image may cover; more than any terminal is wide.
-const MAX_COLUMNS: u64 = 10_000;
+pub(crate) const MAX_COLUMNS: u64 = 10_000;
 /// Largest image id: ids fill the 24 bits of an RGB color.
 const MAX_ID: u32 = 0xFF_FFFF;
 
 static NEXT_UID: AtomicU64 = AtomicU64::new(1);
+
+/// A fresh [`TermImage::uid`].
+pub(crate) fn next_uid() -> u64 {
+    NEXT_UID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// A decoded image, scaled to the cells it covers.
 pub struct TermImage {
@@ -236,10 +242,10 @@ pub(crate) fn parse_args(args: &[u8]) -> ImageArgs {
 /// The terminal's size in cells and its cell size in pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct CellGeometry {
-    columns: usize,
-    lines: usize,
-    cell_width: u32,
-    cell_height: u32,
+    pub(crate) columns: usize,
+    pub(crate) lines: usize,
+    pub(crate) cell_width: u32,
+    pub(crate) cell_height: u32,
 }
 
 impl From<WindowSize> for CellGeometry {
@@ -283,38 +289,7 @@ pub(crate) fn decode(
     if cw == 0 || ch == 0 {
         return Err(ImageError::NoCellSize);
     }
-    let engine = GeneralPurpose::new(
-        &alphabet::STANDARD,
-        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
-    );
-    let bytes = engine.decode(&request.payload)?;
-    let mut reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(image::ImageError::IoError)?;
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(16384);
-    limits.max_alloc = Some(256 << 20);
-    let mut budget = limits.clone();
-    reader.limits(limits);
-    // The first frame of animations, upright as the file's EXIF says.
-    let mut decoder = reader.into_decoder()?;
-    // `into_decoder` only checks the dimensions; reserve what decoding and
-    // the RGBA copy allocate.
-    let total = decoder.total_bytes();
-    budget.reserve(total)?;
-    if decoder.color_type() != ColorType::Rgba8 {
-        let (w, h) = decoder.dimensions();
-        budget.reserve(u64::from(w) * u64::from(h) * 4)?;
-    }
-    let orientation = decoder.orientation()?;
-    // Rotating by a quarter turn copies the image.
-    if swaps_axes(orientation) {
-        budget.reserve(total)?;
-    }
-    let mut img = DynamicImage::from_decoder(decoder)?;
-    img.apply_orientation(orientation);
-    let decoded = img.into_rgba8();
+    let (decoded, mut budget) = decode_rgba(decode_base64(&request.payload)?)?;
 
     let inherent = (decoded.width() as u64, decoded.height() as u64);
     let terminal = (geometry.columns as u64 * cw, geometry.lines as u64 * ch);
@@ -374,13 +349,54 @@ pub(crate) fn decode(
     imageops::replace(&mut canvas, &scaled, 0, 0);
 
     Ok(TermImage {
-        uid: NEXT_UID.fetch_add(1, Ordering::Relaxed),
+        uid: next_uid(),
         columns: columns as usize,
         lines: lines as usize,
         width: canvas.width(),
         height: canvas.height(),
         rgba: canvas.into_raw().into_boxed_slice(),
     })
+}
+
+/// Base64 data of an image; padding is optional.
+pub(crate) fn decode_base64(payload: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
+    GeneralPurpose::new(
+        &alphabet::STANDARD,
+        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+    )
+    .decode(payload)
+}
+
+/// Decode an image file to RGBA, upright as its EXIF says. Returns the
+/// memory budget left for processing the result further.
+pub(crate) fn decode_rgba(bytes: Vec<u8>) -> Result<(RgbaImage, Limits), ImageError> {
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(image::ImageError::IoError)?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    limits.max_alloc = Some(256 << 20);
+    let mut budget = limits.clone();
+    reader.limits(limits);
+    // The first frame of animations, upright as the file's EXIF says.
+    let mut decoder = reader.into_decoder()?;
+    // `into_decoder` only checks the dimensions; reserve what decoding and
+    // the RGBA copy allocate.
+    let total = decoder.total_bytes();
+    budget.reserve(total)?;
+    if decoder.color_type() != ColorType::Rgba8 {
+        let (w, h) = decoder.dimensions();
+        budget.reserve(u64::from(w) * u64::from(h) * 4)?;
+    }
+    let orientation = decoder.orientation()?;
+    // Rotating by a quarter turn copies the image.
+    if swaps_axes(orientation) {
+        budget.reserve(total)?;
+    }
+    let mut img = DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    Ok((img.into_rgba8(), budget))
 }
 
 /// Whether applying `orientation` turns the image by a quarter turn and so
@@ -398,7 +414,7 @@ fn swaps_axes(orientation: Orientation) -> bool {
 /// `image` scaled to `size`, averaged and kept premultiplied, so the color
 /// of fully transparent pixels doesn't bleed into the edges and the GPU can
 /// filter it again without darkening them.
-fn scale(mut image: RgbaImage, size: (u32, u32)) -> RgbaImage {
+pub(crate) fn scale(mut image: RgbaImage, size: (u32, u32)) -> RgbaImage {
     if image.pixels().any(|p| p.0[3] < 255) {
         premultiply(&mut image);
     }
@@ -445,10 +461,22 @@ impl ImageKey {
     }
 }
 
+/// The Kitty placement a stored image was made for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KittyPlacement {
+    /// The Kitty image id of the source data.
+    pub(crate) image: u32,
+    pub(crate) placement: u32,
+    pub(crate) z: i32,
+    /// What the rendering depends on, see `kitty::placement_key`.
+    pub(crate) key: u64,
+}
+
 /// A stored image and whether it was placed on the primary screen.
 struct StoredImage {
     image: Arc<TermImage>,
     on_primary: bool,
+    kitty: Option<KittyPlacement>,
 }
 
 /// The images of one pane, by the id their cells carry.
@@ -466,6 +494,20 @@ pub(crate) struct ImageStore {
     next_scan: usize,
     /// Above this, images not visible are dropped.
     limit: usize,
+    /// Kitty source images by the program's image id. They are kept
+    /// apart from `images`, which holds what was rendered from them.
+    kitty_sources: HashMap<u32, Source>,
+    /// Ids of `kitty_sources`, oldest first.
+    kitty_order: VecDeque<u32>,
+    kitty_bytes: usize,
+    kitty_limit: usize,
+    /// Image number (`I=`) to the id of the newest image with it.
+    kitty_numbers: HashMap<u32, u32>,
+    /// The next id for images the program didn't name.
+    next_kitty_id: u32,
+    /// The next placement number for placements the program didn't name;
+    /// counts down from the top so it stays clear of the program's own.
+    next_placement: u32,
 }
 
 impl Default for ImageStore {
@@ -491,7 +533,21 @@ impl ImageStore {
             next_scan: 0,
             budget,
             limit,
+            kitty_sources: HashMap::new(),
+            kitty_order: VecDeque::new(),
+            kitty_bytes: 0,
+            kitty_limit: KITTY_SOURCE_LIMIT,
+            kitty_numbers: HashMap::new(),
+            next_kitty_id: FIRST_TERMINAL_ID,
+            next_placement: u32::MAX,
         }
+    }
+
+    /// Keep at most `limit` bytes of Kitty source images.
+    #[cfg(test)]
+    pub(crate) fn with_kitty_limit(mut self, limit: usize) -> Self {
+        self.kitty_limit = limit;
+        self
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -512,6 +568,18 @@ impl ImageStore {
     }
 
     pub(crate) fn insert(&mut self, key: ImageKey, image: TermImage) -> u32 {
+        let id = self.add(image, None);
+        self.recent.insert(key, id);
+        id
+    }
+
+    /// Store an image rendered for a Kitty placement. Such images are never
+    /// found by [`Self::cached`].
+    pub(crate) fn insert_kitty(&mut self, image: TermImage, kitty: KittyPlacement) -> u32 {
+        self.add(image, Some(kitty))
+    }
+
+    fn add(&mut self, image: TermImage, kitty: Option<KittyPlacement>) -> u32 {
         let mut id = self.next_id;
         while self.images.contains_key(&id) {
             id = if id >= MAX_ID { 1 } else { id + 1 };
@@ -523,11 +591,102 @@ impl ImageStore {
             StoredImage {
                 image: Arc::new(image),
                 on_primary: false,
+                kitty,
             },
         );
         self.order.push_back(id);
-        self.recent.insert(key, id);
         id
+    }
+
+    /// Forget image `id`. Cells that still refer to it are drawn blank.
+    pub(crate) fn remove(&mut self, id: u32) {
+        if let Some(stored) = self.images.remove(&id) {
+            self.bytes -= stored.image.rgba.len();
+            self.order.retain(|&other| other != id);
+        }
+    }
+
+    /// The image of placement `placement` of Kitty image `image`.
+    pub(crate) fn find_kitty(&self, image: u32, placement: u32) -> Option<u32> {
+        self.images.iter().find_map(|(&id, stored)| {
+            stored
+                .kitty
+                .is_some_and(|k| k.image == image && k.placement == placement)
+                .then_some(id)
+        })
+    }
+
+    pub(crate) fn kitty_placement(&self, id: u32) -> Option<&KittyPlacement> {
+        self.images.get(&id)?.kitty.as_ref()
+    }
+
+    pub(crate) fn kitty_placement_mut(&mut self, id: u32) -> Option<&mut KittyPlacement> {
+        self.images.get_mut(&id)?.kitty.as_mut()
+    }
+
+    /// The ids of the stored images whose Kitty placement `pred` accepts.
+    pub(crate) fn kitty_ids(&self, pred: impl Fn(&KittyPlacement) -> bool) -> Vec<u32> {
+        self.images
+            .iter()
+            .filter_map(|(&id, stored)| stored.kitty.as_ref().filter(|k| pred(k)).map(|_| id))
+            .collect()
+    }
+
+    pub(crate) fn kitty_source(&self, id: u32) -> Option<&Source> {
+        self.kitty_sources.get(&id)
+    }
+
+    /// The Kitty image id the newest image numbered `number` has.
+    pub(crate) fn kitty_number(&self, number: u32) -> Option<u32> {
+        self.kitty_numbers.get(&number).copied()
+    }
+
+    pub(crate) fn set_kitty_number(&mut self, number: u32, id: u32) {
+        self.kitty_numbers.insert(number, id);
+    }
+
+    /// An image id the program didn't choose.
+    pub(crate) fn new_kitty_id(&mut self) -> u32 {
+        loop {
+            let id = self.next_kitty_id;
+            self.next_kitty_id = id.checked_add(1).unwrap_or(FIRST_TERMINAL_ID);
+            if !self.kitty_sources.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
+    /// A placement number the program didn't choose.
+    pub(crate) fn fresh_placement(&mut self) -> u32 {
+        let placement = self.next_placement;
+        self.next_placement = placement.checked_sub(1).unwrap_or(u32::MAX);
+        placement
+    }
+
+    /// Keep `source` as Kitty image `id`, replacing the data it had. Over
+    /// the memory limit the oldest other sources are dropped.
+    pub(crate) fn put_kitty_source(&mut self, id: u32, source: Source) {
+        if let Some(old) = self.kitty_sources.remove(&id) {
+            self.kitty_bytes -= old.rgba.len();
+            self.kitty_order.retain(|&other| other != id);
+        }
+        self.kitty_bytes += source.rgba.len();
+        self.kitty_sources.insert(id, source);
+        self.kitty_order.push_back(id);
+        while self.kitty_bytes > self.kitty_limit && self.kitty_order.len() > 1 {
+            let oldest = self.kitty_order[0];
+            self.drop_kitty_source(oldest);
+        }
+    }
+
+    /// Forget Kitty image `id` and the numbers that name it. The images
+    /// rendered from it stay.
+    pub(crate) fn drop_kitty_source(&mut self, id: u32) {
+        if let Some(old) = self.kitty_sources.remove(&id) {
+            self.kitty_bytes -= old.rgba.len();
+        }
+        self.kitty_order.retain(|&other| other != id);
+        self.kitty_numbers.retain(|_, target| *target != id);
     }
 
     /// Note that image `id` was placed on the alternate screen (`alt`) or
@@ -678,10 +837,6 @@ pub(crate) fn place<T: EventListener>(
     let x = term.grid().cursor.point.column.0;
     let visible = image.columns.min(columns - x);
     let bg = term.grid().cursor.template.bg;
-    let blank = Cell {
-        bg,
-        ..Cell::default()
-    };
     for row in hidden..image.lines {
         if row > hidden {
             let before = term.grid().cursor.point.line;
@@ -696,21 +851,7 @@ pub(crate) fn place<T: EventListener>(
             }
         }
         let line = term.grid().cursor.point.line;
-        let cells = &mut term.grid_mut()[line];
-        // Don't leave half of a wide character behind.
-        if x > 0 && cells[Column(x)].flags.contains(Flags::WIDE_CHAR_SPACER) {
-            cells[Column(x - 1)] = blank.clone();
-        }
-        if x + visible < columns
-            && cells[Column(x + visible - 1)]
-                .flags
-                .contains(Flags::WIDE_CHAR)
-        {
-            cells[Column(x + visible)] = blank.clone();
-        }
-        for col in 0..visible {
-            cells[Column(x + col)] = image_cell(id, row, col, bg);
-        }
+        write_row(term, line, id, row, x, visible, bg);
     }
     let end = x + image.columns;
     let cursor = &mut term.grid_mut().cursor;
@@ -721,6 +862,110 @@ pub(crate) fn place<T: EventListener>(
         cursor.point.column = Column(columns - 1);
         cursor.input_needs_wrap = true;
     }
+}
+
+/// Write the cells of image `id` at the cursor without moving it, as
+/// Kitty's `C=1` asks: no scrolling, and what doesn't fit the screen is
+/// cropped at its bottom and right edge. Rows before `hidden` lie above the
+/// screen and aren't drawn: row `hidden` goes on the cursor's line.
+pub(crate) fn place_fixed<T: EventListener>(
+    term: &mut Term<T>,
+    id: u32,
+    image: &TermImage,
+    hidden: usize,
+) {
+    let columns = term.columns();
+    let screen_lines = term.screen_lines();
+    let point = term.grid().cursor.point;
+    let x = point.column.0;
+    let visible = image.columns.min(columns - x);
+    let bg = term.grid().cursor.template.bg;
+    for row in hidden..image.lines {
+        let line = point.line.0 + (row - hidden) as i32;
+        if line >= screen_lines as i32 {
+            break;
+        }
+        write_row(term, Line(line), id, row, x, visible, bg);
+    }
+}
+
+/// Write `visible` cells of row `row` of image `id` on `line`, from column `x`.
+fn write_row<T: EventListener>(
+    term: &mut Term<T>,
+    line: Line,
+    id: u32,
+    row: usize,
+    x: usize,
+    visible: usize,
+    bg: Color,
+) {
+    let columns = term.columns();
+    let blank = Cell {
+        bg,
+        ..Cell::default()
+    };
+    let cells = &mut term.grid_mut()[line];
+    // Don't leave half of a wide character behind.
+    if x > 0 && cells[Column(x)].flags.contains(Flags::WIDE_CHAR_SPACER) {
+        cells[Column(x - 1)] = blank.clone();
+    }
+    if x + visible < columns
+        && cells[Column(x + visible - 1)]
+            .flags
+            .contains(Flags::WIDE_CHAR)
+    {
+        cells[Column(x + visible)] = blank;
+    }
+    for col in 0..visible {
+        cells[Column(x + col)] = image_cell(id, row, col, bg);
+    }
+}
+
+/// Replace every cell of the visible screen that shows one of the images
+/// `ids` with a blank one of the same background. Cells in the scrollback
+/// stay; they scroll away like text. Returns whether anything changed.
+pub(crate) fn erase_image<T: EventListener>(term: &mut Term<T>, ids: &HashSet<u32>) -> bool {
+    if ids.is_empty() {
+        return false;
+    }
+    let (columns, screen_lines) = (term.columns(), term.screen_lines());
+    let grid = term.grid_mut();
+    let mut changed = false;
+    for line in 0..screen_lines as i32 {
+        let row = &mut grid[Line(line)];
+        for column in 0..columns {
+            let cell = &row[Column(column)];
+            if image_cell_ref(cell).is_some_and(|(id, ..)| ids.contains(&id)) {
+                row[Column(column)] = Cell {
+                    bg: cell.bg,
+                    ..Cell::default()
+                };
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// The ids of the images shown by cells of the visible screen for which
+/// `pred(line, column)` holds, with 0-based screen coordinates.
+pub(crate) fn visible_image_ids<T: EventListener>(
+    term: &Term<T>,
+    pred: impl Fn(usize, usize) -> bool,
+) -> HashSet<u32> {
+    let grid = term.grid();
+    let mut ids = HashSet::new();
+    for line in 0..term.screen_lines() {
+        let row = &grid[Line(line as i32)];
+        for column in 0..term.columns() {
+            if pred(line, column)
+                && let Some((id, ..)) = image_cell_ref(&row[Column(column)])
+            {
+                ids.insert(id);
+            }
+        }
+    }
+    ids
 }
 
 #[cfg(test)]

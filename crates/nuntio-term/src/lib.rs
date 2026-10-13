@@ -4,6 +4,7 @@ mod backend;
 mod image;
 mod image_scan;
 mod io_loop;
+mod kitty;
 mod osc_cwd;
 mod palette;
 mod pane;

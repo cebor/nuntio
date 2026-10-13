@@ -22,6 +22,7 @@ use polling::{Events, PollMode, Poller};
 use crate::backend::{Backend, BackendEvent};
 use crate::image::{self, CellGeometry, ImageKey, ImageStore, TermImage};
 use crate::image_scan::{ImageRequest, ImageScanner, ScanEvent};
+use crate::kitty::{self, Accepted, Transfers};
 use crate::osc_cwd::{CwdScanner, ReportedDir};
 use crate::pane::Listener;
 use crate::sync::lock;
@@ -51,7 +52,7 @@ pub(crate) enum Msg {
     Reply(Vec<u8>),
     Resize(WindowSize),
     Shutdown,
-    /// An image decode finished; only `decode_serving` waits for it, the
+    /// An image decode finished; only `work_serving` waits for it, the
     /// loop ignores it.
     Decoded,
 }
@@ -205,6 +206,8 @@ pub(crate) struct IoLoop {
     cwd: CwdScanner,
     reported_dir: Arc<Mutex<Option<ReportedDir>>>,
     scanner: ImageScanner,
+    /// Chunks of a Kitty graphics transfer received so far.
+    kitty: Transfers,
     images: Arc<Mutex<ImageStore>>,
     /// Input waiting for the PTY to become writable.
     write_list: VecDeque<Queued>,
@@ -245,6 +248,7 @@ impl IoLoop {
             cwd: CwdScanner::default(),
             reported_dir,
             scanner: ImageScanner::default(),
+            kitty: Transfers::default(),
             images,
             write_list: VecDeque::new(),
             written: 0,
@@ -489,6 +493,7 @@ impl IoLoop {
                 *lock(&self.reported_dir) = Some(dir);
             }
             let parser = &mut self.parser;
+            let kitty = &mut self.kitty;
             let listener = &self.listener;
             let images = &self.images;
             let mut input = PtyInput {
@@ -558,7 +563,9 @@ impl IoLoop {
                             (id, image, false)
                         }
                         None => {
-                            let decoded = decode_serving(&mut input, &request, &args, geometry);
+                            let decoded =
+                                work_serving(&mut input, || decode(&request, &args, geometry))
+                                    .flatten();
                             if *input.shutdown_requested {
                                 return;
                             }
@@ -590,6 +597,56 @@ impl IoLoop {
                     if inserted {
                         store.evict(term);
                     }
+                }
+                ScanEvent::Graphics(request) => {
+                    if *input.shutdown_requested {
+                        return;
+                    }
+                    let transfer = match kitty.accept(&request.control, request.payload) {
+                        Accepted::Pending => return,
+                        Accepted::Rejected(text) => {
+                            if let Some(text) = text {
+                                let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
+                                with_flushed_sync(parser, term, |_| listener.reply(text));
+                            }
+                            return;
+                        }
+                        Accepted::Complete(transfer) => transfer,
+                    };
+                    let geometry = CellGeometry::from(listener.window_size());
+                    let job = kitty::plan(&lock(images), transfer, geometry);
+                    let prepared = if job.needs_work() {
+                        // Decoding and scaling take a while: let the main
+                        // thread draw meanwhile.
+                        drop(guard.take());
+                        drop(lease.take());
+                        service(&mut input);
+                        if *input.shutdown_requested {
+                            return;
+                        }
+                        let prepared = work_serving(&mut input, || kitty::prepare(job));
+                        if *input.shutdown_requested {
+                            return;
+                        }
+                        lease = Some(term.lease());
+                        let Some(prepared) = prepared else {
+                            return;
+                        };
+                        prepared
+                    } else {
+                        kitty::prepare(job)
+                    };
+                    let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
+                    let cursor_up = request.cursor_up;
+                    // The screen is known only once the output buffered in a
+                    // synchronized update is applied, and replies stay in
+                    // stream order.
+                    with_flushed_sync(parser, term, |term| {
+                        let reply = kitty::apply(prepared, term, &mut lock(images), cursor_up);
+                        if let Some(text) = reply {
+                            listener.reply(text);
+                        }
+                    });
                 }
             });
             if self.shutdown_requested {
@@ -741,20 +798,16 @@ fn decode(
         .ok()
 }
 
-/// [`decode`] on a worker thread. This thread meanwhile takes the messages
+/// Run `work` on a worker thread. This thread meanwhile takes the messages
 /// for the PTY, so keystrokes and resizes aren't held up by a large image.
-fn decode_serving(
-    input: &mut PtyInput<'_>,
-    request: &ImageRequest,
-    args: &image::ImageArgs,
-    geometry: CellGeometry,
-) -> Option<TermImage> {
+/// None if the worker panicked.
+fn work_serving<R: Send>(input: &mut PtyInput<'_>, work: impl FnOnce() -> R + Send) -> Option<R> {
     std::thread::scope(|scope| {
         let tx = input.tx.clone();
         let worker = scope.spawn(move || {
-            let image = decode(request, args, geometry);
+            let result = work();
             let _ = tx.send(Msg::Decoded);
-            image
+            result
         });
         while !worker.is_finished() {
             match input.rx.recv_timeout(DECODE_POLL) {
@@ -772,11 +825,11 @@ fn decode_serving(
                 Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(DECODE_POLL),
             }
         }
-        // A panic in the worker counts as a failed decode.
-        worker.join().unwrap_or_else(|_| {
-            tracing::warn!("image decoder panicked");
-            None
-        })
+        // A panic in the worker counts as failed work.
+        worker
+            .join()
+            .inspect_err(|_| tracing::warn!("image worker panicked"))
+            .ok()
     })
 }
 

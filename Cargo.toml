@@ -53,6 +53,8 @@ polling = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 # The version alacritty_terminal already uses.
 base64 = "0.22"
+# Kitty graphics: zlib-compressed image data (o=z).
+miniz_oxide = "0.9"
 cosmic-text = "0.19"
 fontdb = "0.23"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }

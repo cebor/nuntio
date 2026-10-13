@@ -1,15 +1,18 @@
 //! Splits PTY output into text for the parser, inline images (iTerm2's
-//! `ESC ] 1337 ; File=<args> : <base64> BEL|ST`) and cell size queries
-//! (`CSI 16 t`), also when a sequence is split across reads.
+//! `ESC ] 1337 ; File=<args> : <base64> BEL|ST`), Kitty graphics commands
+//! (`ESC _ G <control> ; <base64> ST`) and cell size queries (`CSI 16 t`),
+//! also when a sequence is split across reads.
 
 /// Start of an inline image.
 const OSC_FILE: &[u8] = b"\x1b]1337;File=";
+/// Start of a Kitty graphics command.
+const APC_GRAPHICS: &[u8] = b"\x1b_G";
 /// The cell size query, which alacritty leaves unanswered.
 const CSI_CELL_SIZE: &[u8] = b"\x1b[16t";
 /// Longest argument list that is kept; longer sequences are dropped.
 const MAX_ARGS: usize = 4096;
 /// Largest base64 payload that is kept; larger images are dropped.
-const MAX_PAYLOAD: usize = 64 << 20;
+pub(crate) const MAX_PAYLOAD: usize = 64 << 20;
 /// Text bytes kept to recognize `ESC 7 CSI n A` right before an image:
 /// `ESC 7 ESC [`, 10 digits and `A` are 15 bytes.
 const TAIL_LEN: usize = 16;
@@ -23,7 +26,20 @@ pub(crate) enum ScanEvent<'a> {
     /// Output for the parser, unchanged.
     Text(&'a [u8]),
     Image(ImageRequest),
+    /// A Kitty graphics command, one chunk of a transfer at most.
+    Graphics(GraphicsRequest),
     CellSizeQuery,
+}
+
+/// A Kitty graphics command as the program sent it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct GraphicsRequest {
+    /// The `key=value` list between `ESC _ G` and `;`.
+    pub control: Vec<u8>,
+    /// The base64 data, without whitespace.
+    pub payload: Vec<u8>,
+    /// As for [`ImageRequest::cursor_up`].
+    pub cursor_up: Option<u32>,
 }
 
 /// An inline image as the program sent it.
@@ -51,6 +67,13 @@ enum State {
     Payload,
     /// ESC in the payload: ends the sequence, which is dispatched.
     PayloadEsc,
+    /// Control data of a graphics command, up to `;` or ST.
+    ApcControl,
+    /// ESC in the control data: `\` ends the command, which is dispatched.
+    ApcControlEsc,
+    ApcPayload,
+    /// ESC in the graphics payload: ends the command, which is dispatched.
+    ApcPayloadEsc,
     /// A sequence over a limit, dropped up to its end.
     Discard,
     DiscardEsc,
@@ -63,6 +86,7 @@ pub(crate) struct ImageScanner {
     /// them on early would leave the parser inside an OSC once the rest is
     /// stripped.
     held: Vec<u8>,
+    /// The arguments of an image or the control data of a graphics command.
     args: Vec<u8>,
     payload: Vec<u8>,
     /// The last text bytes passed on, up to `TAIL_LEN`, cleared by any
@@ -131,6 +155,43 @@ impl ImageScanner {
                 }
                 _ => self.payload.push(b),
             },
+            State::ApcControl => match b {
+                b';' => self.state = State::ApcPayload,
+                ESC => self.state = State::ApcControlEsc,
+                CAN | SUB => self.reset(),
+                0..0x20 => {}
+                _ => {
+                    self.args.push(b);
+                    if self.args.len() > MAX_ARGS {
+                        self.args = Vec::new();
+                        self.state = State::Discard;
+                    }
+                }
+            },
+            State::ApcControlEsc => {
+                if b == b'\\' {
+                    self.dispatch_graphics(on_event);
+                } else {
+                    self.reset();
+                    self.after_esc(b, on_event);
+                }
+            }
+            State::ApcPayload => match b {
+                b' ' | b'\t' | b'\r' | b'\n' => {}
+                ESC => self.state = State::ApcPayloadEsc,
+                CAN | SUB => self.reset(),
+                0..0x20 => {}
+                _ if self.payload.len() == MAX_PAYLOAD => {
+                    tracing::warn!("graphics payload larger than 64 MiB ignored");
+                    self.reset();
+                    self.state = State::Discard;
+                }
+                _ => self.payload.push(b),
+            },
+            State::ApcPayloadEsc => {
+                self.dispatch_graphics(on_event);
+                self.after_esc(b, on_event);
+            }
             State::PayloadEsc => {
                 self.dispatch(on_event);
                 self.after_esc(b, on_event);
@@ -158,7 +219,13 @@ impl ImageScanner {
         } else if self.held == OSC_FILE {
             self.held.clear();
             self.state = State::Args;
-        } else if !(OSC_FILE.starts_with(&self.held) || CSI_CELL_SIZE.starts_with(&self.held)) {
+        } else if self.held == APC_GRAPHICS {
+            self.held.clear();
+            self.state = State::ApcControl;
+        } else if !(OSC_FILE.starts_with(&self.held)
+            || CSI_CELL_SIZE.starts_with(&self.held)
+            || APC_GRAPHICS.starts_with(&self.held))
+        {
             // No match: pass the bytes on. A new ESC may start a sequence.
             if b == ESC {
                 self.held.pop();
@@ -194,6 +261,17 @@ impl ImageScanner {
         self.tail.clear();
         self.state = State::Ground;
         on_event(ScanEvent::Image(request));
+    }
+
+    fn dispatch_graphics(&mut self, on_event: &mut impl FnMut(ScanEvent<'_>)) {
+        let request = GraphicsRequest {
+            control: std::mem::take(&mut self.args),
+            payload: std::mem::take(&mut self.payload),
+            cursor_up: saved_cursor_up(&self.tail),
+        };
+        self.tail.clear();
+        self.state = State::Ground;
+        on_event(ScanEvent::Graphics(request));
     }
 
     /// Drop the sequence and go back to ground.
@@ -241,6 +319,7 @@ mod tests {
     enum Owned {
         Text(Vec<u8>),
         Image(ImageRequest),
+        Graphics(GraphicsRequest),
         CellSizeQuery,
     }
 
@@ -256,6 +335,7 @@ mod tests {
                     _ => events.push(Owned::Text(text.to_vec())),
                 },
                 ScanEvent::Image(request) => events.push(Owned::Image(request)),
+                ScanEvent::Graphics(request) => events.push(Owned::Graphics(request)),
                 ScanEvent::CellSizeQuery => events.push(Owned::CellSizeQuery),
             });
         }
@@ -345,6 +425,94 @@ mod tests {
                 image(b"inline=1", b"AAAA", Some(3)),
                 image(b"inline=1", b"BBBB", None),
             ]
+        );
+    }
+
+    fn graphics(control: &[u8], payload: &[u8], cursor_up: Option<u32>) -> Owned {
+        Owned::Graphics(GraphicsRequest {
+            control: control.to_vec(),
+            payload: payload.to_vec(),
+            cursor_up,
+        })
+    }
+
+    #[test]
+    fn graphics_at_every_split_position() {
+        let input: &[u8] = b"before\x1b_Ga=t,i=3,m=1;YW Jj\r\nWFla\x1b\\after";
+        let expected = [
+            text(b"before"),
+            graphics(b"a=t,i=3,m=1", b"YWJjWFla", None),
+            text(b"after"),
+        ];
+        assert_eq!(scan(&[input]), expected);
+        for split in 1..input.len() {
+            let (head, tail) = input.split_at(split);
+            assert_eq!(scan(&[head, tail]), expected, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn chunked_graphics_pair() {
+        assert_eq!(
+            scan(&[b"\x1b_Gi=1,m=1;AAAA\x1b", b"\\\x1b_Gm=0;BBBB\x1b\\x"]),
+            [
+                graphics(b"i=1,m=1", b"AAAA", None),
+                graphics(b"m=0", b"BBBB", None),
+                text(b"x"),
+            ]
+        );
+    }
+
+    #[test]
+    fn graphics_without_payload() {
+        assert_eq!(
+            scan(&[b"\x1b_Ga=d,d=I,i=7,q=2\x1b\\"]),
+            [graphics(b"a=d,d=I,i=7,q=2", b"", None)]
+        );
+    }
+
+    #[test]
+    fn other_apc_passes_unchanged() {
+        let input: &[u8] = b"a\x1b_Xtext\x1b\\b";
+        assert_eq!(scan(&[input]), [text(input)]);
+    }
+
+    #[test]
+    fn saved_cursor_up_before_graphics() {
+        let input: &[u8] = b"\x1b7\x1b[3A\x1b_Ga=p,i=1\x1b\\";
+        let expected = [text(b"\x1b7\x1b[3A"), graphics(b"a=p,i=1", b"", Some(3))];
+        assert_eq!(scan(&[input]), expected);
+        for split in 1..input.len() {
+            let (head, tail) = input.split_at(split);
+            assert_eq!(scan(&[head, tail]), expected, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn graphics_can_aborts() {
+        assert_eq!(scan(&[b"\x1b_Ga=t;AAAA\x18next"]), [text(b"next")]);
+        assert_eq!(scan(&[b"\x1b_Ga=t\x18next"]), [text(b"next")]);
+    }
+
+    #[test]
+    fn esc_in_graphics_payload_ends_the_command() {
+        assert_eq!(
+            scan(&[b"\x1b_Ga=t;AAAA\x1b[1mX"]),
+            [graphics(b"a=t", b"AAAA", None), text(b"\x1b[1mX")]
+        );
+    }
+
+    #[test]
+    fn oversized_graphics_are_dropped() {
+        let payload = vec![b'A'; MAX_PAYLOAD + 10];
+        assert_eq!(
+            scan(&[b"\x1b_Ga=t;", &payload, b"\x1b\\next"]),
+            [text(b"next")]
+        );
+        let control = vec![b'a'; MAX_ARGS + 10];
+        assert_eq!(
+            scan(&[b"\x1b_G", &control, b";AAAA\x1b\\next"]),
+            [text(b"next")]
         );
     }
 
