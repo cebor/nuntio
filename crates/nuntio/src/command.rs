@@ -58,11 +58,11 @@ pub fn no_window(command: &mut Command) -> &mut Command {
     command
 }
 
-#[cfg(test)]
+// Needs `sh`.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn slow_commands_are_killed() {
         let started = Instant::now();
