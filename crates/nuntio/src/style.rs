@@ -27,6 +27,16 @@ pub const BLACK: Rgb = rgb(0x000000);
 /// The blue of informational banners and the update badge.
 pub const INFO_COLOR: Rgb = rgb(0x1f5fa8);
 
+/// Perceived brightness, 0.0 (black) to 1.0 (white).
+pub fn luminance(c: Rgb) -> f32 {
+    nuntio_config::Color {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+    }
+    .luminance()
+}
+
 /// `a` moved towards `b` by `t` (0.0 = `a`, 1.0 = `b`).
 pub fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;

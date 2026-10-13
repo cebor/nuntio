@@ -9,7 +9,7 @@ use nuntio_render::{CellMetrics, UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{UiMetrics, bar_background, hairline, mix, rect};
+use crate::style::{UiMetrics, bar_background, hairline, luminance, mix, rect};
 use crate::sysmon::Sample;
 
 /// Samples kept per graph: one minute at one sample per second.
@@ -720,11 +720,6 @@ impl Colors {
 struct Output {
     rects: Vec<UiRect>,
     texts: Vec<UiText>,
-}
-
-/// Perceived brightness, 0.0 (black) to 1.0 (white).
-fn luminance(c: Rgb) -> f32 {
-    (0.2126 * c.r as f32 + 0.7152 * c.g as f32 + 0.0722 * c.b as f32) / 255.0
 }
 
 /// A color from hue (degrees), saturation and lightness (0.0 to 1.0).
