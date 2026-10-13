@@ -75,7 +75,7 @@ ARCHITECTURE.md has the full picture (threads, UserEvent flow, output/input path
 | `xtask` | Icons, packaging (`HELPERS` lists the helper binaries packages ship), changelog, website build (`site`) in `main.rs`; debug driver (`drive`) in `drive.rs` |
 | `site` | Zola website on GitHub Pages (`pages.yml`, also run by `release.yml`). The download section reads the latest release from the GitHub API at build time; `docs/config.md` is copied in by `cargo xtask site`. Zola 0.23 uses Tera 2: components instead of macros |
 
-Data flow: PTY threads send `UserEvent::Term(PaneId, TermEvent)` via the winit proxy. The main thread takes a `Snapshot` per visible pane (the term lock is only held for the copy) and hands a `Frame` (panes + `UiRect`s + `UiText`s) to the renderer. It only redraws on damage: idle CPU must stay at ~0 (`ControlFlow::Wait`; cursor blinking uses `WaitUntil`).
+Data flow: PTY threads send `UserEvent::Term(PaneId, TermEvent)` via the winit proxy. The main thread takes a `Snapshot` per visible pane (the term lock is only held for the copy) and hands a `Frame` (panes + `UiRect`s + `UiText`s) to the renderer. It redraws only on events or timer deadlines (no damage tracking): idle CPU must stay at ~0 (`ControlFlow::Wait`; cursor blinking uses `WaitUntil`).
 
 `nuntio-config` and `nuntio-apps` aren't on the global PATH: packages put them in `lib/nuntio/` (Linux) or next to the executable, and `pane_env.rs` prepends that directory to `PATH` and sets `NUNTIO_CONFIG` only for nuntio's own panes. New settings need an entry in `schema.rs` and a row in `docs/config.md` (tests enforce both).
 
