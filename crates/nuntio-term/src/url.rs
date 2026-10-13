@@ -129,7 +129,7 @@ fn is_delimiter(c: char) -> bool {
 }
 
 /// Ranges (in chars) of the URLs in `text`.
-pub fn find_urls(text: &[char]) -> Vec<Range<usize>> {
+pub(crate) fn find_urls(text: &[char]) -> Vec<Range<usize>> {
     let mut urls = Vec::new();
     let mut i = 0;
     while i < text.len() {

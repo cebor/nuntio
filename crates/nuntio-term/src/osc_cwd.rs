@@ -31,7 +31,7 @@ enum State {
 /// Finds directory reports in PTY output, also when a sequence is split
 /// across reads.
 #[derive(Debug)]
-pub struct CwdScanner {
+pub(crate) struct CwdScanner {
     state: State,
     payload: Vec<u8>,
     overflow: bool,
@@ -49,7 +49,7 @@ impl Default for CwdScanner {
 
 impl CwdScanner {
     /// Scan more output. Returns the last directory it reports, if any.
-    pub fn feed(&mut self, bytes: &[u8]) -> Option<ReportedDir> {
+    pub(crate) fn feed(&mut self, bytes: &[u8]) -> Option<ReportedDir> {
         let mut found = None;
         for &byte in bytes {
             self.state = match (self.state, byte) {

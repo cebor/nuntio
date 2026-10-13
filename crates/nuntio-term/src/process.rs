@@ -23,15 +23,15 @@ fn foreground_pid(shell_pid: u32) -> u32 {
 }
 
 /// What is running in the foreground of a pane.
-pub struct Foreground {
-    pub name: Option<String>,
-    pub cwd: Option<PathBuf>,
+pub(crate) struct Foreground {
+    pub(crate) name: Option<String>,
+    pub(crate) cwd: Option<PathBuf>,
 }
 
 /// Name and, if wanted, working directory of the foreground process, from
 /// one lookup of its pid.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn foreground(shell_pid: u32, want_cwd: bool) -> Foreground {
+pub(crate) fn foreground(shell_pid: u32, want_cwd: bool) -> Foreground {
     let pid = foreground_pid(shell_pid);
     Foreground {
         name: sys::name(pid).filter(|s| !s.is_empty()),
@@ -46,19 +46,19 @@ pub fn foreground(shell_pid: u32, want_cwd: bool) -> Foreground {
 /// Whether the shell itself is in the foreground, i.e. waiting at its
 /// prompt rather than running a program.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn foreground_is_shell(shell_pid: u32) -> Option<bool> {
+pub(crate) fn foreground_is_shell(shell_pid: u32) -> Option<bool> {
     sys::tpgid(shell_pid).map(|pid| pid == shell_pid)
 }
 
 /// The shell that `login` (see `pane::login_command`) started as its
 /// child, once it exists.
 #[cfg(target_os = "macos")]
-pub fn login_child(login_pid: u32) -> Option<u32> {
+pub(crate) fn login_child(login_pid: u32) -> Option<u32> {
     sys::children(login_pid).into_iter().next()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn foreground(_shell_pid: u32, _want_cwd: bool) -> Foreground {
+pub(crate) fn foreground(_shell_pid: u32, _want_cwd: bool) -> Foreground {
     Foreground {
         name: None,
         cwd: None,
@@ -66,7 +66,7 @@ pub fn foreground(_shell_pid: u32, _want_cwd: bool) -> Foreground {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn foreground_is_shell(_shell_pid: u32) -> Option<bool> {
+pub(crate) fn foreground_is_shell(_shell_pid: u32) -> Option<bool> {
     None
 }
 
