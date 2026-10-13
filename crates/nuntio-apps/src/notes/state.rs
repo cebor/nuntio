@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
+use nuntio_tui::style::Tone;
+use nuntio_tui::text_input::TextInput;
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -16,19 +18,12 @@ use super::layout::{self, Row};
 use super::markdown::{self, LineView, PieceKind};
 use super::store::{Stamp, Store, validate_title};
 use super::ui::{self, Areas};
-use super::widgets::TextInput;
+use super::widgets::edit_input;
 
 /// How long after the last edit a note is saved.
 pub const AUTOSAVE: Duration = Duration::from_secs(1);
 /// Rows or items one wheel step moves.
 const WHEEL: usize = 3;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tone {
-    Dim,
-    Warn,
-    Error,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -698,7 +693,7 @@ impl App {
                 KeyCode::Esc => self.clear_filter(),
                 _ => {
                     if let Some(filter) = &mut self.filter
-                        && filter.key(key)
+                        && edit_input(filter, key)
                     {
                         self.selected = 0;
                         self.select(0);
@@ -1037,7 +1032,7 @@ impl App {
                     }
                 }
                 _ => {
-                    if input.key(key) {
+                    if edit_input(input, key) {
                         *error = None;
                     }
                 }

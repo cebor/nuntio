@@ -1,5 +1,7 @@
-//! State of the editing widgets: a filterable choice list and a one-line
-//! text input.
+//! State of the editing widgets: a filterable choice list, and how keys edit
+//! a text input.
+
+use nuntio_tui::text_input::{Edit, TextInput};
 
 use crate::state::Key;
 
@@ -139,74 +141,20 @@ fn score(text: &str, query: &str) -> Option<usize> {
     query.chars().all(|q| chars.any(|c| c == q)).then_some(1000)
 }
 
-/// One line of editable text.
-#[derive(Debug, Clone, Default)]
-pub struct TextInput {
-    pub text: String,
-    /// In characters.
-    pub cursor: usize,
-}
-
-impl TextInput {
-    pub fn new(text: &str) -> Self {
-        Self {
-            text: text.to_owned(),
-            cursor: text.chars().count(),
-        }
-    }
-
-    fn byte_index(&self, char_index: usize) -> usize {
-        self.text
-            .char_indices()
-            .nth(char_index)
-            .map_or(self.text.len(), |(i, _)| i)
-    }
-
-    /// Handle a key; returns whether the text changed.
-    pub fn key(&mut self, key: Key) -> bool {
-        let len = self.text.chars().count();
-        match key {
-            Key::Char(c) => {
-                let at = self.byte_index(self.cursor);
-                self.text.insert(at, c);
-                self.cursor += 1;
-                true
-            }
-            Key::Backspace if self.cursor > 0 => {
-                self.cursor -= 1;
-                let at = self.byte_index(self.cursor);
-                self.text.remove(at);
-                true
-            }
-            Key::Delete if self.cursor < len => {
-                let at = self.byte_index(self.cursor);
-                self.text.remove(at);
-                true
-            }
-            Key::Ctrl('u') => {
-                self.text.clear();
-                self.cursor = 0;
-                true
-            }
-            Key::Left => {
-                self.cursor = self.cursor.saturating_sub(1);
-                false
-            }
-            Key::Right => {
-                self.cursor = (self.cursor + 1).min(len);
-                false
-            }
-            Key::Home | Key::Ctrl('a') => {
-                self.cursor = 0;
-                false
-            }
-            Key::End | Key::Ctrl('e') => {
-                self.cursor = len;
-                false
-            }
-            _ => false,
-        }
-    }
+/// Feed `key` to `input`; returns whether the text changed.
+pub fn edit_input(input: &mut TextInput, key: Key) -> bool {
+    let edit = match key {
+        Key::Char(c) => Edit::Insert(c),
+        Key::Backspace => Edit::Backspace,
+        Key::Delete => Edit::Delete,
+        Key::Ctrl('u') => Edit::Clear,
+        Key::Left => Edit::Left,
+        Key::Right => Edit::Right,
+        Key::Home | Key::Ctrl('a') => Edit::Home,
+        Key::End | Key::Ctrl('e') => Edit::End,
+        _ => return false,
+    };
+    input.apply(edit)
 }
 
 #[cfg(test)]
@@ -291,17 +239,15 @@ mod tests {
     }
 
     #[test]
-    fn text_input_edits_at_the_cursor() {
+    fn keys_edit_a_text_input() {
         let mut input = TextInput::new("%H:%M");
-        input.key(Key::Home);
-        input.key(Key::Char('ä'));
-        input.key(Key::End);
-        input.key(Key::Backspace);
-        input.key(Key::Left);
-        input.key(Key::Delete);
-        assert_eq!(input.text, "ä%H:");
-        assert_eq!(input.cursor, 4);
-        input.key(Key::Ctrl('u'));
-        assert_eq!(input.text, "");
+        edit_input(&mut input, Key::Home);
+        assert!(edit_input(&mut input, Key::Char('ä')));
+        edit_input(&mut input, Key::Ctrl('e'));
+        assert!(edit_input(&mut input, Key::Backspace));
+        assert!(!edit_input(&mut input, Key::Ctrl('a')));
+        assert!(!edit_input(&mut input, Key::Tab));
+        assert!(edit_input(&mut input, Key::Ctrl('u')));
+        assert_eq!(input.text(), "");
     }
 }

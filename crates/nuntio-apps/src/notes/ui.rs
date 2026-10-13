@@ -2,6 +2,8 @@
 //! out the areas and draws what `App` reports. Only ANSI colors and
 //! modifiers, so the app follows the terminal's theme.
 
+use nuntio_tui::style::{ACCENT, Tone};
+use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
@@ -11,10 +13,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::layout::Row;
 use super::markdown::{self, PieceKind};
-use super::state::{App, Focus, Prompt, TodoRow, Tone};
-use super::widgets::TextInput;
+use super::state::{App, Focus, Prompt, TodoRow};
 
-const ACCENT: Color = Color::Cyan;
 /// Width below which only the list or only the editor is shown.
 const NARROW: u16 = 60;
 /// Column of a todo's box in the overview, from the left of the body.
@@ -84,14 +84,6 @@ pub fn areas(size: Size, app: &App) -> Areas {
     areas
 }
 
-fn tone(tone: Tone) -> Style {
-    match tone {
-        Tone::Dim => Style::new().add_modifier(Modifier::DIM),
-        Tone::Warn => Style::new().fg(Color::Yellow),
-        Tone::Error => Style::new().fg(Color::Red),
-    }
-}
-
 fn dim() -> Style {
     Style::new().add_modifier(Modifier::DIM)
 }
@@ -138,7 +130,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             frame,
             areas.body,
             vec![
-                Line::styled(message.clone(), tone(Tone::Error)),
+                Line::styled(message.clone(), Tone::Error.style()),
                 Line::from(""),
                 Line::styled("q quits", dim()),
             ],
@@ -474,7 +466,7 @@ fn hints(pairs: &[(&str, &str)]) -> Line<'static> {
 
 fn draw_footer(frame: &mut Frame, app: &App) {
     let line = if let Some((t, message)) = &app.message {
-        Line::styled(format!(" {message}"), tone(*t))
+        Line::styled(format!(" {message}"), t.style())
     } else if app.todos.is_some() {
         hints(&[
             ("Space", "toggle"),
@@ -537,7 +529,7 @@ fn draw_input(frame: &mut Frame, title: &str, input: &TextInput, error: Option<&
         Span::raw(input.text().to_owned()),
     ])];
     if let Some(error) = error {
-        lines.push(Line::styled(error.to_owned(), tone(Tone::Error)));
+        lines.push(Line::styled(error.to_owned(), Tone::Error.style()));
     }
     lines.push(hints(&[("Enter", "ok"), ("Esc", "cancel")]));
     frame.render_widget(Paragraph::new(lines), inner);
@@ -618,7 +610,7 @@ fn draw_prompt(frame: &mut Frame, prompt: &Prompt, app: &App) {
             frame,
             "Quit",
             vec![
-                Line::styled(reason.clone(), tone(Tone::Error)),
+                Line::styled(reason.clone(), Tone::Error.style()),
                 Line::from("Quit without saving?"),
                 hints(&[("y", "quit"), ("n", "stay")]),
             ],

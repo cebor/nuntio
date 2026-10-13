@@ -15,8 +15,10 @@ use nuntio_config::{
 };
 
 use crate::args;
-use crate::widgets::{Picker, TextInput};
+use crate::widgets::Picker;
 use nuntio_config::detect::Found;
+use nuntio_tui::style::Tone;
+use nuntio_tui::text_input::TextInput;
 
 // Key handling and the editors, apart from the state they change.
 #[path = "state_keys.rs"]
@@ -174,15 +176,6 @@ pub enum Row {
 pub enum Focus {
     Sections,
     Rows,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tone {
-    Normal,
-    Dim,
-    Accent,
-    Warn,
-    Error,
 }
 
 /// What a picker sets.
@@ -1863,7 +1856,7 @@ mod tests {
         let Mode::Search(mode) = &app.mode else {
             panic!("not searching");
         };
-        assert_eq!(mode.input.text, "Dracula");
+        assert_eq!(mode.input.text(), "Dracula");
     }
 
     #[test]

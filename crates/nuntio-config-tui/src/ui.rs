@@ -3,6 +3,8 @@
 
 use nuntio_config::Theme;
 use nuntio_config::schema::Section;
+use nuntio_tui::style::{ACCENT, Tone};
+use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -11,22 +13,10 @@ use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Para
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::state::{
-    App, Entry, Focus, InputMode, ItemsMode, Mode, PickTarget, PickerMode, Row, SearchMode, Tone,
+    App, Entry, Focus, InputMode, ItemsMode, Mode, PickTarget, PickerMode, Row, SearchMode,
     bar_preview,
 };
-use crate::widgets::{Pick, TextInput};
-
-const ACCENT: Color = Color::Cyan;
-
-fn tone(tone: Tone) -> Style {
-    match tone {
-        Tone::Normal => Style::new(),
-        Tone::Dim => Style::new().add_modifier(Modifier::DIM),
-        Tone::Accent => Style::new().fg(ACCENT),
-        Tone::Warn => Style::new().fg(Color::Yellow),
-        Tone::Error => Style::new().fg(Color::Red),
-    }
-}
+use crate::widgets::Pick;
 
 fn selected_style(focused: bool) -> Style {
     if focused {
@@ -133,8 +123,8 @@ fn draw_picker(frame: &mut Frame, app: &App, mode: &PickerMode) {
             }
             let label = picker.label(entry);
             let style = match entry {
-                Some(i) if picker.choices[i].pick == Pick::Unset => tone(Tone::Dim),
-                None => tone(Tone::Accent),
+                Some(i) if picker.choices[i].pick == Pick::Unset => Tone::Dim.style(),
+                None => Tone::Accent.style(),
                 _ => Style::new(),
             };
             spans.push(Span::styled(label, style));
@@ -142,7 +132,7 @@ fn draw_picker(frame: &mut Frame, app: &App, mode: &PickerMode) {
         })
         .collect();
     if items.is_empty() {
-        let empty = Line::styled("No matches", tone(Tone::Dim));
+        let empty = Line::styled("No matches", Tone::Dim.style());
         frame.render_widget(Paragraph::new(empty), list_area);
     }
     draw_list(frame, list_area, items, picker.selected);
@@ -158,9 +148,9 @@ fn draw_input_popup(frame: &mut Frame, mode: &InputMode) {
     .areas(inner);
     draw_input(frame, line_area, &mode.input);
     let info = match (&mode.problem, &mode.note) {
-        (Some(problem), _) => Span::styled(problem.as_str(), tone(Tone::Error)),
-        (None, Some((t, note))) => Span::styled(note.as_str(), tone(*t)),
-        (None, None) => Span::styled("Enter to apply, Esc to cancel", tone(Tone::Dim)),
+        (Some(problem), _) => Span::styled(problem.as_str(), Tone::Error.style()),
+        (None, Some((t, note))) => Span::styled(note.as_str(), t.style()),
+        (None, None) => Span::styled("Enter to apply, Esc to cancel", Tone::Dim.style()),
     };
     frame.render_widget(Paragraph::new(Line::from(info)), info_area);
 }
@@ -178,11 +168,11 @@ fn draw_items(frame: &mut Frame, app: &App, mode: &ItemsMode) {
     let width = inner.width as usize;
     let preview = bar_preview(&entries, width.saturating_sub(2));
     frame.render_widget(
-        Paragraph::new(Line::from(format!(" {preview}"))).style(tone(Tone::Accent)),
+        Paragraph::new(Line::from(format!(" {preview}"))).style(Tone::Accent.style()),
         preview_area,
     );
     frame.render_widget(
-        Paragraph::new("─".repeat(width)).style(tone(Tone::Dim)),
+        Paragraph::new("─".repeat(width)).style(Tone::Dim.style()),
         rule_area,
     );
     let items = entries
@@ -207,7 +197,7 @@ fn item_line(app: &App, entry: Entry, width: usize) -> ListItem<'static> {
             if app.item_disabled(value) {
                 // Switched off elsewhere, but placed here as usual.
                 let text = format!("{mark}{value} (off under Updates)");
-                return ListItem::new(Line::styled(text, dim_unless(tone(Tone::Warn), on)));
+                return ListItem::new(Line::styled(text, dim_unless(Tone::Warn.style(), on)));
             }
             ListItem::new(Line::styled(
                 format!("{mark}{value}"),
@@ -220,7 +210,7 @@ fn item_line(app: &App, entry: Entry, width: usize) -> ListItem<'static> {
             } else {
                 " spring "
             };
-            let style = dim_unless(tone(Tone::Accent), !implicit);
+            let style = dim_unless(Tone::Accent.style(), !implicit);
             ListItem::new(Line::styled(spring_line(label, width), style))
         }
     }
@@ -239,13 +229,13 @@ fn draw_search(frame: &mut Frame, app: &App, mode: &SearchMode) {
             let section = Section::ALL[section];
             let row = app.rows(section)[row];
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:<12}", section.label()), tone(Tone::Dim)),
+                Span::styled(format!("{:<12}", section.label()), Tone::Dim.style()),
                 Span::raw(app.row_label(row)),
             ]))
         })
         .collect();
     if items.is_empty() {
-        let empty = Line::styled("No matches", tone(Tone::Dim));
+        let empty = Line::styled("No matches", Tone::Dim.style());
         frame.render_widget(Paragraph::new(empty), list_area);
     }
     draw_list(frame, list_area, items, mode.selected);
@@ -272,7 +262,7 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput) {
-    draw_prompt(frame, area, &input.text, input.cursor);
+    draw_prompt(frame, area, input.text(), input.cursor());
 }
 
 /// `› ` and `text`, scrolled to keep the cursor (a char index) visible.
@@ -302,11 +292,11 @@ fn scrolled(text: &str, cursor: usize, width: usize) -> (&str, usize) {
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let state = if app.error.is_some() {
-        Span::styled("  invalid ", tone(Tone::Error))
+        Span::styled("  invalid ", Tone::Error.style())
     } else if app.is_modified() {
-        Span::styled("  changed · applied live ", tone(Tone::Accent))
+        Span::styled("  changed · applied live ", Tone::Accent.style())
     } else {
-        Span::styled("  no changes ", tone(Tone::Dim))
+        Span::styled("  no changes ", Tone::Dim.style())
     };
     let [left, right] = Layout::horizontal([
         Constraint::Min(10),
@@ -315,7 +305,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     .areas(area);
     let title = Line::from(vec![
         Span::raw(" nuntio-config ").bold().fg(ACCENT),
-        Span::styled(app.path_label.as_str(), tone(Tone::Dim)),
+        Span::styled(app.path_label.as_str(), Tone::Dim.style()),
     ]);
     frame.render_widget(Paragraph::new(title), left);
     frame.render_widget(Paragraph::new(Line::from(state)), right);
@@ -344,7 +334,7 @@ fn draw_sections(frame: &mut Frame, area: Rect, app: &App) {
         .border_style(if focused {
             Style::new().fg(ACCENT)
         } else {
-            tone(Tone::Dim)
+            Tone::Dim.style()
         });
     // Selected only so the list scrolls to it; the item styles itself.
     let mut state = ListState::default().with_selected(Some(app.section));
@@ -377,16 +367,16 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App, state: &mut ListState) {
         items.extend(rows.iter().enumerate().map(|(index, &row)| {
             let marker = match row {
                 Row::Keybinding(i) if app.binding_problem(i).is_some() => {
-                    Span::styled("⚠ ", tone(Tone::Warn))
+                    Span::styled("⚠ ", Tone::Warn.style())
                 }
-                _ if app.row_is_set(row) => Span::styled("● ", tone(Tone::Accent)),
+                _ if app.row_is_set(row) => Span::styled("● ", Tone::Accent.style()),
                 _ => Span::raw("  "),
             };
             let (value_tone, value) = app.row_value(row);
             let mut spans = vec![
                 marker,
                 Span::raw(format!("{:<label_width$}", app.row_label(row))),
-                Span::styled(value, tone(value_tone)),
+                Span::styled(value, value_tone.style()),
             ];
             if let Row::Theme(slot) = row
                 && let Some(theme) = app.themes.get(&app.theme_name(slot))
@@ -397,7 +387,7 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App, state: &mut ListState) {
             }
             let mut item = ListItem::new(Line::from(spans));
             if app.row_is_foreign(row) {
-                item = item.style(tone(Tone::Dim));
+                item = item.style(Tone::Dim.style());
             }
             item
         }));
@@ -408,7 +398,7 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App, state: &mut ListState) {
         .border_style(if focused {
             Style::new().fg(ACCENT)
         } else {
-            tone(Tone::Dim)
+            Tone::Dim.style()
         });
     let selected = heading + 1 + app.row;
     let on_sections = app.focus == Focus::Sections;
@@ -465,26 +455,26 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(error) = &app.error {
         lines.push(Line::styled(
             format!("The file is invalid, nuntio keeps the previous settings: {error}"),
-            tone(Tone::Error),
+            Tone::Error.style(),
         ));
     }
     for warning in &app.warnings {
         lines.push(Line::styled(
             format!("Warning: {warning}"),
-            tone(Tone::Warn),
+            Tone::Warn.style(),
         ));
     }
     if let Some((t, message)) = &app.message {
-        lines.push(Line::styled(message.as_str(), tone(*t)));
+        lines.push(Line::styled(message.as_str(), t.style()));
     }
     lines.extend(
         app.details()
             .into_iter()
-            .map(|(t, text)| Line::styled(text, tone(t))),
+            .map(|(t, text)| Line::styled(text, t.style())),
     );
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(tone(Tone::Dim));
+        .border_style(Tone::Dim.style());
     let paragraph = Paragraph::new(Text::from(lines))
         .block(block)
         .wrap(Wrap { trim: true });
@@ -555,7 +545,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     for &(key, what) in &hints {
         let what = if key == "e" { editor } else { what };
         spans.push(Span::raw(key).fg(ACCENT));
-        spans.push(Span::styled(format!(" {what}  "), tone(Tone::Dim)));
+        spans.push(Span::styled(format!(" {what}  "), Tone::Dim.style()));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

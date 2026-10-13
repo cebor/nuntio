@@ -16,8 +16,9 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{self, Event};
 
+use nuntio_tui::style::Tone;
 use nuntio_tui::terminal::Modes;
-use state::{App, Tone};
+use state::App;
 use store::DirStore;
 
 /// Mouse clicks and focus changes both matter to the notes.

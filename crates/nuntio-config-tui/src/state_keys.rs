@@ -7,11 +7,13 @@ use nuntio_config::{ACTIONS, ConfigDoc, KeyCombo, Keybinding, StatusItem, ThemeS
 
 use super::{
     App, Entry, Focus, InputMode, InputTarget, ItemsMode, Key, Mode, PickTarget, PickerMode, Row,
-    SearchMode, ThemeSlot, Tone, format_float, format_value, round_to_step, theme_value, value_at,
+    SearchMode, ThemeSlot, format_float, format_value, round_to_step, theme_value, value_at,
 };
 use crate::args;
-use crate::widgets::{Choice, Pick, Picker, TextInput};
+use crate::widgets::{Choice, Pick, Picker, edit_input};
 use nuntio_config::detect::Found;
+use nuntio_tui::style::Tone;
+use nuntio_tui::text_input::TextInput;
 
 impl App {
     // ----- Keys ------------------------------------------------------------
@@ -642,14 +644,14 @@ impl App {
             Key::Esc => return,
             Key::Enter if mode.problem.is_none() => match &mode.target {
                 InputTarget::Setting(setting) => {
-                    if let Ok(value) = Self::parse_input(setting, &mode.input.text)
+                    if let Ok(value) = Self::parse_input(setting, mode.input.text())
                         && self.commit(Self::input_edit(setting, value))
                     {
                         return;
                     }
                 }
                 InputTarget::BindingKey { index, original } => {
-                    if !mode.input.text.trim().is_empty() {
+                    if !mode.input.text().trim().is_empty() {
                         // An outside change meanwhile may have moved the entry.
                         let reloads = self.reloads;
                         self.in_sync();
@@ -663,15 +665,15 @@ impl App {
                         self.open_action_picker(
                             index,
                             original.clone(),
-                            mode.input.text.trim().to_owned(),
+                            mode.input.text().trim().to_owned(),
                         );
                         return;
                     }
                 }
             },
             key => {
-                if mode.input.key(key) {
-                    (mode.problem, mode.note) = self.check_input(&mode.target, &mode.input.text);
+                if edit_input(&mut mode.input, key) {
+                    (mode.problem, mode.note) = self.check_input(&mode.target, mode.input.text());
                 }
             }
         }
@@ -916,8 +918,8 @@ impl App {
                 mode.selected = (mode.selected + 1).min(mode.results.len().saturating_sub(1));
             }
             key => {
-                if mode.input.key(key) {
-                    mode.results = self.search(&mode.input.text);
+                if edit_input(&mut mode.input, key) {
+                    mode.results = self.search(mode.input.text());
                     mode.selected = 0;
                 }
             }

@@ -12,10 +12,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use nuntio_config::ThemeSet;
+use nuntio_tui::style::Tone;
 use nuntio_tui::terminal::{self, Modes};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
-use crate::state::{App, Key, Sources, Store, Tone};
+use crate::state::{App, Key, Sources, Store};
 
 /// Keys and pasted text only.
 const MODES: Modes = Modes {
