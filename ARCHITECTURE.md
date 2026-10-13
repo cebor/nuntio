@@ -82,8 +82,8 @@ flowchart TD
 |[`nuntio-term`](crates/nuntio-term)|One PTY and IO thread per pane, ownership of the `Term`, image scanning, decoding and storage, `Snapshot`, palette, search, URLs, cwd and foreground process.|winit, wgpu|
 |[`nuntio-render`](crates/nuntio-render)|wgpu, fonts, glyph and image atlases. Input is only a `Frame` and `nuntio_term::Snapshot`.|config, tabs, winit beyond raw window handles|
 |[`nuntio-config`](crates/nuntio-config)|Config types, `schema.rs`, loading and validation, `edit.rs`, themes, `keys.rs`, the file watcher, shell and WSL detection (`detect.rs`).|any other nuntio crate|
-|[`nuntio-config-tui`](crates/nuntio-config-tui)|The ratatui settings editor; its logic in `state.rs` sits behind the `Store` trait.|the running nuntio|
-|[`nuntio-apps`](crates/nuntio-apps)|Terminal apps that nuntio opens in panes, one subcommand each: `notes` (Markdown notes). Pure logic in `notes/{store,buffer,markdown,edit,layout,state}.rs`; only `ui.rs`, `mod.rs` and `term.rs` touch the terminal.|the running nuntio|
+|[`nuntio-config-tui`](crates/nuntio-config-tui)|The ratatui settings editor: its logic in `state.rs` (behind the `Store` trait) and `state_keys.rs` (key handling), the state of its choice list and text input in `widgets.rs`, the splitting of program arguments in `args.rs`; `ui.rs` draws.|the running nuntio|
+|[`nuntio-apps`](crates/nuntio-apps)|Terminal apps that nuntio opens in panes, one subcommand each: `notes` (Markdown notes). Terminal I/O only in `notes/mod.rs` and `term.rs`; `notes/ui.rs` draws. The rest (`store`, `buffer`, `markdown`, `edit`, `layout`, `state`, `widgets`) takes crossterm events and ratatui styles but never touches the terminal.|the running nuntio|
 |[`nuntio-wsl`](crates/nuntio-wsl)|The Linux-only relay binary and `proto`, which nuntio-term shares on Windows.|nuntio internals|
 |[`xtask`](xtask)|Icons, packaging, changelog, website, `drive`.|nuntio crates: it talks via processes, files and TCP|
 
@@ -437,7 +437,7 @@ Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 - Idle CPU stays at ~0: redraw only on events or timer deadlines.
 - Pure logic stays free of GPU and window types and is unit-tested.
 - Every setting has a `schema.rs` entry and a `docs/config.md` row (enforced by tests).
-- `nuntio-config` is never on the global PATH.
+- The helper binaries (`nuntio-config`, `nuntio-apps`) are never on the global PATH.
 - An invalid config never replaces a valid one.
 - The reusable library crates (`nuntio-config`, `nuntio-term`, `nuntio-render`) use `thiserror`; the binary and the app crates (`nuntio-config-tui`, `nuntio-apps`) use `anyhow`; logging uses `tracing`.
 
