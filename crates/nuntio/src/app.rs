@@ -882,24 +882,20 @@ impl Core {
                 pane.term.set_options(options);
             }
         }
+        // Padding, font and tab bar settings all affect the grid.
         if old.font.size != self.config.font.size {
             self.font_size = self.config.font.size;
             let scale = state.window.scale_factor();
-            state.renderer.set_font_size(self.font_size, scale);
+            state.apply_font(&self.config, self.font_size, scale);
+        } else {
+            state.refit(&self.config);
         }
-        // Padding, font and tab bar settings all affect the grid.
-        state.update_min_size(&self.config);
-        state.resize_terms(&self.config);
-        state.window.request_redraw();
     }
 
     fn set_font_size(&mut self, state: &mut WindowState, size: f32) {
         self.font_size = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         let scale = state.window.scale_factor();
-        state.renderer.set_font_size(self.font_size, scale);
-        state.update_min_size(&self.config);
-        state.resize_terms(&self.config);
-        state.window.request_redraw();
+        state.apply_font(&self.config, self.font_size, scale);
     }
 
     // ----- Clipboard ---------------------------------------------------------
@@ -1356,11 +1352,8 @@ impl Core {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 state.reveal = None;
-                state.renderer.set_font_size(self.font_size, scale_factor);
                 state.invalidate_ime_area();
-                state.update_min_size(&self.config);
-                state.resize_terms(&self.config);
-                state.window.request_redraw();
+                state.apply_font(&self.config, self.font_size, scale_factor);
             }
             // The debug server's window stays focused (see `enable_debug_server`).
             #[cfg(feature = "debug-server")]

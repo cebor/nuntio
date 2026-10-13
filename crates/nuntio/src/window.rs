@@ -880,6 +880,20 @@ impl WindowState {
         self.reveal_active_tab();
     }
 
+    /// Fit the window and the terminals to changed cell size, padding or
+    /// bars, and draw.
+    pub fn refit(&mut self, config: &Config) {
+        self.update_min_size(config);
+        self.resize_terms(config);
+        self.window.request_redraw();
+    }
+
+    /// Draw the fonts at `size` on a display with the scale factor `scale`.
+    pub fn apply_font(&mut self, config: &Config, size: f32, scale: f64) {
+        self.renderer.set_font_size(size, scale);
+        self.refit(config);
+    }
+
     /// The pointer is over the find bar.
     pub fn search_bar_contains(&self, config: &Config, pos: PhysicalPosition<f64>) -> bool {
         let Some(bar) = &self.search else {
