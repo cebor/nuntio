@@ -69,10 +69,10 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     // "ê". With Ctrl or Alt nothing composes, so it is reported as a key.
     let altgr_held = cfg!(windows) && input.ctrl && input.meta;
     let composes = (!input.ctrl && !input.meta) || altgr_held;
-    if !all_keys && composes && matches!(input.key, Key::Dead(_)) {
+    if !all_keys && composes && matches!(input.press.logical, Key::Dead(_)) {
         return None;
     }
-    let event = match input.event {
+    let event = match input.press.kind {
         KeyEventKind::Release if !report_events => return None,
         KeyEventKind::Repeat if !report_events => KeyEventKind::Press,
         event => event,
@@ -85,7 +85,7 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     // like ←, → and ⌫, so it is reported as Alt there, as the legacy
     // encoding sends word movement for it.
     let option_alt =
-        input.option && matches!(input.key, Key::Named(_)) && printable(input).is_none();
+        input.option && matches!(input.press.logical, Key::Named(_)) && printable(input).is_none();
     let (ctrl, alt) = if altgr.is_some() {
         (false, false)
     } else {
@@ -125,7 +125,7 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
             }
         }
         if !all_keys {
-            let legacy = match input.key {
+            let legacy = match input.press.logical {
                 Key::Named(NamedKey::Enter) => Some(b'\r'),
                 Key::Named(NamedKey::Tab) => Some(b'\t'),
                 Key::Named(NamedKey::Backspace) => Some(0x7f),
@@ -133,7 +133,7 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
             };
             // Enter, Tab and Backspace keep their bytes so a shell stays
             // usable after a program exits without resetting the mode.
-            if input.location != KeyLocation::Numpad
+            if input.press.location != KeyLocation::Numpad
                 && let Some(byte) = legacy
             {
                 return match event {
@@ -150,7 +150,7 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
         return Some(csi(key.number, &[], mods, event, text, key.final_byte));
     }
 
-    let Some(code) = text_key_code(input.unmodified) else {
+    let Some(code) = text_key_code(&input.press.unmodified) else {
         // A key that types several codepoints (a ligature key) can't be
         // reported as one key code; send its text as legacy mode would.
         return text
@@ -160,12 +160,12 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
 
     let mut alternates = Vec::new();
     if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
-        let shifted = match input.key {
+        let shifted = match &input.press.logical {
             Key::Character(s) if input.shift => single_char(s).map(u32::from),
             _ => None,
         }
         .filter(|&c| c != code);
-        let base = match input.physical {
+        let base = match input.press.physical {
             PhysicalKey::Code(physical) => us_char(physical).map(u32::from),
             PhysicalKey::Unidentified(_) => None,
         }
@@ -251,15 +251,15 @@ fn text_key_code(unmodified: &Key) -> Option<u32> {
 }
 
 fn functional(input: &KeyInput) -> Option<Functional> {
-    if input.location == KeyLocation::Numpad
+    if input.press.location == KeyLocation::Numpad
         && let Some(key) = keypad(input)
     {
         return Some(key);
     }
-    let Key::Named(key) = input.key else {
+    let Key::Named(key) = &input.press.logical else {
         return None;
     };
-    let right = input.location == KeyLocation::Right;
+    let right = input.press.location == KeyLocation::Right;
     let side = |left: u32| if right { left + 6 } else { left };
     use NamedKey::*;
     Some(match key {
@@ -324,7 +324,7 @@ fn functional(input: &KeyInput) -> Option<Functional> {
 /// move like.
 fn keypad(input: &KeyInput) -> Option<Functional> {
     // Without Num Lock the digits move the cursor.
-    if let Key::Named(key) = input.key {
+    if let Key::Named(key) = &input.press.logical {
         let number = match key {
             NamedKey::Enter => 57414,
             NamedKey::ArrowLeft => 57417,
@@ -342,7 +342,7 @@ fn keypad(input: &KeyInput) -> Option<Functional> {
         };
         return Some(Functional::u(number));
     }
-    let PhysicalKey::Code(code) = input.physical else {
+    let PhysicalKey::Code(code) = input.press.physical else {
         return None;
     };
     use KeyCode::*;
@@ -369,7 +369,7 @@ fn keypad(input: &KeyInput) -> Option<Functional> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use winit::keyboard::NativeKeyCode;
+    use crate::input::test_keys::{Press, ch, named};
 
     const DISAMBIGUATE: TermMode = TermMode::DISAMBIGUATE_ESC_CODES;
     const EVENTS: TermMode = TermMode::REPORT_EVENT_TYPES;
@@ -377,103 +377,11 @@ mod tests {
     const ALL_KEYS: TermMode = TermMode::REPORT_ALL_KEYS_AS_ESC;
     const TEXT: TermMode = TermMode::REPORT_ASSOCIATED_TEXT;
 
-    /// A key press, changed with the builder methods.
-    struct Press {
-        key: Key,
-        unmodified: Key,
-        text: Option<&'static str>,
-        location: KeyLocation,
-        physical: PhysicalKey,
-        event: KeyEventKind,
-        shift: bool,
-        ctrl: bool,
-        meta: bool,
-        option: bool,
-        super_key: bool,
-    }
-
-    fn named(key: NamedKey) -> Press {
-        let key = Key::Named(key);
-        let text = match key {
-            Key::Named(NamedKey::Space) => Some(" "),
-            _ => None,
-        };
-        Press {
-            unmodified: key.clone(),
-            key,
-            text,
-            location: KeyLocation::Standard,
-            physical: PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
-            event: KeyEventKind::Press,
-            shift: false,
-            ctrl: false,
-            meta: false,
-            option: false,
-            super_key: false,
-        }
-    }
-
-    fn ch(c: &'static str) -> Press {
-        Press {
-            key: Key::Character(c.into()),
-            unmodified: Key::Character(c.into()),
-            text: Some(c),
-            ..named(NamedKey::Escape)
-        }
-    }
-
     impl Press {
-        fn shift(mut self, shifted: &'static str) -> Self {
-            self.shift = true;
-            self.key = Key::Character(shifted.into());
-            self.text = Some(shifted);
-            self
-        }
-        fn shift_held(mut self) -> Self {
-            self.shift = true;
-            self
-        }
-        fn ctrl(mut self) -> Self {
-            self.ctrl = true;
-            self
-        }
-        fn meta(mut self) -> Self {
-            self.meta = true;
-            self
-        }
-        fn option(mut self) -> Self {
-            self.option = true;
-            self
-        }
-        fn at(mut self, location: KeyLocation, code: KeyCode) -> Self {
-            self.location = location;
-            self.physical = PhysicalKey::Code(code);
-            self
-        }
-        fn physical(mut self, code: KeyCode) -> Self {
-            self.physical = PhysicalKey::Code(code);
-            self
-        }
-        fn event(mut self, event: KeyEventKind) -> Self {
-            self.event = event;
-            self
-        }
         fn encode(&self, mode: TermMode) -> Option<String> {
-            let input = KeyInput {
-                key: &self.key,
-                unmodified: &self.unmodified,
-                text: self.text,
-                location: self.location,
-                physical: self.physical,
-                event: self.event,
-                shift: self.shift,
-                ctrl: self.ctrl,
-                meta: self.meta,
-                option: self.option,
-                super_key: self.super_key,
-            };
-            encode(&input, mode).map(|bytes| String::from_utf8(bytes).unwrap())
+            encode(&self.input(), mode).map(|bytes| String::from_utf8(bytes).unwrap())
         }
+
         fn sends(&self, mode: TermMode) -> String {
             self.encode(mode).expect("key sends nothing")
         }
@@ -538,10 +446,7 @@ mod tests {
         assert_eq!(named(NamedKey::ArrowRight).option().sends(m), "\x1b[1;3C");
         assert_eq!(named(NamedKey::Backspace).option().sends(m), "\x1b[127;3u");
         // Text that Option composes is sent as it is.
-        let at = Press {
-            unmodified: Key::Character("l".into()),
-            ..ch("@").option()
-        };
+        let at = ch("l").typing("@").option();
         assert_eq!(at.sends(m), "@");
     }
 
@@ -645,12 +550,7 @@ mod tests {
     #[test]
     fn dead_keys_type_nothing_until_all_keys_are_reported() {
         // Windows: "^" on a German layout.
-        let dead = || Press {
-            key: Key::Dead(Some('^')),
-            unmodified: Key::Character("^".into()),
-            text: None,
-            ..named(NamedKey::Escape)
-        };
+        let dead = || ch("^").logical(Key::Dead(Some('^'))).text(None);
         assert_eq!(dead().encode(DISAMBIGUATE), None);
         assert_eq!(
             dead()
@@ -668,12 +568,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn ctrl_alt_is_not_altgr_outside_windows() {
-        let at = || {
-            let mut key = ch("q").ctrl().meta();
-            key.key = Key::Character("@".into());
-            key.text = Some("@");
-            key
-        };
+        let at = || ch("q").ctrl().meta().typing("@");
         assert_eq!(at().sends(DISAMBIGUATE), "\x1b[113;7u");
         assert_eq!(at().sends(ALL_KEYS | TEXT), "\x1b[113;7u");
     }
@@ -682,12 +577,7 @@ mod tests {
     #[test]
     fn altgr_types_text() {
         // AltGr+Q on a German layout, reported as Ctrl+Alt on Windows.
-        let at = || {
-            let mut key = ch("q").ctrl().meta();
-            key.key = Key::Character("@".into());
-            key.text = Some("@");
-            key
-        };
+        let at = || ch("q").ctrl().meta().typing("@");
         assert_eq!(at().sends(DISAMBIGUATE), "@");
         assert_eq!(at().sends(ALL_KEYS | TEXT), "\x1b[113;;64u");
     }

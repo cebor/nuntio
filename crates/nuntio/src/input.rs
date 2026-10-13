@@ -48,17 +48,11 @@ impl From<&KeyEvent> for KeyPress {
     }
 }
 
-/// The parts of a key event the encoder needs.
+/// A key event with the state of the modifiers when it happened, as the
+/// encoders need it.
 #[derive(Debug, Clone)]
 pub struct KeyInput<'a> {
-    pub key: &'a Key,
-    /// The key with no modifiers applied (e.g. `c` for Ctrl+Shift+C).
-    pub unmodified: &'a Key,
-    /// Text produced by the key, if any.
-    pub text: Option<&'a str>,
-    pub location: KeyLocation,
-    pub physical: PhysicalKey,
-    pub event: KeyEventKind,
+    pub press: &'a KeyPress,
     pub shift: bool,
     pub ctrl: bool,
     /// Alt acts as Meta. On macOS only when Option-as-Meta is enabled for
@@ -72,16 +66,11 @@ pub struct KeyInput<'a> {
 }
 
 impl<'a> KeyInput<'a> {
-    /// `event` with the modifiers held while it happened; `meta` tells
+    /// `press` with the modifiers held while it happened; `meta` tells
     /// whether Alt acts as Meta (see `KeyInput::meta`).
-    pub fn new(event: &'a KeyPress, mods: ModifiersState, meta: bool) -> Self {
+    pub fn new(press: &'a KeyPress, mods: ModifiersState, meta: bool) -> Self {
         Self {
-            key: &event.logical,
-            unmodified: &event.unmodified,
-            text: event.text.as_deref(),
-            location: event.location,
-            physical: event.physical,
-            event: event.kind,
+            press,
             shift: mods.shift_key(),
             ctrl: mods.control_key(),
             meta,
@@ -100,16 +89,16 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     if mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
         return kitty_keys::encode(input, mode);
     }
-    if input.event == KeyEventKind::Release {
+    if input.press.kind == KeyEventKind::Release {
         return None;
     }
-    if input.location == KeyLocation::Numpad
+    if input.press.location == KeyLocation::Numpad
         && mode.contains(TermMode::APP_KEYPAD)
         && let Some(bytes) = encode_app_keypad(input)
     {
         return Some(bytes);
     }
-    if let Key::Named(named) = input.key
+    if let Key::Named(named) = &input.press.logical
         && let Some(bytes) = encode_named(*named, input, mode)
     {
         return Some(bytes);
@@ -124,9 +113,9 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     // is Ctrl+[ on a German layout, not Ctrl+8. With Shift the base key
     // decides (Ctrl+Shift+/ stays 0x1f).
     if input.ctrl {
-        let latin = latin_key(input.unmodified, input.physical);
-        let base = latin.as_ref().unwrap_or(input.unmodified);
-        let typed = (!input.shift).then_some(input.key);
+        let latin = latin_key(&input.press.unmodified, input.press.physical);
+        let base = latin.as_ref().unwrap_or(&input.press.unmodified);
+        let typed = (!input.shift).then_some(&input.press.logical);
         if let Some(byte) = typed.into_iter().chain([base]).find_map(key_control_byte) {
             return Some(with_meta(vec![byte], input.meta));
         }
@@ -135,21 +124,23 @@ pub fn encode_key(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     if input.meta {
         // Meta sends ESC plus the unmodified character (so Option+f on macOS
         // becomes ESC f instead of ƒ).
-        let text = match input.unmodified {
+        let text = match &input.press.unmodified {
             Key::Character(s) if !input.shift => s.as_str(),
-            _ => input.text?,
+            _ => input.press.text.as_deref()?,
         };
         return Some(with_meta(text.as_bytes().to_vec(), true));
     }
 
-    let text = input.text.filter(|t| !t.is_empty())?;
+    let text = input.press.text.as_deref().filter(|t| !t.is_empty())?;
     Some(text.as_bytes().to_vec())
 }
 
 /// Printable text the key produces, if any.
 pub(crate) fn printable<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
     input
+        .press
         .text
+        .as_deref()
         .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
 }
 
@@ -163,7 +154,8 @@ pub(crate) fn altgr_text<'a>(input: &KeyInput<'a>) -> Option<&'a str> {
         return None;
     }
     let text = printable(input).filter(|_| input.ctrl && input.meta)?;
-    let same_key = matches!(input.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text));
+    let same_key =
+        matches!(&input.press.unmodified, Key::Character(s) if s.eq_ignore_ascii_case(text));
     (!same_key).then_some(text)
 }
 
@@ -300,7 +292,7 @@ fn encode_named(key: NamedKey, input: &KeyInput, mode: TermMode) -> Option<Vec<u
 
 /// Keypad keys in application keypad mode (DECKPAM) send SS3 sequences.
 fn encode_app_keypad(input: &KeyInput) -> Option<Vec<u8>> {
-    let f = match input.key {
+    let f = match &input.press.logical {
         Key::Named(NamedKey::Enter) => b'M',
         Key::Character(s) => match s.as_str() {
             c @ ("0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
@@ -448,10 +440,137 @@ fn control_byte(s: &str) -> Option<u8> {
     }
 }
 
+/// Key events for the tests of the encoders.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_keys {
     use super::*;
     use winit::keyboard::NativeKeyCode;
+
+    /// A key press with the modifiers held, changed with the builder methods.
+    #[derive(Clone)]
+    pub struct Press {
+        pub press: KeyPress,
+        pub shift: bool,
+        pub ctrl: bool,
+        pub meta: bool,
+        pub option: bool,
+        pub super_key: bool,
+    }
+
+    /// A key without text of its own, except Space.
+    pub fn named(key: NamedKey) -> Press {
+        let key = Key::Named(key);
+        let text = (key == Key::Named(NamedKey::Space)).then(|| " ".to_owned());
+        Press::new(key.clone(), key, text)
+    }
+
+    /// A character key that types `c`.
+    pub fn ch(c: &str) -> Press {
+        let key = Key::Character(c.into());
+        Press::new(key.clone(), key, Some(c.to_owned()))
+    }
+
+    impl Press {
+        fn new(logical: Key, unmodified: Key, text: Option<String>) -> Self {
+            Self {
+                press: KeyPress {
+                    logical,
+                    unmodified,
+                    text,
+                    location: KeyLocation::Standard,
+                    physical: PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
+                    kind: KeyEventKind::Press,
+                },
+                shift: false,
+                ctrl: false,
+                meta: false,
+                option: false,
+                super_key: false,
+            }
+        }
+
+        pub fn input(&self) -> KeyInput<'_> {
+            KeyInput {
+                press: &self.press,
+                shift: self.shift,
+                ctrl: self.ctrl,
+                meta: self.meta,
+                option: self.option,
+                super_key: self.super_key,
+            }
+        }
+
+        /// Shift held, typing `shifted` instead.
+        pub fn shift(mut self, shifted: &str) -> Self {
+            self.shift = true;
+            self.press.logical = Key::Character(shifted.into());
+            self.press.text = Some(shifted.to_owned());
+            self
+        }
+
+        pub fn shift_held(mut self) -> Self {
+            self.shift = true;
+            self
+        }
+
+        pub fn ctrl(mut self) -> Self {
+            self.ctrl = true;
+            self
+        }
+
+        pub fn meta(mut self) -> Self {
+            self.meta = true;
+            self
+        }
+
+        pub fn option(mut self) -> Self {
+            self.option = true;
+            self
+        }
+
+        /// The key types `typed` (a composed or dead character) instead of
+        /// its own.
+        pub fn typing(mut self, typed: &str) -> Self {
+            self.press.logical = Key::Character(typed.into());
+            self.press.text = Some(typed.to_owned());
+            self
+        }
+
+        pub fn logical(mut self, key: Key) -> Self {
+            self.press.logical = key;
+            self
+        }
+
+        pub fn text(mut self, text: Option<&str>) -> Self {
+            self.press.text = text.map(str::to_owned);
+            self
+        }
+
+        pub fn location(mut self, location: KeyLocation) -> Self {
+            self.press.location = location;
+            self
+        }
+
+        pub fn at(self, location: KeyLocation, code: KeyCode) -> Self {
+            self.location(location).physical(code)
+        }
+
+        pub fn physical(mut self, code: KeyCode) -> Self {
+            self.press.physical = PhysicalKey::Code(code);
+            self
+        }
+
+        pub fn event(mut self, kind: KeyEventKind) -> Self {
+            self.press.kind = kind;
+            self
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_keys::{self, Press};
+    use super::*;
 
     #[derive(Clone, Copy, Default)]
     struct Mods {
@@ -472,47 +591,23 @@ mod tests {
     const CTRL: Mods = Mods { ctrl: true, ..NONE };
     const META: Mods = Mods { meta: true, ..NONE };
 
-    const UNIDENTIFIED: PhysicalKey = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
-
-    fn encode_with(
-        key: Key,
-        unmodified: Key,
-        text: Option<&str>,
-        location: KeyLocation,
-        mods: Mods,
-        mode: TermMode,
-    ) -> Option<Vec<u8>> {
-        let input = KeyInput {
-            key: &key,
-            unmodified: &unmodified,
-            text,
-            location,
-            physical: UNIDENTIFIED,
-            event: KeyEventKind::Press,
+    /// `press` with `mods` held.
+    fn encode_with(press: Press, mods: Mods, mode: TermMode) -> Option<Vec<u8>> {
+        let press = Press {
             shift: mods.shift,
             ctrl: mods.ctrl,
             meta: mods.meta,
-            option: false,
-            super_key: false,
+            ..press
         };
-        encode_key(&input, mode)
+        encode_key(&press.input(), mode)
     }
 
     fn named(key: NamedKey, mods: Mods, mode: TermMode) -> Vec<u8> {
-        let key = Key::Named(key);
-        encode_with(key.clone(), key, None, KeyLocation::Standard, mods, mode).unwrap()
+        encode_with(test_keys::named(key), mods, mode).unwrap()
     }
 
     fn char_key(c: &str, text: Option<&str>, mods: Mods) -> Option<Vec<u8>> {
-        let key = Key::Character(c.into());
-        encode_with(
-            key.clone(),
-            key,
-            text,
-            KeyLocation::Standard,
-            mods,
-            TermMode::empty(),
-        )
+        encode_with(test_keys::ch(c).text(text), mods, TermMode::empty())
     }
 
     #[test]
@@ -611,10 +706,7 @@ mod tests {
         assert_eq!(char_key("é", Some("é"), NONE).unwrap(), "é".as_bytes());
         assert_eq!(char_key("a", None, NONE), None);
         let dead = encode_with(
-            Key::Dead(Some('^')),
-            ch("^"),
-            None,
-            KeyLocation::Standard,
+            test_keys::ch("^").logical(Key::Dead(Some('^'))).text(None),
             NONE,
             TermMode::empty(),
         );
@@ -630,14 +722,8 @@ mod tests {
             shift: false,
         };
         let key = |c: &str, unmodified: &str, text: Option<&str>| {
-            encode_with(
-                Key::Character(c.into()),
-                Key::Character(unmodified.into()),
-                text,
-                KeyLocation::Standard,
-                ctrl_alt,
-                TermMode::empty(),
-            )
+            let press = test_keys::ch(unmodified).logical(ch(c)).text(text);
+            encode_with(press, ctrl_alt, TermMode::empty())
         };
         // AltGr+Q and AltGr+7 on a German layout (Windows).
         assert_eq!(key("@", "q", Some("@")).unwrap(), b"@");
@@ -652,10 +738,7 @@ mod tests {
             meta: true,
         };
         let shifted = encode_with(
-            ch("@"),
-            ch("2"),
-            Some("@"),
-            KeyLocation::Standard,
+            test_keys::ch("2").logical(ch("@")).text(Some("@")),
             all,
             TermMode::empty(),
         );
@@ -671,10 +754,7 @@ mod tests {
             meta: true,
         };
         let out = encode_with(
-            ch("@"),
-            ch("2"),
-            Some("@"),
-            KeyLocation::Standard,
+            test_keys::ch("2").logical(ch("@")).text(Some("@")),
             all,
             TermMode::empty(),
         );
@@ -689,14 +769,8 @@ mod tests {
             meta: false,
         };
         let key = |c: &str, unmodified: &str, mods| {
-            encode_with(
-                ch(c),
-                ch(unmodified),
-                Some(c),
-                KeyLocation::Standard,
-                mods,
-                TermMode::empty(),
-            )
+            let press = test_keys::ch(unmodified).logical(ch(c)).text(Some(c));
+            encode_with(press, mods, TermMode::empty())
         };
         // German Linux: Ctrl+AltGr+8/9/ß are Ctrl+[ / ] / \ (AltGr isn't Alt there).
         assert_eq!(key("[", "8", CTRL), Some(vec![0x1b]));
@@ -711,35 +785,21 @@ mod tests {
     #[test]
     fn option_as_meta_uses_unmodified_key() {
         // macOS: Option+f produces "ƒ", but as Meta it must send ESC f.
-        let out = encode_with(
-            Key::Character("ƒ".into()),
-            Key::Character("f".into()),
-            Some("ƒ"),
-            KeyLocation::Standard,
-            META,
-            TermMode::empty(),
-        );
+        let out = encode_with(test_keys::ch("f").typing("ƒ"), META, TermMode::empty());
         assert_eq!(out.unwrap(), b"\x1bf");
     }
 
     #[test]
     fn text_for_input_fields() {
         let field = |c: &str, unmodified: &str, text: Option<&str>, mods: Mods, super_key| {
-            let (key, unmodified) = (ch(c), ch(unmodified));
-            let input = KeyInput {
-                key: &key,
-                unmodified: &unmodified,
-                text,
-                location: KeyLocation::Standard,
-                physical: UNIDENTIFIED,
-                event: KeyEventKind::Press,
+            let press = Press {
                 shift: mods.shift,
                 ctrl: mods.ctrl,
                 meta: mods.meta,
-                option: false,
                 super_key,
+                ..test_keys::ch(unmodified).logical(ch(c)).text(text)
             };
-            field_text(&input).map(str::to_owned)
+            field_text(&press.input()).map(str::to_owned)
         };
         let ctrl_alt = Mods {
             ctrl: true,
@@ -806,8 +866,8 @@ mod tests {
     #[test]
     fn application_keypad() {
         let keypad = |c: &str, mode| {
-            let key = Key::Character(c.into());
-            encode_with(key.clone(), key, Some(c), KeyLocation::Numpad, NONE, mode).unwrap()
+            let press = test_keys::ch(c).location(KeyLocation::Numpad);
+            encode_with(press, NONE, mode).unwrap()
         };
         assert_eq!(keypad("5", TermMode::APP_KEYPAD), b"\x1bOu");
         assert_eq!(keypad("+", TermMode::APP_KEYPAD), b"\x1bOk");
@@ -817,21 +877,11 @@ mod tests {
     #[test]
     fn option_arrows_move_by_word() {
         let option = |key: NamedKey, shift: bool| {
-            let key = Key::Named(key);
-            let input = KeyInput {
-                key: &key,
-                unmodified: &key,
-                text: None,
-                location: KeyLocation::Standard,
-                physical: UNIDENTIFIED,
-                event: KeyEventKind::Press,
+            let press = Press {
                 shift,
-                ctrl: false,
-                meta: false,
-                option: true,
-                super_key: false,
+                ..test_keys::named(key).option()
             };
-            encode_key(&input, TermMode::APP_CURSOR).unwrap()
+            encode_key(&press.input(), TermMode::APP_CURSOR).unwrap()
         };
         assert_eq!(option(NamedKey::ArrowLeft, false), b"\x1bb");
         assert_eq!(option(NamedKey::ArrowRight, false), b"\x1bf");
@@ -851,39 +901,18 @@ mod tests {
 
     #[test]
     fn legacy_keys_send_nothing_on_release() {
-        let key = Key::Character("a".into());
-        let input = KeyInput {
-            key: &key,
-            unmodified: &key,
-            text: Some("a"),
-            location: KeyLocation::Standard,
-            physical: PhysicalKey::Code(KeyCode::KeyA),
-            event: KeyEventKind::Release,
-            shift: false,
-            ctrl: false,
-            meta: false,
-            option: false,
-            super_key: false,
-        };
-        assert_eq!(encode_key(&input, TermMode::empty()), None);
+        let press = test_keys::ch("a")
+            .physical(KeyCode::KeyA)
+            .event(KeyEventKind::Release);
+        assert_eq!(encode_key(&press.input(), TermMode::empty()), None);
     }
 
     #[test]
     fn ctrl_on_other_scripts_sends_the_latin_control_character() {
-        let key = ch("с");
-        let input = KeyInput {
-            key: &key,
-            unmodified: &key,
-            text: None,
-            location: KeyLocation::Standard,
-            physical: PhysicalKey::Code(KeyCode::KeyC),
-            event: KeyEventKind::Press,
-            shift: false,
-            ctrl: true,
-            meta: false,
-            option: false,
-            super_key: false,
-        };
-        assert_eq!(encode_key(&input, TermMode::empty()).unwrap(), [0x03]);
+        let press = test_keys::ch("с").text(None).physical(KeyCode::KeyC).ctrl();
+        assert_eq!(
+            encode_key(&press.input(), TermMode::empty()).unwrap(),
+            [0x03]
+        );
     }
 }
