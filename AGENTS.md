@@ -35,12 +35,11 @@ A change to doc comments also runs `RUSTDOCFLAGS="-D warnings" cargo doc --works
 
 ## Finishing a change
 
-A change is finished when its gate passed, it is committed and pushed to `origin main`, and its CI run is green. A change without code, such as documentation only, skips the gate but is still committed, pushed and watched in CI.
+A change is finished when its gate passed and it is committed and pushed to `origin main`. A change without code, such as documentation only, skips the gate but is still committed and pushed. The agent does not wait for CI.
 
 - Stage paths explicitly, never `git add -A` or `git add .`: the checkout may hold the user's uncommitted work, which is left alone. `SPEC.md` and other local planning files are never committed.
 - Before pushing, `git pull --rebase origin main`; if that brought new commits, run the gate again. Push only to `origin` (GitHub), never to another remote such as `gitlab`.
 - A red `main` comes first, whoever's commit broke it: before pushing, look at the newest run (`gh run list --workflow ci.yml --branch main --limit 1`). If it failed, the push is its fix or waits for one.
-- After pushing, find the run of the pushed commit (`gh run list --workflow ci.yml --commit <sha> --json databaseId`, repeated until it shows up) and follow it with `gh run watch <id> --exit-status`. A failure (`gh run view <id> --log-failed`) is fixed in a new commit that goes through the gate again, until CI is green.
 
 ## Seeing and driving nuntio (`cargo xtask drive`)
 
