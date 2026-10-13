@@ -60,6 +60,9 @@ pub fn validate_title(input: &str, taken: &[&str]) -> Result<String, &'static st
     if title.starts_with('.') || title.ends_with('.') {
         return Err("A title can't start or end with a dot");
     }
+    if is_device_name(title) {
+        return Err("That title is reserved on Windows");
+    }
     if title.len() > 200 {
         return Err("The title is too long");
     }
@@ -68,6 +71,22 @@ pub fn validate_title(input: &str, taken: &[&str]) -> Result<String, &'static st
         return Err("A note with this title exists");
     }
     Ok(title.to_owned())
+}
+
+/// Whether Windows reserves the file name `title.md` for a device: the name
+/// up to the first dot decides, whatever follows.
+fn is_device_name(title: &str) -> bool {
+    let base = title.split('.').next().unwrap_or_default().to_uppercase();
+    let numbered = |prefix: &str| {
+        base.strip_prefix(prefix).is_some_and(|n| {
+            let mut chars = n.chars();
+            matches!(
+                chars.next(),
+                Some('1'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
+            ) && chars.next().is_none()
+        })
+    };
+    matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
 }
 
 /// Notes as `{title}.md` files in one folder.
@@ -250,6 +269,25 @@ mod tests {
             validate_title(&"a".repeat(201), &[]),
             Err("The title is too long")
         );
+        for reserved in [
+            "con",
+            "NUL",
+            "Aux",
+            "prn",
+            "com1",
+            "LPT9",
+            "con.backup",
+            "COM\u{b2}",
+        ] {
+            assert_eq!(
+                validate_title(reserved, &[]),
+                Err("That title is reserved on Windows"),
+                "{reserved:?}"
+            );
+        }
+        for fine in ["console", "com0", "com10", "lpt", "my con", "a.con"] {
+            assert!(validate_title(fine, &[]).is_ok(), "{fine:?}");
+        }
         assert!(validate_title(&"a".repeat(200), &[]).is_ok());
         assert_eq!(
             validate_title("ideas", &["Ideas", "Other"]),
