@@ -5,7 +5,7 @@ use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::{MatchPosition, Rgb, Search, TermHandle, rgb};
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{UiMetrics, framed_box, hairline, mix};
+use crate::style::{UiMetrics, framed_box, hairline, mix, tail};
 
 /// Widest the bar gets, in cells.
 const MAX_CELLS: f32 = 44.0;
@@ -165,6 +165,7 @@ impl SearchBar {
         }
         let right = crate::style::truncate(&right, columns.saturating_sub(4));
         let right_width = right.width();
+        // The typed end stays visible.
         let query = tail(&self.query, columns.saturating_sub(right_width + 2));
 
         let right_color = if is_error {
@@ -194,21 +195,6 @@ fn format_position(position: MatchPosition) -> String {
         Some(index) => format!("{index}/{}{more}", position.total),
         None => format!("{}{more}", position.total),
     }
-}
-
-/// The last `columns` display columns of `text` (keeps the typed end visible).
-fn tail(text: &str, columns: usize) -> String {
-    let mut width = 0;
-    let mut out: Vec<char> = text
-        .chars()
-        .rev()
-        .take_while(|c| {
-            width += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-            width <= columns
-        })
-        .collect();
-    out.reverse();
-    out.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -255,12 +241,6 @@ mod tests {
         assert_eq!(format_position(position(Some(3), 17, false)), "3/17");
         assert_eq!(format_position(position(Some(3), 999, true)), "3/999+");
         assert_eq!(format_position(position(None, 999, true)), "999+");
-    }
-
-    #[test]
-    fn long_queries_keep_their_end_visible() {
-        assert_eq!(tail("abcdef", 3), "def");
-        assert_eq!(tail("ab", 3), "ab");
     }
 
     #[test]

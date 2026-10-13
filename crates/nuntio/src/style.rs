@@ -93,6 +93,20 @@ pub fn truncate(text: &str, cells: usize) -> String {
     out
 }
 
+/// The last `cells` columns of `text`.
+pub fn tail(text: &str, cells: usize) -> &str {
+    let mut used = 0;
+    let mut start = text.len();
+    for (i, c) in text.char_indices().rev() {
+        used += c.width().unwrap_or(0);
+        if used > cells {
+            break;
+        }
+        start = i;
+    }
+    &text[start..]
+}
+
 /// Keep the last `cells` columns of `text`, starting with an ellipsis if cut.
 pub fn truncate_start(text: &str, cells: usize) -> String {
     if text.width() <= cells {
@@ -101,19 +115,7 @@ pub fn truncate_start(text: &str, cells: usize) -> String {
     if cells == 0 {
         return String::new();
     }
-    let mut tail = Vec::new();
-    let mut used = 0;
-    for c in text.chars().rev() {
-        let w = c.width().unwrap_or(0);
-        if used + w > cells - 1 {
-            break;
-        }
-        used += w;
-        tail.push(c);
-    }
-    let mut out = String::from('…');
-    out.extend(tail.iter().rev());
-    out
+    format!("…{}", tail(text, cells - 1))
 }
 
 /// Metrics for layout tests: 10×20 pixel cells, in both fonts, at scale 1.
@@ -147,6 +149,12 @@ mod tests {
         assert_eq!(truncate("a long title", 6), "a lon…");
         assert_eq!(truncate("日本語タイトル", 5), "日本…");
         assert_eq!(truncate("abc", 0), "");
+    }
+
+    #[test]
+    fn the_tail_keeps_the_end_visible() {
+        assert_eq!(tail("abcdef", 3), "def");
+        assert_eq!(tail("ab", 3), "ab");
     }
 
     #[test]
