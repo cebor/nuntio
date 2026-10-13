@@ -19,7 +19,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::window::{Theme as WindowTheme, Window, WindowAttributes, WindowId};
 
 use crate::actions::Bindings;
-use crate::banner::{Banner, Severity};
+use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, MenuCommand, PaneId, PasteSource, Pasted, UserEvent};
 use crate::input::KeyPress;
 use crate::status_bar::Stats;
@@ -505,7 +505,7 @@ impl Core {
         };
         Self::log_banner(&new);
         self.banner = match self.banner.take() {
-            Some(mut old) if old.severity == new.severity && old.title == new.title => {
+            Some(mut old) if old.severity == new.severity && old.topic == new.topic => {
                 for message in new.messages {
                     if !old.messages.contains(&message) {
                         old.messages.push(message);
@@ -539,9 +539,9 @@ impl Core {
         self.request_redraw();
     }
 
-    /// Drop the banner titled `title`, if it is shown.
-    fn dismiss_banner(&mut self, title: &str) {
-        if self.banner.as_ref().is_some_and(|b| b.title == title) {
+    /// Drop the banner about `topic`, if it is shown.
+    fn dismiss_banner(&mut self, topic: Topic) {
+        if self.banner.as_ref().is_some_and(|b| b.topic == topic) {
             self.banner = None;
             self.request_redraw();
         }
@@ -558,8 +558,8 @@ impl Core {
     /// Show a banner asking to repeat an action to confirm it. It replaces
     /// any other banner, even an error: the action must not look like it
     /// failed.
-    fn ask_to_repeat(&mut self, title: &'static str, message: String) {
-        self.replace_banner(Banner::new(Severity::Warning, title, vec![message]));
+    fn ask_to_repeat(&mut self, topic: Topic, message: String) {
+        self.replace_banner(Banner::new(Severity::Warning, topic, vec![message]));
     }
 
     /// Open `url` in the browser, or say why not.
@@ -576,7 +576,7 @@ impl Core {
             });
         if let Err(err) = spawned {
             let problem = format!("failed to open {url}: {err}");
-            self.notify(Banner::new(Severity::Warning, "Link", vec![problem]));
+            self.notify(Banner::new(Severity::Warning, Topic::Link, vec![problem]));
         }
     }
 
@@ -697,7 +697,7 @@ impl Core {
                 // Dropping it stops the thread; forget what it found.
                 self.update_checker = None;
                 self.set_update(state.as_deref_mut(), None);
-                self.dismiss_banner(update::BANNER);
+                self.dismiss_banner(Topic::Update);
             }
             _ => {}
         }
@@ -721,7 +721,7 @@ impl Core {
             update::Outcome::Ignore => {}
             update::Outcome::Silent { error } => tracing::warn!("update check: {error}"),
             update::Outcome::Failed { error, manual } => {
-                let banner = Banner::new(Severity::Warning, "Update check", vec![error]);
+                let banner = Banner::new(Severity::Warning, Topic::UpdateCheck, vec![error]);
                 self.show_update_banner(banner, manual);
             }
             update::Outcome::Found {
@@ -730,9 +730,9 @@ impl Core {
                 manual,
             } => {
                 // A repeated answer replaces the banner instead of adding to it.
-                self.dismiss_banner(update::BANNER);
+                self.dismiss_banner(Topic::Update);
                 if let Some(update::Notice { message, url }) = notice {
-                    let banner = Banner::new(Severity::Info, update::BANNER, vec![message]);
+                    let banner = Banner::new(Severity::Info, Topic::Update, vec![message]);
                     let banner = banner.map(|b| match url {
                         Some(url) => b.with_url(url),
                         None => b,
@@ -802,7 +802,7 @@ impl Core {
         self.sync_system_monitor();
         self.sync_update_checker(state.as_deref_mut());
         if old.updates.banner && !self.config.updates.banner {
-            self.dismiss_banner(update::BANNER);
+            self.dismiss_banner(Topic::Update);
         }
         if old.updates.status_bar != self.config.updates.status_bar {
             self.set_update(state.as_deref_mut(), self.update.clone());
@@ -1203,7 +1203,7 @@ impl Core {
                     }
                     window::LostAction::GiveUp => self.notify(Banner::new(
                         Severity::Error,
-                        "GPU error",
+                        Topic::Gpu,
                         vec!["the renderer failed repeatedly; drawing resumes when the window is resized, focused or shown again".into()],
                     )),
                     // Resizing, focusing or showing the window tries again.
@@ -1323,7 +1323,7 @@ impl Core {
             #[cfg(windows)]
             TermEvent::HelperFailed => self.notify(Banner::new(
                 Severity::Warning,
-                "WSL",
+                Topic::Wsl,
                 vec!["nuntio-wsl did not start; this pane runs through ConPTY, without inline images".into()],
             )),
         }
@@ -1573,7 +1573,7 @@ impl ApplicationHandler<UserEvent> for App {
             #[cfg(feature = "debug-server")]
             UserEvent::Debug(call) => core.debug_call(state, call),
             UserEvent::LinkFailed(problem) => {
-                core.notify(Banner::new(Severity::Warning, "Link", vec![problem]));
+                core.notify(Banner::new(Severity::Warning, Topic::Link, vec![problem]));
             }
             // The rest needs the window.
             UserEvent::Term(pane, event) => {

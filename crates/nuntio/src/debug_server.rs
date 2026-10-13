@@ -524,7 +524,7 @@ impl Core {
         let banner = self.banner.as_ref().map(|b: &Banner| {
             json!({
                 "severity": format!("{:?}", b.severity),
-                "title": b.title,
+                "title": b.title(),
                 "messages": b.messages,
             })
         });

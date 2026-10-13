@@ -8,8 +8,6 @@ use nuntio_term::rgb;
 use crate::style::{INFO_COLOR, UiMetrics};
 use unicode_width::UnicodeWidthStr;
 
-const CONFIG_ERROR: &str = "Config error, not applied";
-const CONFIG_WARNING: &str = "Config warning";
 /// Space above and below the text, in logical pixels.
 const PADDING: f64 = 4.0;
 
@@ -20,11 +18,53 @@ pub enum Severity {
     Error,
 }
 
+/// What a banner is about. Banners of one topic and severity merge; some
+/// topics are dismissed or replaced by their own events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Topic {
+    Config,
+    Update,
+    UpdateCheck,
+    Link,
+    Shell,
+    Settings,
+    Notes,
+    WorkingDirectory,
+    Paste,
+    Close,
+    Gpu,
+    #[cfg(windows)]
+    Wsl,
+}
+
+impl Topic {
+    /// Shown before the first message.
+    pub fn title(self, severity: Severity) -> &'static str {
+        match self {
+            Self::Config => match severity {
+                Severity::Error => "Config error, not applied",
+                Severity::Warning | Severity::Info => "Config warning",
+            },
+            Self::Update => "Update",
+            Self::UpdateCheck => "Update check",
+            Self::Link => "Link",
+            Self::Shell => "Shell",
+            Self::Settings => "Settings",
+            Self::Notes => "Notes",
+            Self::WorkingDirectory => "Working directory",
+            Self::Paste => "Paste",
+            Self::Close => "Close",
+            Self::Gpu => "GPU error",
+            #[cfg(windows)]
+            Self::Wsl => "WSL",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Banner {
     pub severity: Severity,
-    /// What the messages are about, shown before the first one.
-    pub title: &'static str,
+    pub topic: Topic,
     pub messages: Vec<String>,
     /// Opened by a click outside the ×.
     pub url: Option<String>,
@@ -33,10 +73,10 @@ pub struct Banner {
 }
 
 impl Banner {
-    pub fn new(severity: Severity, title: &'static str, messages: Vec<String>) -> Option<Self> {
+    pub fn new(severity: Severity, topic: Topic, messages: Vec<String>) -> Option<Self> {
         (!messages.is_empty()).then_some(Self {
             severity,
-            title,
+            topic,
             messages,
             url: None,
             shown: 0,
@@ -52,16 +92,17 @@ impl Banner {
 
     /// Problems with the config; an error means it was not applied.
     pub fn config(severity: Severity, messages: Vec<String>) -> Option<Self> {
-        let title = match severity {
-            Severity::Error => CONFIG_ERROR,
-            Severity::Warning | Severity::Info => CONFIG_WARNING,
-        };
-        Self::new(severity, title, messages)
+        Self::new(severity, Topic::Config, messages)
+    }
+
+    /// What the messages are about, shown before the first one.
+    pub fn title(&self) -> &'static str {
+        self.topic.title(self.severity)
     }
 
     /// About the config, so a reload replaces it.
     pub fn is_config(&self) -> bool {
-        self.title == CONFIG_ERROR || self.title == CONFIG_WARNING
+        self.topic == Topic::Config
     }
 
     /// Drop `message`. Returns whether any message is left.
@@ -76,8 +117,8 @@ impl Banner {
     fn text(&self) -> String {
         let message = &self.messages[self.shown];
         match self.messages.len() {
-            1 => format!("{}: {message}", self.title),
-            n => format!("{} ({}/{n}): {message}", self.title, self.shown + 1),
+            1 => format!("{}: {message}", self.title()),
+            n => format!("{} ({}/{n}): {message}", self.title(), self.shown + 1),
         }
     }
 
@@ -148,7 +189,7 @@ mod tests {
         let banner =
             Banner::config(Severity::Warning, vec!["a".into(), "b".into(), "c".into()]).unwrap();
         assert_eq!(banner.text(), "Config warning (1/3): a");
-        let banner = Banner::new(Severity::Warning, "Link", vec!["x".into()]).unwrap();
+        let banner = Banner::new(Severity::Warning, Topic::Link, vec!["x".into()]).unwrap();
         assert_eq!(banner.text(), "Link: x");
     }
 
@@ -163,13 +204,13 @@ mod tests {
         assert_eq!(banner.text(), "Config warning (1/3): a", "wraps around");
         assert!(!banner.click(395.0, 400.0, METRICS), "the ×");
 
-        let mut single = Banner::new(Severity::Warning, "Link", vec!["x".into()]).unwrap();
+        let mut single = Banner::new(Severity::Warning, Topic::Link, vec!["x".into()]).unwrap();
         assert!(!single.click(10.0, 400.0, METRICS));
     }
 
     #[test]
     fn links_open_outside_the_cross() {
-        let banner = Banner::new(Severity::Info, "Update", vec!["x".into()])
+        let banner = Banner::new(Severity::Info, Topic::Update, vec!["x".into()])
             .unwrap()
             .with_url("https://example.com".into());
         assert_eq!(banner.url.as_deref(), Some("https://example.com"));

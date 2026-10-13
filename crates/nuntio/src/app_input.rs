@@ -18,7 +18,7 @@ use super::app_panes::CloseTarget;
 use super::{Confirmation, Core};
 use crate::actions::Action;
 use crate::actions_menu::{MenuKind, Step};
-use crate::banner::{Banner, Severity};
+use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
@@ -29,9 +29,6 @@ use crate::tab_bar::BarHit;
 use crate::tabs::Placement;
 use crate::update;
 use crate::window::{TabDrag, WindowState};
-
-/// Title of the banner that asks to confirm a paste.
-const PASTE_BANNER: &str = "Paste";
 
 /// Why pasting `text` without bracketed paste needs confirmation: each
 /// line break works like Enter, so the shell runs the lines at once.
@@ -249,18 +246,15 @@ impl Core {
         );
     }
 
-    /// A launch for the helper `program` with `args`, tabbed `name`. Without
-    /// the helper installed next to nuntio, a banner says so.
-    fn helper_launch(
-        &mut self,
-        program: &str,
-        args: &[&str],
-        name: &'static str,
-    ) -> Option<Launch> {
+    /// A launch for the helper `program` with `args`, whose tab is named
+    /// like `topic`. Without the helper installed next to nuntio, a banner
+    /// of that topic says so.
+    fn helper_launch(&mut self, program: &str, args: &[&str], topic: Topic) -> Option<Launch> {
+        let name = topic.title(Severity::Warning);
         let Some(path) = crate::pane_env::helper(program) else {
             self.notify(Banner::new(
                 Severity::Warning,
-                name,
+                topic,
                 vec![format!("{program} is not installed next to nuntio")],
             ));
             return None;
@@ -274,7 +268,9 @@ impl Core {
 
     /// Open `nuntio-config` in a new tab.
     fn open_settings(&mut self, state: &mut WindowState) {
-        if let Some(launch) = self.helper_launch(crate::pane_env::CONFIG_HELPER, &[], "Settings") {
+        if let Some(launch) =
+            self.helper_launch(crate::pane_env::CONFIG_HELPER, &[], Topic::Settings)
+        {
             self.new_tab(state, launch, Placement::AfterActive);
         }
     }
@@ -282,7 +278,8 @@ impl Core {
     /// Open `nuntio-apps notes` in a new tab, or with `split` next to the
     /// focused pane.
     fn open_notes(&mut self, state: &mut WindowState, split: bool) {
-        let Some(launch) = self.helper_launch(crate::pane_env::APPS_HELPER, &["notes"], "Notes")
+        let Some(launch) =
+            self.helper_launch(crate::pane_env::APPS_HELPER, &["notes"], Topic::Notes)
         else {
             return;
         };
@@ -367,7 +364,7 @@ impl Core {
             return;
         };
         let bracketed = target.term.mode().contains(TermMode::BRACKETED_PASTE);
-        self.dismiss_banner(PASTE_BANNER);
+        self.dismiss_banner(Topic::Paste);
         let warning = if self.config.confirm_paste && !bracketed {
             paste_warning(&text)
         } else {
@@ -380,7 +377,7 @@ impl Core {
         };
         match Confirmation::confirm(&mut self.pending_paste, (pane, text), Instant::now()) {
             Some((_, text)) => target.term.paste(&text),
-            None => self.ask_to_repeat(PASTE_BANNER, message),
+            None => self.ask_to_repeat(Topic::Paste, message),
         }
     }
 
@@ -705,7 +702,7 @@ impl Core {
         state.window.request_redraw();
         if !stays && let Some(closed) = self.banner.take() {
             // Closing the update banner means: not for this release.
-            if closed.title == update::BANNER
+            if closed.topic == Topic::Update
                 && let Some(update) = &self.update
             {
                 update::dismiss(&update.version);

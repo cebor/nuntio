@@ -8,7 +8,7 @@ use anyhow::Result;
 use nuntio_term::{Shell, SpawnOptions, TermHandle, TermSize, Transport};
 
 use super::{Confirmation, Core, INITIAL_GRID, Startup, term_options};
-use crate::banner::{Banner, Severity};
+use crate::banner::{Banner, Severity, Topic};
 use crate::event::{PaneId, UserEvent};
 use crate::pane_tree::Axis;
 use crate::shells::{self, Launch, ShellChoice};
@@ -32,9 +32,6 @@ fn wsl_helper(shell: &nuntio_config::Shell) -> Option<String> {
 fn wsl_helper(_shell: &nuntio_config::Shell) -> Option<String> {
     None
 }
-
-/// Title of the banner that asks to confirm a close.
-const CLOSE_BANNER: &str = "Close";
 
 /// What a close request ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,7 +186,7 @@ impl Core {
         };
         self.notify(Banner::new(
             Severity::Error,
-            "Shell",
+            Topic::Shell,
             vec![format!(
                 "failed to start: {err}; started the default shell instead"
             )],
@@ -221,7 +218,7 @@ impl Core {
             .inspect_err(|err| {
                 self.notify(Banner::new(
                     Severity::Error,
-                    "Shell",
+                    Topic::Shell,
                     vec![format!("failed to start: {err:#}")],
                 ));
             })
@@ -235,7 +232,7 @@ impl Core {
         }
         self.notify(Banner::new(
             Severity::Warning,
-            "Working directory",
+            Topic::WorkingDirectory,
             vec![format!("{} is not a directory", dir.display())],
         ));
         None
@@ -457,7 +454,7 @@ impl Core {
             .filter(|p| p.term.foreground_is_shell() == Some(false))
             .map(|p| p.term.process_name())
             .collect();
-        self.dismiss_banner(CLOSE_BANNER);
+        self.dismiss_banner(Topic::Close);
         if running.is_empty() {
             self.pending_close = None;
             return true;
@@ -465,7 +462,7 @@ impl Core {
         if Confirmation::confirm(&mut self.pending_close, target, Instant::now()).is_some() {
             return true;
         }
-        self.ask_to_repeat(CLOSE_BANNER, close_message(&running, target));
+        self.ask_to_repeat(Topic::Close, close_message(&running, target));
         false
     }
 }

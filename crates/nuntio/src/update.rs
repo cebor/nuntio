@@ -24,8 +24,6 @@ const TAG: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'+');
 
-/// Title of the banner that announces an update.
-pub const BANNER: &str = "Update";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// After a failed check (offline, rate limit), try again sooner.
