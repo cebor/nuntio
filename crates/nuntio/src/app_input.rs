@@ -17,10 +17,10 @@ use winit::window::{CursorIcon, ResizeDirection, Window};
 use super::app_panes::CloseTarget;
 use super::{Confirmation, Core};
 use crate::actions::Action;
-use crate::actions_menu::{MenuKind, Step};
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
+use crate::menu::{MenuKind, Step};
 use crate::mouse::{Button, MouseAction};
 use crate::pane_tree::Axis;
 use crate::shell_words::path_word;
@@ -211,13 +211,13 @@ impl Core {
             Action::Search => state.open_search(),
             Action::ToggleFullscreen => state.toggle_fullscreen(),
             Action::OpenActionsMenu if state.menu_kind() == Some(MenuKind::Actions) => {
-                state.close_actions_menu();
+                state.close_menu();
             }
             Action::OpenActionsMenu => {
                 state.open_actions_menu(&self.config, &self.stats, &self.bindings);
             }
             Action::OpenShellMenu if state.menu_kind() == Some(MenuKind::Shells) => {
-                state.close_actions_menu();
+                state.close_menu();
             }
             Action::OpenShellMenu => self.open_shell_menu(state, false),
             Action::NewTabWithShell(index) => {
@@ -434,8 +434,8 @@ impl Core {
         event: &KeyPress,
         mods: ModifiersState,
     ) -> bool {
-        if state.actions_menu.is_some() {
-            self.actions_menu_key(state, event, mods);
+        if state.menu.is_some() {
+            self.menu_key(state, event, mods);
             return false;
         }
         if state.search.is_some() && self.search_key(state, event) {
@@ -471,23 +471,18 @@ impl Core {
         KeyInput::new(event, mods, meta)
     }
 
-    /// Keys for the open actions menu, which takes all of them: the arrows
+    /// Keys for the open menu, which takes all of them: the arrows
     /// move, Enter runs the selected entry and Escape closes. Only the
     /// shortcut that opens the menu closes it again.
-    fn actions_menu_key(
-        &mut self,
-        state: &mut WindowState,
-        event: &KeyPress,
-        mods: ModifiersState,
-    ) {
+    fn menu_key(&mut self, state: &mut WindowState, event: &KeyPress, mods: ModifiersState) {
         let view = state.menu_view();
-        let Some(menu) = state.actions_menu.as_mut() else {
+        let Some(menu) = state.menu.as_mut() else {
             return;
         };
         let opener = menu.kind().opener();
         let mut run = None;
         match &event.logical {
-            Key::Named(NamedKey::Escape) => state.close_actions_menu(),
+            Key::Named(NamedKey::Escape) => state.close_menu(),
             Key::Named(NamedKey::ArrowDown) => menu.select(Step::Next, view),
             Key::Named(NamedKey::ArrowUp) => menu.select(Step::Previous, view),
             Key::Named(NamedKey::Home) => menu.select(Step::First, view),
@@ -495,13 +490,13 @@ impl Core {
             Key::Named(NamedKey::Enter) => {
                 run = menu.selected_action();
                 if run.is_some() {
-                    state.close_actions_menu();
+                    state.close_menu();
                 }
             }
             _ => {
                 let opens = opener.is_some() && self.lookup_binding(event, mods) == opener;
                 if opens {
-                    state.close_actions_menu();
+                    state.close_menu();
                 }
             }
         }
@@ -576,8 +571,8 @@ impl Core {
     }
 
     fn mouse_press(&mut self, state: &mut WindowState, button: Button, pos: PhysicalPosition<f64>) {
-        if state.actions_menu.is_some() {
-            self.press_actions_menu(state, button, pos);
+        if state.menu.is_some() {
+            self.press_menu(state, button, pos);
             return;
         }
         if self.press_banner(state, pos) || self.press_window_chrome(state, button, pos) {
@@ -661,26 +656,21 @@ impl Core {
         }
     }
 
-    /// A click while the actions menu is open: an entry runs its action, a
+    /// A click while the menu is open: an entry runs its action, a
     /// heading does nothing, anywhere else closes the menu. The menu takes
     /// the click either way.
-    fn press_actions_menu(
-        &mut self,
-        state: &mut WindowState,
-        button: Button,
-        pos: PhysicalPosition<f64>,
-    ) {
+    fn press_menu(&mut self, state: &mut WindowState, button: Button, pos: PhysicalPosition<f64>) {
         let view = state.menu_view();
         let (x, y) = (pos.x as f32, pos.y as f32);
-        let Some(menu) = &state.actions_menu else {
+        let Some(menu) = &state.menu else {
             return;
         };
         if !menu.contains(view, x, y) {
-            state.close_actions_menu();
+            state.close_menu();
         } else if button == Button::Left
             && let Some(action) = menu.click(view, x, y)
         {
-            state.close_actions_menu();
+            state.close_menu();
             self.run_action(state, action);
         }
     }
@@ -837,8 +827,8 @@ impl Core {
 
     pub(super) fn cursor_moved(&mut self, state: &mut WindowState, pos: PhysicalPosition<f64>) {
         state.mouse.position = Some(pos);
-        if state.actions_menu.is_some() {
-            self.cursor_over_actions_menu(state, pos);
+        if state.menu.is_some() {
+            self.cursor_over_menu(state, pos);
             return;
         }
         if state.mouse.fullscreen_drag.is_some() {
@@ -868,12 +858,12 @@ impl Core {
         }
     }
 
-    /// The pointer moved while the actions menu is open: select the entry
+    /// The pointer moved while the menu is open: select the entry
     /// under it. Nothing else reacts to the pointer meanwhile.
-    fn cursor_over_actions_menu(&mut self, state: &mut WindowState, pos: PhysicalPosition<f64>) {
+    fn cursor_over_menu(&mut self, state: &mut WindowState, pos: PhysicalPosition<f64>) {
         let view = state.menu_view();
         let (x, y) = (pos.x as f32, pos.y as f32);
-        let Some(menu) = state.actions_menu.as_mut() else {
+        let Some(menu) = state.menu.as_mut() else {
             return;
         };
         let over_entry = menu.click(view, x, y).is_some();

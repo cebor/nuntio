@@ -15,10 +15,10 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Fullscreen, Window};
 
 use crate::actions::Bindings;
-use crate::actions_menu::{ActionsMenu, Anchor, MenuKind, View};
 use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::input;
+use crate::menu::{Anchor, Menu, MenuKind, View};
 use crate::pane_tree::{Direction, Layout, PaneTree};
 use crate::search_bar::SearchBar;
 use crate::shell_words::PathSyntax;
@@ -324,8 +324,8 @@ pub struct WindowState {
     pub preedit: Option<String>,
     /// The find bar, searching the focused pane.
     pub search: Option<SearchBar>,
-    /// The menu of all actions, opened by the `actions` status bar item.
-    pub actions_menu: Option<ActionsMenu>,
+    /// The open menu: the actions, the shells or the tabs.
+    pub menu: Option<Menu>,
     pub blink: Blink,
     /// Frames skipped in a row, to stop retrying a stuck surface.
     pub skipped_frames: u32,
@@ -377,7 +377,7 @@ impl WindowState {
             focused: true,
             preedit: None,
             search: None,
-            actions_menu: None,
+            menu: None,
             blink: Blink {
                 active: false,
                 visible: true,
@@ -576,10 +576,10 @@ impl WindowState {
 
     /// What the open menu lists.
     pub fn menu_kind(&self) -> Option<MenuKind> {
-        self.actions_menu.as_ref().map(ActionsMenu::kind)
+        self.menu.as_ref().map(Menu::kind)
     }
 
-    /// The window as the actions menu is laid out in it.
+    /// The window as the menu is laid out in it.
     pub fn menu_view(&self) -> View {
         let size = self.window.inner_size();
         View {
@@ -594,7 +594,7 @@ impl WindowState {
         let anchor = self
             .status_item_anchor(config, stats, StatusItem::Actions)
             .unwrap_or_else(|| self.centered_anchor(config));
-        self.show_menu(ActionsMenu::new(anchor, bindings));
+        self.show_menu(Menu::new(anchor, bindings));
     }
 
     /// Open the menu of shells `names` for a new tab: below the tab bar's
@@ -616,7 +616,7 @@ impl WindowState {
                 .or_else(|| self.new_tab_anchor(config))
         };
         let anchor = anchor.unwrap_or_else(|| self.centered_anchor(config));
-        self.show_menu(ActionsMenu::shells(anchor, names, bindings));
+        self.show_menu(Menu::shells(anchor, names, bindings));
     }
 
     /// Below or above the status bar `item`, if it is shown.
@@ -667,7 +667,7 @@ impl WindowState {
             opens_up: false,
             centered: false,
         };
-        let menu = ActionsMenu::tabs(anchor, &titles, self.tabs.active_index(), self.menu_view());
+        let menu = Menu::tabs(anchor, &titles, self.tabs.active_index(), self.menu_view());
         self.show_menu(menu);
     }
 
@@ -682,8 +682,8 @@ impl WindowState {
     }
 
     /// Show `menu` instead of any open one.
-    fn show_menu(&mut self, menu: ActionsMenu) {
-        self.actions_menu = Some(menu);
+    fn show_menu(&mut self, menu: Menu) {
+        self.menu = Some(menu);
         // Nothing under the menu reacts to the pointer.
         self.mouse.hover_link = None;
         self.mouse.hovered_bar = None;
@@ -691,8 +691,8 @@ impl WindowState {
     }
 
     /// Close the open menu (actions or shells), if any.
-    pub fn close_actions_menu(&mut self) {
-        if self.actions_menu.take().is_some() {
+    pub fn close_menu(&mut self) {
+        if self.menu.take().is_some() {
             self.window.request_redraw();
         }
     }
@@ -701,7 +701,7 @@ impl WindowState {
     /// closed or opened tab shifts.
     pub fn close_tab_menu(&mut self) {
         if self.menu_kind() == Some(MenuKind::Tabs) {
-            self.close_actions_menu();
+            self.close_menu();
         }
     }
 

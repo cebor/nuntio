@@ -172,7 +172,7 @@ pub enum Step {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ActionsMenu {
+pub struct Menu {
     kind: MenuKind,
     anchor: Anchor,
     rows: Vec<Row>,
@@ -221,7 +221,7 @@ impl Geometry {
     }
 }
 
-impl ActionsMenu {
+impl Menu {
     /// The actions menu, whose shortcuts are the ones `bindings` has now.
     pub fn new(anchor: Anchor, bindings: &Bindings) -> Self {
         let mut rows = Vec::new();
@@ -538,17 +538,17 @@ mod tests {
         }
     }
 
-    fn menu(opens_up: bool, y: f32) -> ActionsMenu {
+    fn menu(opens_up: bool, y: f32) -> Menu {
         let anchor = Anchor {
             x: 10.0,
             y,
             opens_up,
             centered: false,
         };
-        ActionsMenu::new(anchor, &Bindings::platform_defaults())
+        Menu::new(anchor, &Bindings::platform_defaults())
     }
 
-    fn entries(menu: &ActionsMenu) -> Vec<Action> {
+    fn entries(menu: &Menu) -> Vec<Action> {
         menu.rows
             .iter()
             .filter_map(|row| match row {
@@ -727,7 +727,7 @@ mod tests {
         };
         let names = ["Ubuntu".to_owned(), "PowerShell 7".to_owned()];
         let bindings = Bindings::platform_defaults();
-        let menu = ActionsMenu::shells(anchor, &names, &bindings);
+        let menu = Menu::shells(anchor, &names, &bindings);
         assert_eq!(menu.kind(), MenuKind::Shells);
         assert_eq!(
             entries(&menu),
@@ -761,7 +761,7 @@ mod tests {
             })
             .collect();
         let view = view(1000.0, 300.0);
-        let menu = ActionsMenu::tabs(anchor, &titles, 60, view);
+        let menu = Menu::tabs(anchor, &titles, 60, view);
         assert_eq!(menu.kind(), MenuKind::Tabs);
         assert_eq!(
             entries(&menu),

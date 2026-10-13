@@ -181,7 +181,7 @@ sequenceDiagram
 flowchart TD
     key[WindowEvent::KeyboardInput] --> kp[KeyPress::from]
     kp --> ki[Core::keyboard_input]
-    ki -->|menu or find bar open| ui[actions_menu_key / search_key]
+    ki -->|menu or find bar open| ui[menu_key / search_key]
     ki -->|Bindings::lookup hit| act[Core::run_action]
     ki -->|otherwise| enc[input::encode_key<br/>kitty_keys or xterm style]
     enc --> w[TermHandle::write]
@@ -445,7 +445,7 @@ Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 |Task|Touch|
 |---|---|
-|New action|`Action` + `NAMES` (`actions.rs`), `Bindings::platform_defaults`, `Core::run_action`, `actions_menu::MENU`, `nuntio_config::ACTIONS`, the actions table in the docs|
+|New action|`Action` + `NAMES` (`actions.rs`), `Bindings::platform_defaults`, `Core::run_action`, `menu::MENU`, `nuntio_config::ACTIONS`, the actions table in the docs|
 |New setting|the `Config` type, `SETTINGS` in `schema.rs`, `docs/config.md`; apply it in `reload_config` / `apply_config_to_window` or read it per frame|
 |New status item|`nuntio_config::StatusItem`, `status_bar.rs`, `sysmon::is_sampled` / `Sample` if it samples, the click in `mouse_press`|
 |New background source|a `UserEvent` variant in `event.rs`, an arm in `App::user_event`, send through a cloned proxy|

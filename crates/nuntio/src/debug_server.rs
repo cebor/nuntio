@@ -30,10 +30,10 @@ use winit::keyboard::{
 
 use super::Core;
 use crate::actions::{Action, named_key};
-use crate::actions_menu::MenuKind;
 use crate::banner::Banner;
 use crate::event::{PaneId, UserEvent};
 use crate::input::{KeyEventKind, KeyPress};
+use crate::menu::MenuKind;
 use crate::window::WindowState;
 use nuntio_render::Rect;
 
@@ -553,7 +553,7 @@ impl Core {
             "tab_bar": tab_bar,
             "search": state.search.as_ref().map(|bar| json!({ "query": bar.query(), "regex": bar.regex() })),
             "banner": banner,
-            "actions_menu": state.actions_menu.as_ref().map(|menu| json!({
+            "menu": state.menu.as_ref().map(|menu| json!({
                 "kind": match menu.kind() {
                     MenuKind::Actions => "actions",
                     MenuKind::Shells => "shells",

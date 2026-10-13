@@ -2,7 +2,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod actions;
-mod actions_menu;
 mod app;
 mod banner;
 mod event;
@@ -12,6 +11,7 @@ mod kitty_keys;
 mod link;
 #[cfg(target_os = "macos")]
 mod macos_menu;
+mod menu;
 mod mouse;
 mod pane_env;
 mod pane_tree;

@@ -45,7 +45,7 @@ Read before reviewing:
 Spawn `scout` subagents in one batch. Slices for the whole repository:
 
 1. `nuntio` core: `app.rs`, `app_input.rs`, `app_panes.rs`, `debug_server.rs`, `event.rs`, `main.rs`, `window.rs`, `window_pointer.rs`, `window_frame.rs`, `tabs.rs`, `pane_tree.rs`, `ime.rs`, `bin/`
-2. `nuntio` UI and input: `tab_bar.rs`, `tab_title.rs`, `status_bar.rs`, `search_bar.rs`, `banner.rs`, `style.rs`, `actions.rs`, `actions_menu.rs`, `macos_menu.rs`, `input.rs`, `kitty_keys.rs`, `mouse.rs`, `link.rs`
+2. `nuntio` UI and input: `tab_bar.rs`, `tab_title.rs`, `status_bar.rs`, `search_bar.rs`, `banner.rs`, `style.rs`, `actions.rs`, `menu.rs`, `macos_menu.rs`, `input.rs`, `kitty_keys.rs`, `mouse.rs`, `link.rs`
 3. Services and platform glue: `update.rs`, `sysmon.rs`, `shells.rs`, `shell_words.rs`, `pane_env.rs`, `pasted_images.rs`, `wsl.rs` and `build.rs` of `nuntio`; the `nuntio-wsl` crate; `detect.rs` of `nuntio-config`
 4. `nuntio-term`, including `tests/`
 5. `nuntio-render`, including `quad.wgsl`

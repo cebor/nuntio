@@ -242,7 +242,7 @@ impl WindowState {
             mods.control_key()
         };
         // Nothing under an open menu reacts to the pointer.
-        let held = held && self.actions_menu.is_none();
+        let held = held && self.menu.is_none();
         let link = self.mouse.position.filter(|_| held).and_then(|pos| {
             let id = self.pane_at(config, pos)?;
             let point = self.cell_in(config, id, pos);
@@ -381,7 +381,7 @@ impl WindowState {
     /// stays where it is.
     pub fn mouse_wheel(&mut self, config: &Config, delta: MouseScrollDelta) {
         // Over an overflowing tab bar the wheel scrolls the tabs.
-        if self.actions_menu.is_none()
+        if self.menu.is_none()
             && let Some(pos) = self.mouse.position
             && let Some(bar) = self.tab_bar(config)
             && bar.overflows()
@@ -400,9 +400,9 @@ impl WindowState {
         if lines == 0 {
             return;
         }
-        // An open actions menu scrolls (if it doesn't fit) instead of the pane.
+        // An open menu scrolls (if it doesn't fit) instead of the pane.
         let view = self.menu_view();
-        if let Some(menu) = self.actions_menu.as_mut() {
+        if let Some(menu) = self.menu.as_mut() {
             if menu.scroll_by(-(lines as isize), view) {
                 self.window.request_redraw();
             }

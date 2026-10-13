@@ -221,7 +221,7 @@ impl WindowState {
             overlay.texts.push(text);
         }
 
-        if let Some(menu) = &self.actions_menu {
+        if let Some(menu) = &self.menu {
             let (rects, texts) = menu.draw(self.menu_view(), background, foreground);
             overlay.popup_rects = rects;
             overlay.popup_texts = texts;
