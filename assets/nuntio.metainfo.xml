@@ -21,6 +21,8 @@
       <li>Themes, including iTerm2 color presets and light/dark pairs</li>
       <li>Find bar with regex search, clickable URLs and OSC 8 hyperlinks</li>
       <li>Optional status bar with CPU, memory, network and battery graphs</li>
+      <li>A settings editor in the terminal that previews every change live</li>
+      <li>Markdown notes with a live preview and todo lists, in a tab or next to your shell</li>
     </ul>
   </description>
   <screenshots>
