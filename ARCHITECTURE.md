@@ -2,7 +2,7 @@
 
 This document describes how nuntio's processes, threads and crates fit together and how data moves between them. It is written for contributors who want to change nuntio and need the big picture first.
 
-<p align="center"><img src="docs/architecture.svg" alt="nuntio system architecture: the main thread owning window, renderer and panes; one PTY reader thread per pane; service threads; shells, ConPTY, WSL via nuntio-wsl and the nuntio-config TUI as child processes; config files, the drive tool, CI and the GitHub releases API" width="100%"></p>
+<p align="center"><img src="docs/architecture.svg" alt="nuntio system architecture: the main thread owning window, renderer and panes; one PTY reader thread per pane; service threads; shells, ConPTY, WSL via nuntio-wsl and the helper apps nuntio-config (settings TUI) and nuntio-apps notes as child processes; config files, the drive tool, CI and the GitHub releases API" width="100%"></p>
 
 - [README.md](README.md): features and usage
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing, commit conventions
@@ -50,6 +50,7 @@ flowchart LR
     svc -->|UserEvent| main
     cfg[(config.toml, themes/)] -.->|notify| svc
     tui[nuntio-config TUI<br/>runs inside a pane] -->|atomic write| cfg
+    notes[nuntio-apps notes<br/>runs inside a pane] -->|autosave| nf[(notes folder, .md)]
     svc -.->|opt-in| gh[(GitHub releases API)]
     pty <-->|framed pipes, Windows only| wsl[wsl.exe → nuntio-wsl<br/>Linux PTY]
     drive[cargo xtask drive] -.->|TCP JSON, debug-server feature| main
