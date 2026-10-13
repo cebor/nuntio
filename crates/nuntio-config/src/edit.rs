@@ -421,6 +421,7 @@ fn write_new(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::TempDir;
 
     fn doc(source: &str) -> ConfigDoc {
         ConfigDoc::parse(source).unwrap()
@@ -629,23 +630,16 @@ mod tests {
         assert!(!err.contains('\n'), "{err}");
     }
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("nuntio-edit-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
     #[test]
     fn writes_new_files_and_directories() {
-        let dir = temp_dir("new");
-        let path = dir.join("sub/config.toml");
+        let dir = TempDir::new("edit-new");
+        let path = dir.join("sub").join("config.toml");
         write_atomically(&path, "scrollback = 1\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "scrollback = 1\n");
         write_atomically(&path, "scrollback = 2\n").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "scrollback = 2\n");
         let leftovers = std::fs::read_dir(dir.join("sub")).unwrap().count();
         assert_eq!(leftovers, 1, "no temp files left behind");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // Windows refuses to replace a file another thread is replacing at the
@@ -653,7 +647,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn concurrent_writes_to_one_file_do_not_collide() {
-        let dir = temp_dir("concurrent");
+        let dir = TempDir::new("edit-concurrent");
         let path = dir.join("config.toml");
         std::thread::scope(|scope| {
             for n in 0..8 {
@@ -666,15 +660,14 @@ mod tests {
             }
         });
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn writes_through_symlinks() {
-        let dir = temp_dir("link");
+        let dir = TempDir::new("edit-link");
         std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
-        let target = dir.join("dotfiles/nuntio.toml");
+        let target = dir.join("dotfiles").join("nuntio.toml");
         std::fs::write(&target, "").unwrap();
         let link = dir.join("config.toml");
         std::os::unix::fs::symlink(&target, &link).unwrap();
@@ -684,22 +677,19 @@ mod tests {
             std::fs::read_to_string(&target).unwrap(),
             "scrollback = 3\n"
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn private_configs_stay_private() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = temp_dir("private");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("edit-private");
         let path = dir.join("config.toml");
         std::fs::write(&path, "").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         write_atomically(&path, "scrollback = 4\n").unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         let text = std::fs::read_to_string(&path).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(text, "scrollback = 4\n");
     }
@@ -707,8 +697,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_stale_temp_file_is_replaced_not_followed() {
-        let dir = temp_dir("stale");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("edit-stale");
         let temp = dir.join(".config.toml.tmp");
         let elsewhere = dir.join("elsewhere");
         std::os::unix::fs::symlink(&elsewhere, &temp).unwrap();
@@ -716,7 +705,6 @@ mod tests {
         let followed = elsewhere.exists();
         let is_link = temp.symlink_metadata().unwrap().file_type().is_symlink();
         let text = std::fs::read_to_string(&temp).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
         assert!(!followed, "wrote through the planted symlink");
         assert!(!is_link);
         assert_eq!(text, "scrollback = 4\n");
@@ -725,13 +713,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn writes_through_dangling_symlinks() {
-        let dir = temp_dir("dangling");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("edit-dangling");
         let is_link = |p: &Path| p.symlink_metadata().unwrap().file_type().is_symlink();
 
         // Absolute target in a directory that doesn't exist yet.
         let absolute = dir.join("a-link.toml");
-        let a_target = dir.join("missing/a.toml");
+        let a_target = dir.join("missing").join("a.toml");
         std::os::unix::fs::symlink(&a_target, &absolute).unwrap();
         write_atomically(&absolute, "scrollback = 1\n").unwrap();
         assert!(is_link(&absolute));
@@ -757,22 +744,19 @@ mod tests {
         write_atomically(&first, "scrollback = 3\n").unwrap();
         assert!(is_link(&first) && is_link(&second));
         assert_eq!(
-            std::fs::read_to_string(dir.join("chain/end.toml")).unwrap(),
+            std::fs::read_to_string(dir.join("chain").join("end.toml")).unwrap(),
             "scrollback = 3\n"
         );
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn a_symlink_loop_is_an_error() {
-        let dir = temp_dir("loop");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("edit-loop");
         let (a, b) = (dir.join("a.toml"), dir.join("b.toml"));
         std::os::unix::fs::symlink("b.toml", &a).unwrap();
         std::os::unix::fs::symlink("a.toml", &b).unwrap();
         let err = write_atomically(&a, "x = 1\n").unwrap_err();
-        std::fs::remove_dir_all(&dir).unwrap();
         assert!(err.to_string().contains("symbolic links"), "{err}");
     }
 }

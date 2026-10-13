@@ -260,6 +260,8 @@ pub fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use nuntio_config::testutil::TempDir;
 
     #[test]
     fn altgr_characters_are_text_not_ctrl() {
@@ -310,8 +312,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn editor_runs_through_the_shell() {
-        let dir = std::env::temp_dir().join(format!("nuntio-editor-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("editor");
         let path = dir.join("my config.toml");
         std::fs::write(&path, "").unwrap();
         let runs = |editor: &str| editor_process(editor, &path).status().unwrap().success();
@@ -319,6 +320,5 @@ mod tests {
         assert!(runs("'/bin/sh' -c 'test -f \"$1\"' sh"));
         assert!(runs("test -f"));
         assert!(!runs("test -d"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

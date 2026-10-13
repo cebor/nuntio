@@ -7,6 +7,9 @@ mod keys;
 mod load;
 mod paths;
 pub mod schema;
+#[cfg(any(test, feature = "testutil"))]
+#[doc(hidden)]
+pub mod testutil;
 mod theme;
 mod watch;
 

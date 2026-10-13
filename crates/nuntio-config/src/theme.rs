@@ -229,6 +229,7 @@ fn parse_itermcolors(plist: &plist::Value) -> Result<Theme, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::TempDir;
 
     const PLIST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -316,8 +317,7 @@ mod tests {
 
     #[test]
     fn user_themes_override_and_report_errors() {
-        let dir = std::env::temp_dir().join(format!("nuntio-themes-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("themes");
         let dracula = include_str!("../themes/dracula.toml").replace("#282a36", "#000001");
         std::fs::write(dir.join("dracula.toml"), dracula).unwrap();
         // Without a name line (whatever the line endings of the checkout).
@@ -333,7 +333,6 @@ mod tests {
         std::fs::write(dir.join("zz.toml"), copy).unwrap();
 
         let (set, warnings) = ThemeSet::load(Some(&dir));
-        std::fs::remove_dir_all(&dir).unwrap();
 
         assert_eq!(set.get("Dracula").unwrap().background, Color::from_hex(1));
         assert_eq!(set.get("mine").unwrap().name, "Mine");

@@ -17,5 +17,8 @@ unicode-width.workspace = true
 ratatui.workspace = true
 fontdb.workspace = true
 
+[dev-dependencies]
+nuntio-config = { workspace = true, features = ["testutil"] }
+
 [lints]
 workspace = true

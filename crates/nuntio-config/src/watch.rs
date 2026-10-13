@@ -339,11 +339,11 @@ fn path_variants(path: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::TempDir;
 
     #[test]
     fn reports_changes_to_the_config_file_only() {
-        let dir = std::env::temp_dir().join(format!("nuntio-watch-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("watch");
         let path = dir.join("config.toml");
         std::fs::write(&path, "").unwrap();
 
@@ -378,15 +378,13 @@ mod tests {
         std::fs::write(&path, "scrollback = 6").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
         let settled = quiet(&rx);
-        std::fs::remove_dir_all(&dir).unwrap();
         assert!(changed.is_ok(), "no change reported");
         assert!(settled, "burst reported more than once");
     }
 
     #[test]
     fn dropping_the_watcher_stops_its_thread() {
-        let dir = std::env::temp_dir().join(format!("nuntio-watch-drop-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("watch-drop");
         let (tx, rx) = mpsc::channel::<()>();
         let watcher = ConfigWatcher::new(&dir.join("config.toml"), None, move || {
             let _ = tx.send(());
@@ -395,14 +393,12 @@ mod tests {
         drop(watcher);
         // The thread owns `on_change`; once it ends, the sender is gone.
         let result = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(result, Err(mpsc::RecvTimeoutError::Disconnected));
     }
 
     #[test]
     fn notices_a_config_directory_created_later() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-new-{}", std::process::id()));
-        std::fs::create_dir_all(&base).unwrap();
+        let base = TempDir::new("watch-new");
         let dir = base.join("config").join("nuntio");
         let path = dir.join("config.toml");
 
@@ -418,7 +414,6 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(&path, "scrollback = 5").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(changed.is_ok(), "config in a new directory not noticed");
     }
 
@@ -427,7 +422,7 @@ mod tests {
     // can't delete and recreate it.
     #[cfg(unix)]
     fn notices_a_config_directory_deleted_and_created_again() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-again-{}", std::process::id()));
+        let base = TempDir::new("watch-again");
         let dir = base.join("nuntio");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
@@ -447,7 +442,6 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(&path, "scrollback = 5").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(
             changed.is_ok(),
             "config in a recreated directory not noticed"
@@ -457,7 +451,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn notices_a_directory_recreated_within_the_debounce() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-quick-{}", std::process::id()));
+        let base = TempDir::new("watch-quick");
         let dir = base.join("nuntio");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
@@ -475,7 +469,6 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(&path, "scrollback = 5").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(
             changed.is_ok(),
             "config in a quickly recreated directory not noticed"
@@ -485,7 +478,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn resolves_a_symlinked_ancestor_of_a_missing_path() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-vars-{}", std::process::id()));
+        let base = TempDir::new("watch-vars");
         let real = base.join("real");
         std::fs::create_dir_all(&real).unwrap();
         let link = base.join("link");
@@ -493,8 +486,11 @@ mod tests {
 
         let path = link.join("nuntio").join("config.toml");
         let variants = path_variants(&path);
-        let expected = real.canonicalize().unwrap().join("nuntio/config.toml");
-        std::fs::remove_dir_all(&base).unwrap();
+        let expected = real
+            .canonicalize()
+            .unwrap()
+            .join("nuntio")
+            .join("config.toml");
         assert!(variants.contains(&path));
         assert!(variants.contains(&expected), "{variants:?}");
     }
@@ -502,7 +498,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn follows_a_symlinked_config_file() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-link-{}", std::process::id()));
+        let base = TempDir::new("watch-link");
         let (config_dir, dotfiles) = (base.join("config"), base.join("dotfiles"));
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::create_dir_all(&dotfiles).unwrap();
@@ -520,14 +516,13 @@ mod tests {
         // Editing the file in the dotfiles directory is noticed.
         std::fs::write(&target, "scrollback = 5").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(changed.is_ok(), "change behind the symlink not reported");
     }
 
     #[test]
     #[cfg(unix)]
     fn notices_a_directory_replaced_by_rename() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-swap-{}", std::process::id()));
+        let base = TempDir::new("watch-swap");
         let (dir, new) = (base.join("nuntio"), base.join("new"));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::create_dir_all(&new).unwrap();
@@ -548,7 +543,6 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(&path, "scrollback = 6").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(swapped.is_ok(), "replaced directory not noticed");
         assert!(changed.is_ok(), "change in the new directory not noticed");
     }
@@ -556,10 +550,9 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn follows_a_symlink_retargeted_to_another_directory() {
-        let base =
-            std::env::temp_dir().join(format!("nuntio-watch-retarget-{}", std::process::id()));
+        let base = TempDir::new("watch-retarget");
         let config_dir = base.join("config");
-        let (a, b) = (base.join("dots/a"), base.join("dots/b"));
+        let (a, b) = (base.join("dots").join("a"), base.join("dots").join("b"));
         for dir in [&config_dir, &a, &b] {
             std::fs::create_dir_all(dir).unwrap();
         }
@@ -582,15 +575,13 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(b.join("nuntio.toml"), "scrollback = 5").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(retargeted.is_ok(), "retargeted symlink not noticed");
         assert!(changed.is_ok(), "change in the new target not noticed");
     }
 
     #[test]
     fn notices_a_themes_directory_created_later() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-themes-{}", std::process::id()));
-        std::fs::create_dir_all(&base).unwrap();
+        let base = TempDir::new("watch-themes");
         let path = base.join("config.toml");
         std::fs::write(&path, "").unwrap();
         let themes = base.join("themes");
@@ -606,7 +597,6 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(themes.join("x.toml"), "").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(changed.is_ok(), "theme in a new directory not noticed");
     }
 
@@ -615,8 +605,7 @@ mod tests {
     // can't delete and recreate it.
     #[cfg(unix)]
     fn notices_a_themes_directory_deleted_and_created_again() {
-        let base =
-            std::env::temp_dir().join(format!("nuntio-watch-themes-again-{}", std::process::id()));
+        let base = TempDir::new("watch-themes-again");
         let themes = base.join("themes");
         std::fs::create_dir_all(&themes).unwrap();
         let path = base.join("config.toml");
@@ -638,7 +627,6 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(themes.join("x.toml"), "").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(
             deleted.is_ok(),
             "deleting the themes directory not reported"
@@ -719,8 +707,7 @@ mod tests {
 
     #[test]
     fn ignores_editor_files_in_the_themes_directory() {
-        let base =
-            std::env::temp_dir().join(format!("nuntio-watch-swap-th-{}", std::process::id()));
+        let base = TempDir::new("watch-swap-th");
         let themes = base.join("themes");
         std::fs::create_dir_all(&themes).unwrap();
         let path = base.join("config.toml");
@@ -740,7 +727,6 @@ mod tests {
         let quiet = rx.recv_timeout(Duration::from_millis(500)).is_err();
         std::fs::write(themes.join("x.toml"), "").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(quiet, "editor files reported");
         assert!(changed.is_ok(), "theme file not reported");
     }
@@ -749,8 +735,7 @@ mod tests {
     #[cfg(unix)]
     fn keeps_watching_when_a_themes_directory_is_unreadable() {
         use std::os::unix::fs::PermissionsExt;
-        let base =
-            std::env::temp_dir().join(format!("nuntio-watch-unreadable-{}", std::process::id()));
+        let base = TempDir::new("watch-unreadable");
         let themes = base.join("themes");
         std::fs::create_dir_all(&themes).unwrap();
         let path = base.join("config.toml");
@@ -767,7 +752,6 @@ mod tests {
         std::fs::write(&path, "scrollback = 5").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
         std::fs::set_permissions(&themes, std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(created, "one failing directory disabled the watcher");
         assert!(changed.is_ok(), "config change not reported");
     }
@@ -775,10 +759,12 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn follows_a_symlinked_directory_retargeted() {
-        let base =
-            std::env::temp_dir().join(format!("nuntio-watch-dirlink-{}", std::process::id()));
+        let base = TempDir::new("watch-dirlink");
         let cfg = base.join("cfg");
-        let (a, b) = (base.join("dots/a/nuntio"), base.join("dots/b/nuntio"));
+        let (a, b) = (
+            base.join("dots").join("a").join("nuntio"),
+            base.join("dots").join("b").join("nuntio"),
+        );
         for dir in [&cfg, &a, &b] {
             std::fs::create_dir_all(dir).unwrap();
         }
@@ -807,26 +793,23 @@ mod tests {
         while rx.try_recv().is_ok() {}
         std::fs::write(b.join("config.toml"), "scrollback = 5").unwrap();
         let changed = rx.recv_timeout(Duration::from_secs(3));
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(retargeted.is_ok(), "retargeted directory link not noticed");
         assert!(changed.is_ok(), "change in the new target not noticed");
     }
 
     #[test]
     fn needed_dirs_prefers_the_directory_itself() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-needed-{}", std::process::id()));
+        let base = TempDir::new("watch-needed");
         let sub = base.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
-        let missing = base.join("missing/deeper");
+        let missing = base.join("missing").join("deeper");
         let needed = needed_dirs(&[sub.join("nope"), sub.clone(), missing, sub.clone()]);
-        std::fs::remove_dir_all(&base).unwrap();
-        assert_eq!(needed, vec![base, sub]);
+        assert_eq!(needed, vec![base.to_path_buf(), sub]);
     }
 
     #[test]
     fn drops_the_stand_in_once_the_directory_exists() {
-        let base = std::env::temp_dir().join(format!("nuntio-watch-stand-{}", std::process::id()));
-        std::fs::create_dir_all(&base).unwrap();
+        let base = TempDir::new("watch-stand");
         let dir = base.join("later");
         let mut watcher = notify::recommended_watcher(|_: notify::Result<Event>| {}).unwrap();
         let mut watched = Vec::new();
@@ -834,11 +817,10 @@ mod tests {
 
         let first = watch_existing(&mut watcher, &wanted, &mut watched);
         assert!(first.added);
-        assert_eq!(watched, vec![base.clone()]);
+        assert_eq!(watched, vec![base.to_path_buf()]);
 
         std::fs::create_dir_all(&dir).unwrap();
         let second = watch_existing(&mut watcher, &wanted, &mut watched);
-        std::fs::remove_dir_all(&base).unwrap();
         assert!(second.added);
         assert!(second.failure.is_none());
         assert_eq!(watched, vec![dir]);
