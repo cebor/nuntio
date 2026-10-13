@@ -28,6 +28,31 @@ pub fn running_in_wsl() -> bool {
     *WSL
 }
 
+/// A path on a WSL share (`\\wsl.localhost\Ubuntu\home\x`, also `\\wsl$\`):
+/// the distribution (`Ubuntu`) and the path inside it (`\home\x`, empty for
+/// the root). `None` for any other path.
+fn wsl_share(path: &str) -> Option<(&str, &str)> {
+    [r"\\wsl.localhost\", r"\\wsl$\"]
+        .into_iter()
+        .find_map(|host| {
+            let rest = path
+                .get(..host.len())
+                .filter(|prefix| prefix.eq_ignore_ascii_case(host))
+                .map(|_| &path[host.len()..])?;
+            Some(rest.split_at(rest.find('\\').unwrap_or(rest.len())))
+        })
+}
+
+/// Where WSL sees the file `rest` (backslashes allowed) on the Windows
+/// drive `letter`: `/mnt/c/x`.
+pub fn drive_path(letter: char, rest: &str) -> String {
+    format!(
+        "/mnt/{}{}",
+        letter.to_ascii_lowercase(),
+        rest.replace('\\', "/")
+    )
+}
+
 /// Where WSL sees a Windows path: `C:\x` is `/mnt/c/x`, and a file in a
 /// distribution (`\\wsl.localhost\Ubuntu\home\x`) is `/home/x`.
 pub fn wsl_path(path: &str) -> String {
@@ -37,23 +62,14 @@ pub fn wsl_path(path: &str) -> String {
     if let (Some(drive), Some(':')) = (chars.next(), chars.next())
         && drive.is_ascii_alphabetic()
     {
-        let rest = slashed(chars.as_str());
-        return format!("/mnt/{}{rest}", drive.to_ascii_lowercase());
+        return drive_path(drive, chars.as_str());
     }
-    for host in [r"\\wsl.localhost\", r"\\wsl$\"] {
-        if let Some(rest) = path
-            .get(..host.len())
-            .filter(|prefix| prefix.eq_ignore_ascii_case(host))
-            .map(|_| &path[host.len()..])
-        {
-            // Skip the distribution's name.
-            let inside = rest.find('\\').map_or("", |i| &rest[i..]);
-            return if inside.is_empty() {
-                "/".into()
-            } else {
-                slashed(inside)
-            };
-        }
+    if let Some((_, inside)) = wsl_share(path) {
+        return if inside.is_empty() {
+            "/".into()
+        } else {
+            slashed(inside)
+        };
     }
     slashed(path)
 }
@@ -90,17 +106,10 @@ pub fn windows_path(dir: &str) -> Option<String> {
 /// `None` inside another distribution or on a network share.
 pub fn linux_path_in(path: &str, distro: &str) -> Option<String> {
     let path = path.strip_prefix(r"\\?\").unwrap_or(path);
-    for host in [r"\\wsl.localhost\", r"\\wsl$\"] {
-        if let Some(rest) = path
-            .get(..host.len())
-            .filter(|prefix| prefix.eq_ignore_ascii_case(host))
-            .map(|_| &path[host.len()..])
-        {
-            let name = rest.split('\\').next().unwrap_or(rest);
-            return name.eq_ignore_ascii_case(distro).then(|| wsl_path(path));
-        }
+    match wsl_share(path) {
+        Some((name, _)) => name.eq_ignore_ascii_case(distro).then(|| wsl_path(path)),
+        None => (!path.starts_with(r"\\")).then(|| wsl_path(path)),
     }
-    (!path.starts_with(r"\\")).then(|| wsl_path(path))
 }
 
 /// The directory of a shell in WSL, as `/abs/path`, `~` or `~/path`: the

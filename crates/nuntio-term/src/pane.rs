@@ -1069,7 +1069,7 @@ fn tty_options(
         working_directory,
         drain_on_exit: true,
         env,
-        #[cfg(target_os = "windows")]
+        #[cfg(windows)]
         escape_args: true,
     }
 }

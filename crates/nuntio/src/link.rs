@@ -227,11 +227,7 @@ fn file_path(url: &str, local_host: &str, drives: Drives) -> Result<Option<PathB
         }
         let mapped = match drives {
             Drives::Windows => format!("{}:{}", &rest[..1], &rest[2..]),
-            Drives::Wsl => format!(
-                "/mnt/{}{}",
-                rest[..1].to_ascii_lowercase(),
-                rest[2..].replace('\\', "/")
-            ),
+            Drives::Wsl => crate::wsl::drive_path(char::from(bytes[0]), &rest[2..]),
             Drives::Unsupported => return Err("it names a Windows drive".into()),
         };
         return Ok(Some(PathBuf::from(mapped)));

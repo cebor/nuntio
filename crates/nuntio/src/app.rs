@@ -68,8 +68,7 @@ const INITIAL_GRID: TermSize = TermSize {
 fn is_wslg_wayland(event_loop: &ActiveEventLoop) -> bool {
     use winit::platform::wayland::ActiveEventLoopExtWayland;
 
-    let wslg =
-        std::env::var_os("WSL_DISTRO_NAME").is_some() && std::path::Path::new("/mnt/wslg").is_dir();
+    let wslg = crate::wsl::running_in_wsl() && std::path::Path::new("/mnt/wslg").is_dir();
     let wayland = event_loop.is_wayland();
     if wslg && wayland {
         tracing::info!("WSLg detected, disabling client-side decorations");
