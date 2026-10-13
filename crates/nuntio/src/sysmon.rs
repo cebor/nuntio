@@ -18,7 +18,9 @@ const INTERVAL: Duration = Duration::from_secs(1);
 /// cable should show up within a few seconds.
 const BATTERY_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Whether the monitor reads anything for `item`.
+/// Whether `item` needs the monitor's ticks. CPU, memory, network and
+/// battery read a source on each one; the date and time read nothing and
+/// only need the tick to update.
 pub fn is_sampled(item: StatusItem) -> bool {
     matches!(
         item,
