@@ -22,14 +22,7 @@ impl ConfigDoc {
     pub fn parse(source: &str) -> Result<Self, String> {
         DocumentMut::from_str(source)
             .map(|doc| Self { doc })
-            .map_err(|e| match e.span() {
-                Some(span) => format!(
-                    "line {}: {}",
-                    crate::load::line_at(source, span.start),
-                    e.message().trim_end()
-                ),
-                None => e.message().trim_end().to_owned(),
-            })
+            .map_err(|e| crate::load::describe(e.message(), e.span(), source))
     }
 
     /// The item at a dotted path like `font.size`, if the file sets it.

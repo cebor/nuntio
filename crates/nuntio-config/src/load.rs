@@ -1,5 +1,6 @@
 //! Locating, reading and validating the config file.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crate::schema::{
@@ -130,11 +131,12 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
 /// Parse and validate config source.
 pub fn parse(source: &str) -> Result<Loaded, String> {
     let mut warnings = Vec::new();
-    let deserializer = toml::Deserializer::parse(source).map_err(|e| describe(&e, source))?;
+    let deserializer =
+        toml::Deserializer::parse(source).map_err(|e| describe(e.message(), e.span(), source))?;
     let config: Config = serde_ignored::deserialize(deserializer, |path| {
         warnings.push(unknown_key(&path));
     })
-    .map_err(|e: toml::de::Error| describe(&e, source))?;
+    .map_err(|e: toml::de::Error| describe(e.message(), e.span(), source))?;
     config.validate()?;
     Ok(Loaded { config, warnings })
 }
@@ -153,7 +155,7 @@ fn unknown_key(path: &serde_ignored::Path) -> String {
 }
 
 /// The 1-based line of a byte offset in `source`.
-pub(crate) fn line_at(source: &str, offset: usize) -> usize {
+fn line_at(source: &str, offset: usize) -> usize {
     source.as_bytes()[..offset.min(source.len())]
         .iter()
         .filter(|&&b| b == b'\n')
@@ -161,10 +163,10 @@ pub(crate) fn line_at(source: &str, offset: usize) -> usize {
         + 1
 }
 
-/// Error message with a 1-based line number.
-pub(crate) fn describe(err: &toml::de::Error, source: &str) -> String {
-    let message = err.message().trim_end();
-    match err.span() {
+/// A TOML error message with the 1-based line of its span in `source`.
+pub(crate) fn describe(message: &str, span: Option<Range<usize>>, source: &str) -> String {
+    let message = message.trim_end();
+    match span {
         Some(span) => format!("line {}: {message}", line_at(source, span.start)),
         None => message.to_owned(),
     }

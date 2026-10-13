@@ -150,7 +150,8 @@ fn file_stem(path: &Path) -> String {
 
 fn load_toml(path: &Path) -> Result<Theme, String> {
     let src = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut theme: Theme = toml::from_str(&src).map_err(|e| crate::load::describe(&e, &src))?;
+    let mut theme: Theme =
+        toml::from_str(&src).map_err(|e| crate::load::describe(e.message(), e.span(), &src))?;
     if theme.name.is_empty() {
         theme.name = file_stem(path);
     }
