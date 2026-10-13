@@ -97,7 +97,7 @@ pub struct Variant {
     pub help: &'static str,
 }
 
-const fn variant(value: &'static str, help: &'static str) -> Variant {
+pub(crate) const fn variant(value: &'static str, help: &'static str) -> Variant {
     Variant { value, help }
 }
 

@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::schema::Variant;
+use crate::schema::{Variant, variant};
 
 /// A key that has a name rather than a character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -209,84 +209,80 @@ impl fmt::Display for KeyCombo {
     }
 }
 
-const fn action(value: &'static str, help: &'static str) -> Variant {
-    Variant { value, help }
-}
-
 /// Every action name `[[keybindings]]` accepts.
 pub static ACTIONS: &[Variant] = &[
-    action("copy", "Copy the selection"),
-    action(
+    variant("copy", "Copy the selection"),
+    variant(
         "paste",
         "Paste from the clipboard (an image is saved as a PNG file and its path pasted)",
     ),
-    action(
+    variant(
         "new_tab",
         "Open a new tab (in the focused pane's directory with `tabs.inherit_directory`)",
     ),
-    action("close_tab", "Close the current tab with all its panes"),
-    action(
+    variant("close_tab", "Close the current tab with all its panes"),
+    variant(
         "close_pane",
         "Close the focused pane (and the tab, if it was the last pane)",
     ),
-    action("next_tab", "Switch to the next tab"),
-    action("previous_tab", "Switch to the previous tab"),
-    action("select_tab_1", "Go to tab 1"),
-    action("select_tab_2", "Go to tab 2"),
-    action("select_tab_3", "Go to tab 3"),
-    action("select_tab_4", "Go to tab 4"),
-    action("select_tab_5", "Go to tab 5"),
-    action("select_tab_6", "Go to tab 6"),
-    action("select_tab_7", "Go to tab 7"),
-    action("select_tab_8", "Go to tab 8"),
-    action("select_tab_9", "Go to tab 9"),
-    action("split_vertical", "Split the focused pane side by side"),
-    action("split_horizontal", "Split the focused pane top and bottom"),
-    action("focus_pane_left", "Move focus to the pane on the left"),
-    action("focus_pane_right", "Move focus to the pane on the right"),
-    action("focus_pane_up", "Move focus to the pane above"),
-    action("focus_pane_down", "Move focus to the pane below"),
-    action("resize_pane_left", "Move the focused pane's divider left"),
-    action("resize_pane_right", "Move the focused pane's divider right"),
-    action("resize_pane_up", "Move the focused pane's divider up"),
-    action("resize_pane_down", "Move the focused pane's divider down"),
-    action(
+    variant("next_tab", "Switch to the next tab"),
+    variant("previous_tab", "Switch to the previous tab"),
+    variant("select_tab_1", "Go to tab 1"),
+    variant("select_tab_2", "Go to tab 2"),
+    variant("select_tab_3", "Go to tab 3"),
+    variant("select_tab_4", "Go to tab 4"),
+    variant("select_tab_5", "Go to tab 5"),
+    variant("select_tab_6", "Go to tab 6"),
+    variant("select_tab_7", "Go to tab 7"),
+    variant("select_tab_8", "Go to tab 8"),
+    variant("select_tab_9", "Go to tab 9"),
+    variant("split_vertical", "Split the focused pane side by side"),
+    variant("split_horizontal", "Split the focused pane top and bottom"),
+    variant("focus_pane_left", "Move focus to the pane on the left"),
+    variant("focus_pane_right", "Move focus to the pane on the right"),
+    variant("focus_pane_up", "Move focus to the pane above"),
+    variant("focus_pane_down", "Move focus to the pane below"),
+    variant("resize_pane_left", "Move the focused pane's divider left"),
+    variant("resize_pane_right", "Move the focused pane's divider right"),
+    variant("resize_pane_up", "Move the focused pane's divider up"),
+    variant("resize_pane_down", "Move the focused pane's divider down"),
+    variant(
         "zoom_pane",
         "Toggle between the focused pane filling the tab and the split layout",
     ),
-    action("search", "Open the find bar"),
-    action("toggle_fullscreen", "Enter or leave full screen"),
-    action("scroll_page_up", "Scroll up by a page"),
-    action("scroll_page_down", "Scroll down by a page"),
-    action("scroll_line_up", "Scroll up by a line"),
-    action("scroll_line_down", "Scroll down by a line"),
-    action(
+    variant("search", "Open the find bar"),
+    variant("toggle_fullscreen", "Enter or leave full screen"),
+    variant("scroll_page_up", "Scroll up by a page"),
+    variant("scroll_page_down", "Scroll down by a page"),
+    variant("scroll_line_up", "Scroll up by a line"),
+    variant("scroll_line_down", "Scroll down by a line"),
+    variant(
         "increase_font_size",
         "Increase the font size for this session",
     ),
-    action(
+    variant(
         "decrease_font_size",
         "Decrease the font size for this session",
     ),
-    action(
+    variant(
         "reset_font_size",
         "Reset the font size to the configured one",
     ),
-    action("clear_scrollback", "Clear the history of the focused pane"),
-    action("reload_config", "Reload the config file"),
-    action("open_settings", "Open nuntio-config in a new tab"),
-    action("open_notes", "Open the notes in a new tab"),
-    action(
+    variant("clear_scrollback", "Clear the history of the focused pane"),
+    variant("reload_config", "Reload the config file"),
+    variant("open_settings", "Open nuntio-config in a new tab"),
+    variant("open_notes", "Open the notes in a new tab"),
+    variant(
         "open_notes_split",
         "Open the notes in a split next to the focused pane",
     ),
-    action("check_for_updates", "Look for a newer nuntio release now"),
-    action("open_actions_menu", "Open the menu of actions"),
-    action(
+    variant("check_for_updates", "Look for a newer nuntio release now"),
+    variant("open_actions_menu", "Open the menu of actions"),
+    variant(
         "open_shell_menu",
         "Open the menu of shells to start a new tab with",
     ),
-    action(
+    variant(
         "none",
         "Unbind the key combination; it goes to the terminal",
     ),

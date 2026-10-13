@@ -478,7 +478,7 @@ impl<'de> Deserialize<'de> for ThemeSelection {
 
 impl Default for ThemeSelection {
     fn default() -> Self {
-        Self::Single("iTerm2 Default".into())
+        Self::Single(crate::DEFAULT_THEME.into())
     }
 }
 
