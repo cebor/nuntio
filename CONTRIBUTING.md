@@ -21,15 +21,15 @@ cargo run -- --log-level debug    # verbose logging (or use RUST_LOG)
 
 ## Before opening a pull request
 
-CI runs these checks on Linux, macOS and Windows:
+CI runs these checks, formatting on Linux and the rest on Linux, macOS and Windows:
 
 ```sh
-cargo fmt --all
+cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-It also checks the minimum Rust version from `rust-version` in `Cargo.toml` (with and without the debug server) and builds the packages on all three systems; on Linux it builds the docs (`cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`), runs [`cargo deny check`](https://github.com/EmbarkStudios/cargo-deny) (licenses and advisories, configured in `deny.toml`) and builds the website.
+Clippy and tests also run with `--features nuntio/debug-server`. It also checks the minimum Rust version from `rust-version` in `Cargo.toml` (with and without the debug server) and builds the packages on all three systems; on Linux it builds the docs (`cargo doc --workspace --no-deps` with `RUSTDOCFLAGS=-D warnings`), runs [`cargo deny --all-features check`](https://github.com/EmbarkStudios/cargo-deny) (licenses and advisories, configured in `deny.toml`) and builds the website.
 
 For changes to rendering or terminal emulation, please also check the affected cases manually, e.g. `vim`, `htop`, `tmux`, `less`, colored `git log`, emoji/CJK output and box drawing (`tree`, TUI borders).
 
@@ -37,7 +37,8 @@ For changes to rendering or terminal emulation, please also check the affected c
 
 | Crate | Contents |
 |---|---|
-| `crates/nuntio` | Binaries `nuntio` and `nuntio-config`: event loop, app state, input |
+| `crates/nuntio` | Binaries `nuntio`, `nuntio-config` and `nuntio-apps`: event loop, app state, input |
+| `crates/nuntio-apps` | Terminal apps nuntio opens in panes (`notes`) |
 | `crates/nuntio-config` | Config schema, loading, themes |
 | `crates/nuntio-config-tui` | The `nuntio-config` terminal UI |
 | `crates/nuntio-render` | wgpu renderer |

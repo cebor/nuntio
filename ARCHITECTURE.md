@@ -425,7 +425,7 @@ Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 |macOS|`nuntio.app/Contents/MacOS/nuntio`|same directory|—|
 |Windows (zip, installer)|`nuntio.exe`|`.exe` next to it|`nuntio-wsl` (musl ELF) next to it|
 
-- CI ([`ci.yml`](.github/workflows/ci.yml)): fmt, clippy and tests on all three OSes, with and without `nuntio/debug-server`; MSRV; docs; cargo-deny; packages; site.
+- CI ([`ci.yml`](.github/workflows/ci.yml)): fmt on Linux; clippy and tests on all three OSes, with and without `nuntio/debug-server`; MSRV and packages on all three; docs, cargo-deny and site on Linux.
 - [`release.yml`](.github/workflows/release.yml) on `v*` tags: version check → packages → GitHub release with notes from `cargo xtask changelog` (`Changelog:` trailers) → Pages rebuild.
 
 ## Invariants
