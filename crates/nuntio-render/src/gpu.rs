@@ -2,27 +2,9 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use thiserror::Error;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
-#[derive(Debug, Error)]
-pub enum GpuError {
-    #[error("failed to create surface: {0}")]
-    Surface(#[from] wgpu::CreateSurfaceError),
-    #[error("no suitable GPU adapter: {0}")]
-    Adapter(#[from] wgpu::RequestAdapterError),
-    #[error("failed to create device: {0}")]
-    Device(#[from] wgpu::RequestDeviceError),
-    #[error("surface is not supported by the adapter")]
-    UnsupportedSurface,
-    #[error("failed to configure the surface: {0}")]
-    Configure(String),
-    #[error(transparent)]
-    Fonts(#[from] crate::font::NoFontsError),
-    #[cfg(feature = "capture")]
-    #[error("failed to capture the frame: {0}")]
-    Capture(String),
-}
+use crate::RenderError;
 
 /// Outcome of a frame, so the caller can decide whether to redraw again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +59,12 @@ impl GpuContext {
     /// platform supports it (the window must be created transparent too).
     /// With `software`, a CPU adapter is preferred; without one, the GPU is
     /// used anyway (see `software()`).
-    pub fn new<W>(window: W, width: u32, height: u32, options: GpuOptions) -> Result<Self, GpuError>
+    pub fn new<W>(
+        window: W,
+        width: u32,
+        height: u32,
+        options: GpuOptions,
+    ) -> Result<Self, RenderError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
@@ -105,7 +92,7 @@ impl GpuContext {
         height: u32,
         options: GpuOptions,
         descriptor: wgpu::InstanceDescriptor,
-    ) -> Result<Self, GpuError>
+    ) -> Result<Self, RenderError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
@@ -120,7 +107,7 @@ impl GpuContext {
         if let Some(layer) = composition_layer(&window, options.transparent) {
             // SAFETY: the visual is valid; the surface keeps its own reference.
             let context = unsafe { instance.create_surface_unsafe(layer.surface_target()) }
-                .map_err(GpuError::from)
+                .map_err(RenderError::from)
                 .and_then(|surface| {
                     Self::with_surface(instance.clone(), backends, surface, width, height, options)
                 });
@@ -145,7 +132,7 @@ impl GpuContext {
         width: u32,
         height: u32,
         options: GpuOptions,
-    ) -> Result<Self, GpuError> {
+    ) -> Result<Self, RenderError> {
         let GpuOptions {
             transparent,
             software,
@@ -183,7 +170,7 @@ impl GpuContext {
                 }
             }
         }
-        Err(failure.unwrap_or(GpuError::UnsupportedSurface))
+        Err(failure.unwrap_or(RenderError::UnsupportedSurface))
     }
 
     /// Configure the surface with `self.config`. `false` if it was refused;
@@ -286,7 +273,7 @@ impl GpuContext {
 
     /// Create the surface for `window` again after `release_surface`, with
     /// the same configuration, for when no successor could be created.
-    pub fn restore_surface<W>(&mut self, window: W) -> Result<(), GpuError>
+    pub fn restore_surface<W>(&mut self, window: W) -> Result<(), RenderError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
     {
@@ -304,7 +291,7 @@ impl GpuContext {
         &self,
         instance: &wgpu::Instance,
         window: W,
-    ) -> Result<wgpu::Surface<'static>, GpuError>
+    ) -> Result<wgpu::Surface<'static>, RenderError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
     {
@@ -428,7 +415,7 @@ fn adapters(
     surface: &wgpu::Surface<'_>,
     transparent: bool,
     software: bool,
-) -> Result<Vec<wgpu::Adapter>, GpuError> {
+) -> Result<Vec<wgpu::Adapter>, RenderError> {
     let preferred = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference:
             wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::LowPower),
@@ -511,7 +498,7 @@ fn setup(
     width: u32,
     height: u32,
     transparent: bool,
-) -> Result<(wgpu::Device, wgpu::Queue, wgpu::SurfaceConfiguration, bool), GpuError> {
+) -> Result<(wgpu::Device, wgpu::Queue, wgpu::SurfaceConfiguration, bool), RenderError> {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("nuntio"),
         required_limits:
@@ -526,7 +513,7 @@ fn setup(
     let max = device.limits().max_texture_dimension_2d;
     let mut config = surface
         .get_default_config(adapter, width.clamp(1, max), height.clamp(1, max))
-        .ok_or(GpuError::UnsupportedSurface)?;
+        .ok_or(RenderError::UnsupportedSurface)?;
     // Colors in the config/themes are sRGB values; blending in a non-sRGB
     // target keeps them exact, like other terminals do.
     // Only the plain 8-bit variant of the preferred format: the first
@@ -564,11 +551,11 @@ fn configure_checked(
     surface: &wgpu::Surface<'_>,
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
-) -> Result<(), GpuError> {
+) -> Result<(), RenderError> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     surface.configure(device, config);
     match pollster::block_on(scope.pop()) {
-        Some(err) => Err(GpuError::Configure(err.to_string())),
+        Some(err) => Err(RenderError::Configure(err.to_string())),
         None => Ok(()),
     }
 }

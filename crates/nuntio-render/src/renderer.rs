@@ -10,10 +10,11 @@ use nuntio_term::{
 use unicode_width::UnicodeWidthChar;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
+use crate::RenderError;
 use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::font::{CellMetrics, FaceStyle, Fonts, TextSize};
 use crate::frame::{Frame, Rect, UiRect, UiText};
-use crate::gpu::{FrameStatus, GpuContext, GpuError, GpuOptions, oom_checked};
+use crate::gpu::{FrameStatus, GpuContext, GpuOptions, oom_checked};
 use crate::{box_drawing, decoration};
 
 const KIND_SOLID: u32 = 0;
@@ -276,7 +277,7 @@ impl Renderer {
         font_family: Option<String>,
         font_size: f32,
         options: GpuOptions,
-    ) -> Result<Self, GpuError>
+    ) -> Result<Self, RenderError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
@@ -395,7 +396,7 @@ impl Renderer {
     /// Take the window's surface back after `release_surface`, when no new
     /// renderer could be created. `window` is the one this renderer was
     /// created for.
-    pub fn restore_surface<W>(&mut self, window: W) -> Result<(), GpuError>
+    pub fn restore_surface<W>(&mut self, window: W) -> Result<(), RenderError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
     {
@@ -505,9 +506,9 @@ impl Renderer {
     /// it back, as the window would show it. Doesn't need the surface, so
     /// it also works while the window is covered or minimized.
     #[cfg(feature = "capture")]
-    pub fn capture(&mut self, frame: &Frame) -> Result<Capture, GpuError> {
+    pub fn capture(&mut self, frame: &Frame) -> Result<Capture, RenderError> {
         if self.gpu.lost() {
-            return Err(GpuError::Capture("GPU device lost".into()));
+            return Err(RenderError::Capture("GPU device lost".into()));
         }
         self.prepare(frame);
         let device = &self.gpu.device;
@@ -516,7 +517,11 @@ impl Renderer {
         let bgra = match format {
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
-            other => return Err(GpuError::Capture(format!("unsupported format {other:?}"))),
+            other => {
+                return Err(RenderError::Capture(format!(
+                    "unsupported format {other:?}"
+                )));
+            }
         };
         let size = wgpu::Extent3d {
             width,
@@ -543,7 +548,7 @@ impl Renderer {
             });
             (texture, buffer)
         })
-        .ok_or_else(|| GpuError::Capture("out of memory".into()))?;
+        .ok_or_else(|| RenderError::Capture("out of memory".into()))?;
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("capture"),
@@ -569,14 +574,14 @@ impl Renderer {
         });
         device
             .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|err| GpuError::Capture(err.to_string()))?;
+            .map_err(|err| RenderError::Capture(err.to_string()))?;
         rx.recv()
-            .map_err(|err| GpuError::Capture(err.to_string()))?
-            .map_err(|err| GpuError::Capture(err.to_string()))?;
+            .map_err(|err| RenderError::Capture(err.to_string()))?
+            .map_err(|err| RenderError::Capture(err.to_string()))?;
         let rgba = {
             let data = buffer
                 .get_mapped_range(..)
-                .map_err(|err| GpuError::Capture(err.to_string()))?;
+                .map_err(|err| RenderError::Capture(err.to_string()))?;
             unpad_rows(&data, width, height, padded_row, bgra)
         };
         buffer.unmap();
