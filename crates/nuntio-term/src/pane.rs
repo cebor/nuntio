@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -22,6 +22,7 @@ use crate::palette::Palette;
 use crate::process;
 use crate::search::{self, Search};
 use crate::snapshot::Snapshot;
+use crate::sync::{lock, read, write};
 use crate::url::{self, Link};
 #[cfg(windows)]
 use crate::wsl_pipe::WslPipe;
@@ -178,11 +179,7 @@ pub(crate) struct Listener {
 impl Listener {
     /// The current grid and cell size.
     pub(crate) fn window_size(&self) -> WindowSize {
-        *self
-            .inner
-            .size
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        *lock(&self.inner.size)
     }
 
     /// Write a reply to the program, in order with pending color queries.
@@ -245,7 +242,7 @@ impl ListenerInner {
 
     /// Write `text` now, or queue it behind pending color queries.
     fn reply(&self, text: String) {
-        let mut queue = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queue = lock(&self.replies);
         if queue.is_empty() {
             self.write(text);
         } else if self.reply_budget.try_reserve(text.len()) {
@@ -257,7 +254,7 @@ impl ListenerInner {
     /// [`TermHandle::take_title`] is announced.
     fn set_title(&self, title: Option<String>) {
         let was_idle = {
-            let mut slot = self.title.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut slot = lock(&self.title);
             let was_idle = slot.is_none();
             *slot = Some(title);
             was_idle
@@ -310,7 +307,7 @@ impl EventListener for Listener {
                     return;
                 }
                 let first = {
-                    let mut queue = inner.replies.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut queue = lock(&inner.replies);
                     let first = queue.is_empty();
                     queue.push(Reply::Color(index, format));
                     first
@@ -323,7 +320,7 @@ impl EventListener for Listener {
                 TermEvent::ColorQuery
             }
             Event::TextAreaSizeRequest(format) => {
-                let size = *inner.size.lock().unwrap_or_else(PoisonError::into_inner);
+                let size = *lock(&inner.size);
                 return inner.reply(format(size));
             }
             // Programs may not read the clipboard (OSC 52 queries), as in
@@ -646,19 +643,10 @@ impl TermHandle {
 
     pub fn resize(&self, size: TermSize) {
         let size = size.clamped();
-        *self
-            .listener
-            .inner
-            .size
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = size.window_size();
+        *lock(&self.listener.inner.size) = size.window_size();
         let mut term = self.term.lock();
         let narrowing = (size.columns as usize) < term.columns();
-        let has_images = !self
-            .images
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_empty();
+        let has_images = !lock(&self.images).is_empty();
         if narrowing && has_images {
             // Image cells beyond the new width would reflow into strips.
             crop_columns(&mut term, size.columns as usize);
@@ -724,10 +712,7 @@ impl TermHandle {
 
     /// The directory the shell last reported with OSC 7 or OSC 9;9.
     pub fn reported_directory(&self) -> Option<ReportedDir> {
-        self.reported_dir
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.reported_dir).clone()
     }
 
     /// Change the terminal options. Less scrollback drops the oldest
@@ -739,12 +724,7 @@ impl TermHandle {
 
     /// Change the colors, e.g. after a theme switch.
     pub fn set_palette(&self, palette: Palette) {
-        *self
-            .listener
-            .inner
-            .palette
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = palette;
+        *write(&self.listener.inner.palette) = palette;
     }
 
     /// Terminal modes, e.g. for application cursor keys.
@@ -766,13 +746,8 @@ impl TermHandle {
             .wakeup_pending
             .store(false, Ordering::Release);
         let term = self.term.lock();
-        let palette = self
-            .listener
-            .inner
-            .palette
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        let images = self.images.lock().unwrap_or_else(PoisonError::into_inner);
+        let palette = read(&self.listener.inner.palette);
+        let images = lock(&self.images);
         out.refresh(&term, &palette, &images, &[], None);
     }
 
@@ -784,11 +759,11 @@ impl TermHandle {
         // Same lock order as the PTY thread: term, then the queue. The writes
         // happen under the queue lock so no reply can slip in between.
         let term = self.term.lock();
-        let mut queue = inner.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queue = lock(&inner.replies);
         if queue.is_empty() {
             return;
         }
-        let palette = inner.palette.read().unwrap_or_else(PoisonError::into_inner);
+        let palette = read(&inner.palette);
         for reply in queue.drain(..) {
             let (cost, text) = match reply {
                 Reply::Text(text) => (text.len(), text),
@@ -824,12 +799,7 @@ impl TermHandle {
     /// The title the program set or reset since the last call, if any:
     /// `Some(None)` is a reset. See [`TermEvent::TitleChanged`].
     pub fn take_title(&self) -> Option<Option<String>> {
-        self.listener
-            .inner
-            .title
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
+        lock(&self.listener.inner.title).take()
     }
 
     /// Like [`snapshot`](Self::snapshot), with the matches of `search`
@@ -849,13 +819,8 @@ impl TermHandle {
             .store(false, Ordering::Release);
         let term = self.term.lock();
         let matches = search::visible_matches(&term, search);
-        let palette = self
-            .listener
-            .inner
-            .palette
-            .read()
-            .unwrap_or_else(PoisonError::into_inner);
-        let images = self.images.lock().unwrap_or_else(PoisonError::into_inner);
+        let palette = read(&self.listener.inner.palette);
+        let images = lock(&self.images);
         out.refresh(&term, &palette, &images, &matches, search.current_in(&term));
     }
 

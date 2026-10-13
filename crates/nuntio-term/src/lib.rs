@@ -10,6 +10,7 @@ mod pane;
 mod process;
 mod search;
 mod snapshot;
+mod sync;
 mod url;
 #[cfg(windows)]
 mod wsl_pipe;

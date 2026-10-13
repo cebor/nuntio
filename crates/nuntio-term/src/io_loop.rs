@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,7 @@ use crate::image::{self, CellGeometry, ImageKey, ImageStore, TermImage};
 use crate::image_scan::{ImageRequest, ImageScanner, ScanEvent};
 use crate::osc_cwd::{CwdScanner, ReportedDir};
 use crate::pane::Listener;
+use crate::sync::lock;
 
 /// Size of the read buffer.
 const READ_BUFFER_SIZE: usize = 0x10_0000;
@@ -728,10 +729,6 @@ fn write_pending(
         }
     }
     Ok(())
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn decode(

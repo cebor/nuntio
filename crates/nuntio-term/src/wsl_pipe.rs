@@ -12,7 +12,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 
 use alacritty_terminal::event::WindowSize;
@@ -22,6 +22,7 @@ use polling::Poller;
 use polling::os::iocp::{CompletionPacket, PollerIocpExt};
 
 use crate::backend::BackendEvent;
+use crate::sync::{lock, unpoisoned};
 
 /// No console window for `wsl.exe`.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -97,22 +98,15 @@ impl State {
 }
 
 impl Shared {
-    fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     /// Append output, waking the loop if it had drained everything. Waits
     /// while the IO loop is `MAX_BUFFERED` behind.
     fn push(&self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
-        let mut state = self.lock();
+        let mut state = lock(&self.state);
         while !state.closed && state.output.len() >= MAX_BUFFERED {
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
+            state = unpoisoned(self.changed.wait(state));
         }
         if state.closed {
             return;
@@ -125,7 +119,7 @@ impl Shared {
     }
 
     fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut state = self.lock();
+        let mut state = lock(&self.state);
         if state.output.is_empty() {
             return Err(ErrorKind::WouldBlock.into());
         }
@@ -143,7 +137,7 @@ impl Shared {
 
     /// The pane went away: drop the output and release waiting readers.
     fn close(&self) {
-        let mut state = self.lock();
+        let mut state = lock(&self.state);
         state.closed = true;
         state.output = VecDeque::new();
         state.registration = None;
@@ -151,7 +145,7 @@ impl Shared {
     }
 
     fn reader_done(&self) {
-        let mut state = self.lock();
+        let mut state = lock(&self.state);
         state.open_readers -= 1;
         self.changed.notify_all();
     }
@@ -225,7 +219,7 @@ impl WslPipe {
                 filter.feed(&buf[..n], |bytes| out.push(bytes));
                 if !ready && filter.is_ready() {
                     ready = true;
-                    out.lock().ready = true;
+                    lock(&out.state).ready = true;
                 }
             }
             filter.finish(|bytes| out.push(bytes));
@@ -255,7 +249,7 @@ impl WslPipe {
                 .wait()
                 .inspect_err(|err| tracing::warn!("waiting for nuntio-wsl failed: {err}"))
                 .ok();
-            let mut state = waiter.lock();
+            let mut state = lock(&waiter.state);
             // All output comes before the exit, as long as the IO loop keeps
             // reading it.
             loop {
@@ -263,10 +257,7 @@ impl WslPipe {
                     break;
                 }
                 let consumed = state.consumed;
-                let (next, wait) = waiter
-                    .changed
-                    .wait_timeout(state, DRAIN_TIMEOUT)
-                    .unwrap_or_else(PoisonError::into_inner);
+                let (next, wait) = unpoisoned(waiter.changed.wait_timeout(state, DRAIN_TIMEOUT));
                 state = next;
                 if wait.timed_out() && state.consumed == consumed {
                     break;
@@ -293,7 +284,7 @@ impl WslPipe {
     /// Register for `interest`, replacing an earlier registration. Writes
     /// never block, so a writable interest is answered at once.
     pub(crate) fn register(&mut self, poller: &Arc<Poller>, interest: polling::Event) {
-        let mut state = self.shared.lock();
+        let mut state = lock(&self.shared.state);
         state.registration = Some((poller.clone(), interest));
         if interest.readable && state.pending() {
             state.wake();
@@ -306,7 +297,7 @@ impl WslPipe {
     }
 
     pub(crate) fn deregister(&mut self) {
-        self.shared.lock().registration = None;
+        lock(&self.shared.state).registration = None;
     }
 
     pub(crate) fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -341,7 +332,7 @@ impl WslPipe {
         if self.reported {
             return None;
         }
-        let state = self.shared.lock();
+        let state = lock(&self.shared.state);
         let status = state.exit?;
         let ready = state.ready;
         drop(state);
