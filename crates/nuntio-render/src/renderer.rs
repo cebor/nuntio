@@ -53,8 +53,14 @@ fn may_clear_atlas(overflow_frames: u32) -> bool {
 struct Instance {
     pos: [f32; 2],
     size: [f32; 2],
+    /// Atlas region x, y, width, height, normalized to 0..1, for mask, color
+    /// and image quads. Rounded rectangles and the window corner cutouts
+    /// keep their corner radius in pixels in `uv[0]`.
     uv: [f32; 4],
-    /// Images: their atlas region (x0, y0, x1, y1), normalized.
+    /// RGBA tint of solid, rounded and mask quads (a mask's alpha scales the
+    /// glyph coverage); unused by color and unscaled image quads. Scaled
+    /// images keep the bounds x0, y0, x1, y1 of their atlas region here,
+    /// normalized, which filtering must not read beyond.
     color: [f32; 4],
     kind: u32,
     _pad: [u32; 3],
