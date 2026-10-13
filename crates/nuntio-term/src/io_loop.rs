@@ -776,7 +776,10 @@ fn decode_serving(
             }
         }
         // A panic in the worker counts as a failed decode.
-        worker.join().ok().flatten()
+        worker.join().unwrap_or_else(|_| {
+            tracing::warn!("image decoder panicked");
+            None
+        })
     })
 }
 

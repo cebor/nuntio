@@ -166,14 +166,14 @@ fn load_config(path: Option<&Path>, mut warnings: Vec<String>) -> (Config, Optio
 /// platform's cache directory (`~/.cache` on Linux, `~/Library/Caches` on
 /// macOS). The previous run's log is kept as `nuntio.old.log`, so starting
 /// a second window doesn't wipe the first one's log.
-fn log_file() -> Option<std::fs::File> {
-    let path = log_path()?;
-    let dir = path.parent()?;
-    std::fs::create_dir_all(dir).ok()?;
+fn log_file() -> std::io::Result<std::fs::File> {
+    let path = log_path().ok_or_else(|| std::io::Error::other("no cache directory"))?;
+    let dir = path.parent().unwrap_or(&path);
+    std::fs::create_dir_all(dir)?;
     // Fails on Windows while another instance has it open; then it's
     // truncated like before.
     let _ = std::fs::rename(&path, dir.join("nuntio.old.log"));
-    std::fs::File::create(path).ok()
+    std::fs::File::create(path)
 }
 
 /// Where `log_file` writes.
@@ -329,10 +329,14 @@ fn run() -> Result<()> {
         .map(|state_file| state_file.with_file_name("nuntio.log"));
     #[cfg(not(feature = "debug-server"))]
     let debug_log: Option<PathBuf> = None;
+    let mut log_error = None;
     let file = match debug_log {
         Some(path) => Some(std::fs::File::create(path)?),
         // Started from a desktop launcher there is no terminal to log to.
-        None => (!std::io::stderr().is_terminal()).then(log_file).flatten(),
+        None if !std::io::stderr().is_terminal() => log_file()
+            .inspect_err(|err| log_error = Some(err.to_string()))
+            .ok(),
+        None => None,
     };
     match file {
         Some(file) => tracing_subscriber::fmt()
@@ -341,6 +345,9 @@ fn run() -> Result<()> {
             .with_writer(std::sync::Mutex::new(file))
             .init(),
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
+    if let Some(err) = log_error {
+        tracing::warn!("cannot write the log file: {err}");
     }
     install_panic_hook();
     if let Some(title) = &args.title {

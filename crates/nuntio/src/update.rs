@@ -235,11 +235,24 @@ impl State {
         Some(dirs::cache_dir()?.join("nuntio").join("update.toml"))
     }
 
+    /// The saved state; none (or an unusable one, with a warning) gives an
+    /// empty one.
     fn load() -> Self {
-        Self::path()
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|text| toml::from_str(&text).ok())
-            .unwrap_or_default()
+        let Some(path) = Self::path() else {
+            return Self::default();
+        };
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(err) => {
+                tracing::warn!("ignoring the update check state: {err}");
+                return Self::default();
+            }
+        };
+        toml::from_str(&text).unwrap_or_else(|err| {
+            tracing::warn!("ignoring the update check state: {err}");
+            Self::default()
+        })
     }
 
     fn save(&self) {

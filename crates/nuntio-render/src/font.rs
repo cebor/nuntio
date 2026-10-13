@@ -71,9 +71,14 @@ pub fn preload_fonts() {
 /// The preloaded font database, or a new one.
 fn font_system() -> FontSystem {
     let preloaded = PRELOADED.lock().unwrap_or_else(|e| e.into_inner()).take();
-    preloaded
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_else(FontSystem::new)
+    match preloaded.map(std::thread::JoinHandle::join) {
+        Some(Ok(system)) => system,
+        Some(Err(_)) => {
+            tracing::warn!("font preload thread panicked, loading fonts again");
+            FontSystem::new()
+        }
+        None => FontSystem::new(),
+    }
 }
 
 /// Size of small UI text (the status bar) relative to the terminal font.

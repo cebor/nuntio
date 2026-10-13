@@ -217,7 +217,10 @@ impl WslPipe {
                     Ok(0) => break,
                     Ok(n) => n,
                     Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-                    Err(_) => break,
+                    Err(err) => {
+                        tracing::debug!(%err, "wsl pipe stdout read ended");
+                        break;
+                    }
                 };
                 filter.feed(&buf[..n], |bytes| out.push(bytes));
                 if !ready && filter.is_ready() {
@@ -237,7 +240,10 @@ impl WslPipe {
                     Ok(0) => break,
                     Ok(n) => err.push(&buf[..n]),
                     Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                    Err(_) => break,
+                    Err(err) => {
+                        tracing::debug!(%err, "wsl pipe stderr read ended");
+                        break;
+                    }
                 }
             }
             err.reader_done();
@@ -245,7 +251,10 @@ impl WslPipe {
 
         let waiter = shared.clone();
         spawn_named("nuntio-wsl waiter", move || {
-            let status = child.wait().ok();
+            let status = child
+                .wait()
+                .inspect_err(|err| tracing::warn!("waiting for nuntio-wsl failed: {err}"))
+                .ok();
             let mut state = waiter.lock();
             // All output comes before the exit, as long as the IO loop keeps
             // reading it.
