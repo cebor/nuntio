@@ -5515,7 +5515,6 @@ dependencies = [
  "ico",
  "resvg",
  "serde_json",
- "tiny-skia 0.12.0",
  "windows-sys 0.61.2",
 ]
 

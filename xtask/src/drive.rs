@@ -13,8 +13,8 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use resvg::tiny_skia::{IntSize, Paint, Pixmap, PixmapPaint, Rect, Transform};
 use serde_json::{Value, json};
-use tiny_skia::{IntSize, Paint, Pixmap, PixmapPaint, Rect, Transform};
 
 use crate::{root, run};
 
@@ -745,14 +745,14 @@ fn contact_sheet(images: &[(usize, f64, Pixmap)]) -> Result<Pixmap> {
         rows * (thumb_h + GAP) + GAP,
     )
     .context("contact sheet too large")?;
-    sheet.fill(tiny_skia::Color::from_rgba8(40, 40, 40, 255));
+    sheet.fill(resvg::tiny_skia::Color::from_rgba8(40, 40, 40, 255));
     for (n, (number, _, image)) in images.iter().enumerate() {
         let (column, row) = (n as u32 % columns, n as u32 / columns);
         let x = GAP + column * (thumb_w + GAP);
         let y = GAP + row * (thumb_h + GAP);
         let transform = Transform::from_row(scale, 0.0, 0.0, scale, x as f32, y as f32);
         let paint = PixmapPaint {
-            quality: tiny_skia::FilterQuality::Bilinear,
+            quality: resvg::tiny_skia::FilterQuality::Bilinear,
             ..PixmapPaint::default()
         };
         sheet.draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
