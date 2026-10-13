@@ -3,62 +3,13 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nuntio_term::{
-    Program, Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize, Transport,
-};
+use nuntio_term::{Program, Shell, SpawnOptions, TermEvent, TermHandle, TermSize, Transport};
 
-const SIZE: TermSize = TermSize {
-    columns: 40,
-    lines: 5,
-    cell_width: 8,
-    cell_height: 16,
-};
-
-const OPTIONS: TermOptions = TermOptions {
-    scrollback: 100,
-    clipboard_write: true,
-    kitty_keyboard: true,
-};
+mod common;
+use common::{SIZE, blue_pixel_png, line_text, shell, spawn_handle, start, wait_for_exit};
 
 fn spawn(program: &str, args: &[&str]) -> (TermHandle, mpsc::Receiver<TermEvent>) {
-    let (tx, rx) = mpsc::channel();
-    let handle = spawn_with(program, args, move |event| {
-        let _ = tx.send(event);
-    });
-    (handle, rx)
-}
-
-fn spawn_with(
-    program: &str,
-    args: &[&str],
-    callback: impl Fn(TermEvent) + Send + Sync + 'static,
-) -> TermHandle {
-    spawn_via(program, args, Transport::Pty, callback)
-}
-
-fn spawn_via(
-    program: &str,
-    args: &[&str],
-    transport: Transport,
-    callback: impl Fn(TermEvent) + Send + Sync + 'static,
-) -> TermHandle {
-    let options = SpawnOptions {
-        program: Program::Command(shell(program, args)),
-        working_directory: None,
-        term: OPTIONS,
-        palette: Default::default(),
-        env: vec![],
-        window_id: None,
-        transport,
-    };
-    TermHandle::spawn(options, SIZE, callback).expect("spawn")
-}
-
-fn shell(program: &str, args: &[&str]) -> Shell {
-    Shell {
-        program: program.into(),
-        args: args.iter().map(|&a| a.into()).collect(),
-    }
+    start(common::options(Program::Command(shell(program, args))))
 }
 
 /// Like [`spawn`], over the pipes nuntio-wsl uses.
@@ -67,40 +18,10 @@ fn spawn_helper(
     args: &[&str],
     fallback: Shell,
 ) -> (TermHandle, mpsc::Receiver<TermEvent>) {
-    let (tx, rx) = mpsc::channel();
-    let handle = spawn_via(
-        program,
-        args,
-        Transport::WslHelper { fallback },
-        move |event| {
-            let _ = tx.send(event);
-        },
-    );
-    (handle, rx)
-}
-
-/// ConPTY and PowerShell start slowly, hence the generous timeout.
-fn wait_for_exit(rx: &mpsc::Receiver<TermEvent>) -> Vec<TermEvent> {
-    let mut events = Vec::new();
-    loop {
-        let event = rx
-            .recv_timeout(Duration::from_secs(15))
-            .expect("program did not exit");
-        let exit = event == TermEvent::Exit;
-        events.push(event);
-        if exit {
-            return events;
-        }
-    }
-}
-
-fn line_text(handle: &TermHandle, line: usize) -> String {
-    let snapshot = handle.snapshot();
-    (0..snapshot.columns)
-        .map(|c| snapshot.cell(c, line).c)
-        .collect::<String>()
-        .trim_end()
-        .into()
+    start(SpawnOptions {
+        transport: Transport::WslHelper { fallback },
+        ..common::options(Program::Command(shell(program, args)))
+    })
 }
 
 /// ConPTY may position output below a clear, so every line is searched.
@@ -147,13 +68,7 @@ fn resize_is_applied() {
 
 #[test]
 fn inline_image_passes_through_conpty() {
-    use base64::Engine;
-
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
-        .write_to(&mut png, image::ImageFormat::Png)
-        .unwrap();
-    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let data = blue_pixel_png();
     let (handle, rx) = spawn(
         "powershell.exe",
         &[
@@ -181,13 +96,15 @@ fn inline_image_passes_through_conpty() {
 #[test]
 fn large_output_is_read_without_input() {
     // A slow listener lets the output pile up between read passes.
-    let handle = spawn_with(
-        "powershell.exe",
-        &[
-            "-NoProfile",
-            "-Command",
-            "[Console]::Write(\"$([char]27)]1337;File=inline=0:$('A' * 300000)$([char]7)\"); Start-Sleep -Seconds 1; [Console]::Write('END'); Start-Sleep -Seconds 30",
-        ],
+    let handle = spawn_handle(
+        common::options(Program::Command(shell(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-Command",
+                "[Console]::Write(\"$([char]27)]1337;File=inline=0:$('A' * 300000)$([char]7)\"); Start-Sleep -Seconds 1; [Console]::Write('END'); Start-Sleep -Seconds 30",
+            ],
+        ))),
         |event| {
             if event == TermEvent::Wakeup {
                 std::thread::sleep(Duration::from_millis(200));

@@ -4,26 +4,16 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use nuntio_term::{
-    GridPoint, Program, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle,
-    TermMode, TermOptions, TermSize, Transport,
+    GridPoint, Program, ReportedDir, SelectionKind, SpawnOptions, TermEvent, TermHandle, TermMode,
+    TermOptions, TermSize,
 };
 
-const SIZE: TermSize = TermSize {
-    columns: 40,
-    lines: 5,
-    cell_width: 8,
-    cell_height: 16,
-};
+mod common;
+use common::{OPTIONS, SIZE, blue_pixel_png, line_text, sh, spawn_handle, start, wait_for_exit};
 
 fn spawn(script: &str) -> (TermHandle, mpsc::Receiver<TermEvent>) {
     spawn_with_env(script, Vec::new())
 }
-
-const OPTIONS: TermOptions = TermOptions {
-    scrollback: 100,
-    clipboard_write: true,
-    kitty_keyboard: true,
-};
 
 fn spawn_with_env(
     script: &str,
@@ -42,49 +32,10 @@ fn spawn_with(
 
 fn options(script: &str, env: Vec<(String, String)>, term: TermOptions) -> SpawnOptions {
     SpawnOptions {
-        program: Program::Command(Shell {
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), script.into()],
-        }),
-        working_directory: None,
-        term,
-        palette: Default::default(),
         env,
-        window_id: None,
-        transport: Transport::Pty,
+        term,
+        ..common::options(Program::Command(sh(script)))
     }
-}
-
-fn start(options: SpawnOptions) -> (TermHandle, mpsc::Receiver<TermEvent>) {
-    let (tx, rx) = mpsc::channel();
-    let handle = TermHandle::spawn(options, SIZE, move |event| {
-        let _ = tx.send(event);
-    })
-    .expect("spawn");
-    (handle, rx)
-}
-
-fn wait_for_exit(rx: &mpsc::Receiver<TermEvent>) -> Vec<TermEvent> {
-    let mut events = Vec::new();
-    loop {
-        let event = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("shell did not exit");
-        let exit = event == TermEvent::Exit;
-        events.push(event);
-        if exit {
-            return events;
-        }
-    }
-}
-
-fn line_text(handle: &TermHandle, line: usize) -> String {
-    let snapshot = handle.snapshot();
-    (0..snapshot.columns)
-        .map(|c| snapshot.cell(c, line).c)
-        .collect::<String>()
-        .trim_end()
-        .into()
 }
 
 #[test]
@@ -118,13 +69,7 @@ fn omp_is_told_to_use_inline_images() {
 
 #[test]
 fn inline_image_is_placed_at_the_cursor() {
-    use base64::Engine;
-
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
-        .write_to(&mut png, image::ImageFormat::Png)
-        .unwrap();
-    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let data = blue_pixel_png();
     let (handle, rx) = spawn(&format!(
         "printf '\\033]1337;File=inline=1;width=2;height=1:%s\\007X' '{data}'"
     ));
@@ -142,13 +87,7 @@ fn inline_image_is_placed_at_the_cursor() {
 
 #[test]
 fn image_drawn_up_past_the_top_is_cropped() {
-    use base64::Engine;
-
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
-        .write_to(&mut png, image::ImageFormat::Png)
-        .unwrap();
-    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let data = blue_pixel_png();
     // As omp draws images: save the cursor on the last row, move up to the
     // top, here past line 0. `\033\067` is `ESC 7`; `\0337` would be octal.
     let (handle, rx) = spawn(&format!(
@@ -175,13 +114,7 @@ const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
 /// the wait past it, and `None` says so.
 fn image_in_a_synchronized_update()
 -> Option<(TermHandle, mpsc::Receiver<TermEvent>, Vec<TermEvent>)> {
-    use base64::Engine;
-
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
-        .write_to(&mut png, image::ImageFormat::Png)
-        .unwrap();
-    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let data = blue_pixel_png();
     // One printf: the update must not begin long before the image.
     let (handle, rx) = spawn(&format!(
         "printf '\\033[?2026h\\033]1337;File=inline=1;width=2;height=1:%s\\007' '{data}'; \
@@ -378,23 +311,10 @@ fn reported_directory() {
 #[test]
 #[cfg(target_os = "macos")]
 fn login_shell_is_seen_behind_login() {
-    let (tx, _rx) = mpsc::channel();
-    let options = SpawnOptions {
-        program: Program::Login(Shell {
-            program: "/bin/zsh".into(),
-            args: vec!["-f".into()],
-        }),
+    let (handle, _rx) = start(SpawnOptions {
         working_directory: Some("/tmp".into()),
-        term: OPTIONS,
-        palette: Default::default(),
-        env: Vec::new(),
-        window_id: None,
-        transport: Transport::Pty,
-    };
-    let handle = TermHandle::spawn(options, SIZE, move |event| {
-        let _ = tx.send(event);
-    })
-    .expect("spawn");
+        ..common::options(Program::Login(common::shell("/bin/zsh", &["-f"])))
+    });
     let wait_until = |done: &dyn Fn() -> bool| {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !done() && std::time::Instant::now() < deadline {
@@ -672,15 +592,13 @@ fn closing_a_pane_releases_the_grid_before_the_child_exits() {
     let probe = Arc::new(());
     let held = probe.clone();
     let (tx, _rx) = mpsc::channel();
-    let handle = TermHandle::spawn(
+    let handle = spawn_handle(
         options("trap '' HUP; sleep 8", Vec::new(), OPTIONS),
-        SIZE,
         move |event| {
             let _keep = &held;
             let _ = tx.send(event);
         },
-    )
-    .expect("spawn");
+    );
     std::thread::sleep(Duration::from_millis(300));
     drop(handle);
 
@@ -696,17 +614,15 @@ fn closing_a_pane_releases_the_grid_before_the_child_exits() {
 #[test]
 fn a_panic_on_the_pty_thread_still_closes_the_pane() {
     let (tx, rx) = mpsc::channel();
-    let _handle = TermHandle::spawn(
+    let _handle = spawn_handle(
         options("printf '\\007'; sleep 30", Vec::new(), OPTIONS),
-        SIZE,
         move |event| {
             if event == TermEvent::Bell {
                 panic!("the callback fails");
             }
             let _ = tx.send(event);
         },
-    )
-    .expect("spawn");
+    );
     // Only the exit guard can deliver Exit before the sleep ends.
     let events = wait_for_exit(&rx);
     assert_eq!(events.last(), Some(&TermEvent::Exit));

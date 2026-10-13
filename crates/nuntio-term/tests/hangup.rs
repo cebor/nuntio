@@ -2,40 +2,12 @@
 //! so no other pane may run in this process.
 #![cfg(target_os = "linux")]
 
-use std::sync::mpsc;
 use std::time::Duration;
 
-use nuntio_term::{
-    Program, Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize, Transport,
-};
+use nuntio_term::Program;
 
-const SIZE: TermSize = TermSize {
-    columns: 40,
-    lines: 5,
-    cell_width: 8,
-    cell_height: 16,
-};
-
-const OPTIONS: TermOptions = TermOptions {
-    scrollback: 100,
-    clipboard_write: true,
-    kitty_keyboard: true,
-};
-
-fn options(script: &str) -> SpawnOptions {
-    SpawnOptions {
-        program: Program::Command(Shell {
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), script.into()],
-        }),
-        working_directory: None,
-        term: OPTIONS,
-        palette: Default::default(),
-        env: Vec::new(),
-        window_id: None,
-        transport: Transport::Pty,
-    }
-}
+mod common;
+use common::{sh, start, wait_for_exit};
 
 /// Clock ticks of user and system time used by all "PTY reader" threads.
 fn reader_ticks() -> u64 {
@@ -62,16 +34,10 @@ fn reader_ticks() -> u64 {
 
 #[test]
 fn hung_up_pty_does_not_spin() {
-    let (tx, rx) = mpsc::channel();
     // The child closes the slave side but keeps running.
-    let _handle = TermHandle::spawn(
-        options("exec sleep 3 </dev/null >/dev/null 2>&1"),
-        SIZE,
-        move |event| {
-            let _ = tx.send(event);
-        },
-    )
-    .expect("spawn");
+    let (_handle, rx) = start(common::options(Program::Command(sh(
+        "exec sleep 3 </dev/null >/dev/null 2>&1",
+    ))));
 
     std::thread::sleep(Duration::from_millis(500));
     let before = reader_ticks();
@@ -80,12 +46,5 @@ fn hung_up_pty_does_not_spin() {
     assert!(used < 20, "the PTY thread used {used} ticks in a second");
 
     // The exit still arrives.
-    loop {
-        let event = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("shell did not exit");
-        if event == TermEvent::Exit {
-            break;
-        }
-    }
+    wait_for_exit(&rx);
 }

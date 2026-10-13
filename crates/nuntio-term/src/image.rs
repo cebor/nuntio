@@ -741,7 +741,15 @@ mod tests {
     };
 
     fn png(width: u32, height: u32) -> Vec<u8> {
-        let image = RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 255]));
+        encode_png(&RgbaImage::from_pixel(
+            width,
+            height,
+            image::Rgba([255, 0, 0, 255]),
+        ))
+    }
+
+    /// `image` as the base64 payload of an inline image.
+    fn encode_png(image: &RgbaImage) -> Vec<u8> {
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, ImageFormat::Png).unwrap();
         base64::engine::general_purpose::STANDARD
@@ -1232,11 +1240,7 @@ mod tests {
         let mut source = RgbaImage::new(2, 1);
         source.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
         source.put_pixel(1, 0, image::Rgba([0, 0, 0, 0]));
-        let mut bytes = Cursor::new(Vec::new());
-        source.write_to(&mut bytes, ImageFormat::Png).unwrap();
-        let payload = base64::engine::general_purpose::STANDARD
-            .encode(bytes.into_inner())
-            .into_bytes();
+        let payload = encode_png(&source);
         let image = decode_with(
             "inline=1;width=1px;height=1px;preserveAspectRatio=0",
             payload,
