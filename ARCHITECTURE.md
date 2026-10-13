@@ -206,7 +206,7 @@ flowchart TD
   1. The `clipboard-read` thread reads the clipboard and sends `UserEvent::Paste`.
   2. `confirm_paste`: multi-line text without bracketed paste needs a second paste to confirm.
   3. `TermHandle::paste` sends it.
-  4. Images go to `PastedImages`, which writes a PNG and pastes its path, quoted by `shell_words::PathSyntax`.
+  4. Images go to `PastedImages`, which writes a PNG and pastes its path, quoted by `shell_words::path_word` (as are dropped files).
 - Terminal replies (DA, `CSI 16 t`, OSC color queries) go through the `Listener` reply queue, capped by `ReplyBudget`. Color queries are answered on the main thread (`answer_color_queries`); later replies queue behind them to keep the order.
 
 ## Rendering

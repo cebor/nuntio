@@ -20,6 +20,7 @@ use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::pane_tree::{Direction, Layout, PaneTree};
 use crate::search_bar::SearchBar;
+use crate::shell_words::PathSyntax;
 use crate::shells::ShellChoice;
 use crate::status_bar::{Stats, StatusBar};
 use crate::style::{UiMetrics, hairline};
@@ -157,6 +158,11 @@ impl Pane {
             resized: None,
             title_cache: None,
         }
+    }
+
+    /// How the shell in this pane reads a path.
+    pub fn path_syntax(&self) -> PathSyntax {
+        PathSyntax::of(self.wsl.is_some(), &self.term.process_name())
     }
 
     /// Set the application's title (OSC 0/2); `None` resets it. Returns

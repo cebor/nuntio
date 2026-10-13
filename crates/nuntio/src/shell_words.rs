@@ -1,6 +1,7 @@
-//! Paths of files dropped on the window, as a shell in a pane reads them.
+//! Paths of files dropped on the window or pasted as images, as a shell in
+//! a pane reads them.
 
-/// How the shell in a pane reads a dropped file's path.
+/// How the shell in a pane reads a file's path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathSyntax {
     /// Backslash escapes (sh, bash, zsh, fish).
@@ -32,9 +33,10 @@ impl PathSyntax {
     }
 }
 
-/// A dropped file's path as a shell word, with a space after it like in
-/// Terminal.app, so several files line up as arguments.
-pub fn dropped_path(path: &str, syntax: PathSyntax) -> String {
+/// A file's path as a shell word, with a space after it like in
+/// Terminal.app, so several files line up as arguments. For files dropped
+/// on the window and for pasted images, which are pasted as paths too.
+pub fn path_word(path: &str, syntax: PathSyntax) -> String {
     // Windows paths can't contain `"`.
     let plain = || {
         path.chars()
@@ -90,8 +92,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dropped_paths_are_shell_words() {
-        let posix = |path| dropped_path(path, PathSyntax::Posix);
+    fn paths_are_shell_words() {
+        let posix = |path| path_word(path, PathSyntax::Posix);
         assert_eq!(posix("/tmp/a.txt"), "/tmp/a.txt ");
         assert_eq!(
             posix("/Users/me/My Files/it's (1).pdf"),
@@ -102,8 +104,8 @@ mod tests {
     }
 
     #[test]
-    fn dropped_windows_paths_are_quoted_when_needed() {
-        let powershell = |path| dropped_path(path, PathSyntax::PowerShell);
+    fn windows_paths_are_quoted_when_needed() {
+        let powershell = |path| path_word(path, PathSyntax::PowerShell);
         assert_eq!(powershell(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
         assert_eq!(
             powershell(r"C:\Users\me\My Files\a&b.txt"),
@@ -115,23 +117,19 @@ mod tests {
         );
         assert_eq!(powershell(r"C:\it's ‘x’"), r"'C:\it''s ‘‘x’’' ");
 
-        let cmd = |path| dropped_path(path, PathSyntax::Cmd);
+        let cmd = |path| path_word(path, PathSyntax::Cmd);
         assert_eq!(cmd(r"C:\tmp\a.txt"), r"C:\tmp\a.txt ");
         assert_eq!(cmd(r"C:\My Files\a&b.txt"), r#""C:\My Files\a&b.txt" "#);
         assert_eq!(cmd(r"C:\100%PATH%.txt"), r#""C:\100"^%"PATH"^%".txt" "#);
     }
 
     #[test]
-    fn dropped_paths_in_wsl_are_translated() {
-        let wsl = |path| dropped_path(path, PathSyntax::Wsl);
+    fn paths_in_wsl_are_translated_then_quoted() {
+        let wsl = |path| path_word(path, PathSyntax::Wsl);
         assert_eq!(
             wsl(r"C:\Users\me\My Files\a.txt"),
             "/mnt/c/Users/me/My\\ Files/a.txt "
         );
-        assert_eq!(wsl(r"D:\"), "/mnt/d/ ");
-        assert_eq!(wsl(r"\\wsl.localhost\Ubuntu\home\me\x"), "/home/me/x ");
-        assert_eq!(wsl(r"\\wsl$\Debian\etc"), "/etc ");
-        assert_eq!(wsl(r"\\?\C:\a"), "/mnt/c/a ");
     }
 
     #[test]

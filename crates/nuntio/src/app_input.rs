@@ -23,7 +23,7 @@ use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
 use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
 use crate::pane_tree::Axis;
-use crate::shell_words::{PathSyntax, dropped_path};
+use crate::shell_words::path_word;
 use crate::shells::{self, Launch};
 use crate::tab_bar::BarHit;
 use crate::tabs::Placement;
@@ -344,9 +344,8 @@ impl Core {
                 match self.pasted_images.save(&image) {
                     Ok(path) => {
                         if let Some(target) = state.pane(pane) {
-                            let syntax =
-                                PathSyntax::of(target.wsl.is_some(), &target.term.process_name());
-                            self.paste(state, pane, dropped_path(&path.to_string_lossy(), syntax));
+                            let word = path_word(&path.to_string_lossy(), target.path_syntax());
+                            self.paste(state, pane, word);
                         }
                     }
                     Err(err) => {
@@ -401,10 +400,8 @@ impl Core {
             state.focus_pane(id);
         }
         let pane = state.content().focused_pane();
-        let syntax = PathSyntax::of(pane.wsl.is_some(), &pane.term.process_name());
-        state
-            .term()
-            .paste(&dropped_path(&path.to_string_lossy(), syntax));
+        let word = path_word(&path.to_string_lossy(), pane.path_syntax());
+        state.term().paste(&word);
         state.window.request_redraw();
     }
 
