@@ -30,6 +30,13 @@ use crate::tabs::Placement;
 use crate::update;
 use crate::window::{TabDrag, WindowState};
 
+/// What a window drag does.
+#[derive(Debug, Clone, Copy)]
+enum Grab {
+    Move,
+    Resize(ResizeDirection),
+}
+
 /// Why pasting `text` without bracketed paste needs confirmation: each
 /// line break works like Enter, so the shell runs the lines at once.
 fn paste_warning(text: &str) -> Option<String> {
@@ -714,6 +721,21 @@ impl Core {
         true
     }
 
+    /// Hand the pointer to the window manager to move or resize the window.
+    /// Input injected by the debug server never grabs the real pointer.
+    fn grab_window(&self, state: &WindowState, grab: Grab) {
+        if self.synthetic_input {
+            return;
+        }
+        let result = match grab {
+            Grab::Move => state.window.drag_window(),
+            Grab::Resize(direction) => state.window.drag_resize_window(direction),
+        };
+        if let Err(err) = result {
+            tracing::debug!("the window manager refused the window drag: {err}");
+        }
+    }
+
     /// A press on the edges of an undecorated window or on the tab bar.
     /// Returns whether it was one.
     fn press_window_chrome(
@@ -725,9 +747,7 @@ impl Core {
         if button == Button::Left
             && let Some(direction) = state.resize_edge(pos)
         {
-            if !self.synthetic_input {
-                let _ = state.window.drag_resize_window(direction);
-            }
+            self.grab_window(state, Grab::Resize(direction));
             return true;
         }
         let hit = state
@@ -778,8 +798,8 @@ impl Core {
                     state.toggle_maximized();
                 } else {
                     state.mouse.last_bar_click = Some(now);
-                    if state.press_drag_area(pos) && !self.synthetic_input {
-                        let _ = state.window.drag_window();
+                    if state.press_drag_area(pos) {
+                        self.grab_window(state, Grab::Move);
                     }
                 }
             }
@@ -830,8 +850,8 @@ impl Core {
             return;
         }
         if state.mouse.fullscreen_drag.is_some() {
-            if state.drag_from_fullscreen(pos) && !self.synthetic_input {
-                let _ = state.window.drag_window();
+            if state.drag_from_fullscreen(pos) {
+                self.grab_window(state, Grab::Move);
             }
             return;
         }
