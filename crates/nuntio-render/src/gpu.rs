@@ -70,7 +70,7 @@ impl GpuContext {
     {
         let descriptor =
             || wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
-        if std::env::var_os("WGPU_BACKEND").is_some() {
+        if backend_forced() {
             return Self::create(window.clone(), width, height, options, descriptor());
         }
         // Probing GL initializes EGL, which makes Mesa print errors on
@@ -446,7 +446,7 @@ fn adapters(
     // window. Its HWND swapchain has no alpha, though, and transparent
     // windows get no DirectComposition layer (see `composition_layer`), so
     // they keep Vulkan. `WGPU_BACKEND` limits the backends and decides by itself.
-    let prefer_dx12 = cfg!(windows) && !transparent && std::env::var_os("WGPU_BACKEND").is_none();
+    let prefer_dx12 = cfg!(windows) && !transparent && !backend_forced();
     let rank = |adapter: &wgpu::Adapter| {
         let info = adapter.get_info();
         let named = wanted
@@ -469,6 +469,12 @@ fn adapters(
     Ok(adapters)
 }
 
+/// Whether `WGPU_BACKEND` limits the backends, in which case the choice of
+/// backend is the user's and not ours.
+fn backend_forced() -> bool {
+    std::env::var_os("WGPU_BACKEND").is_some()
+}
+
 /// A DirectComposition layer for `window`, if DX12 is to present through
 /// one: not for transparent windows, which keep Vulkan (see `adapters`), and
 /// not when `WGPU_BACKEND` chooses the backends.
@@ -479,7 +485,7 @@ fn composition_layer(
 ) -> Option<crate::dcomp::Layer> {
     use wgpu::rwh::RawWindowHandle;
 
-    if transparent || std::env::var_os("WGPU_BACKEND").is_some() {
+    if transparent || backend_forced() {
         return None;
     }
     let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
