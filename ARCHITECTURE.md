@@ -280,7 +280,7 @@ Close:
 1. `ImageScanner` ([`image_scan.rs`](crates/nuntio-term/src/image_scan.rs)) cuts OSC 1337 `File=` sequences out of the stream before the parser sees them.
 2. `parse_args` → `decode` runs on a scoped worker thread: base64, the `image` crate, EXIF orientation, scaling to cells, premultiplied RGBA.
 3. The per-pane `ImageStore` dedupes by `ImageKey` and evicts by `IMAGE_MEMORY_BUDGET` / `IMAGE_MEMORY_LIMIT`.
-4. `image::place` ([`image.rs`](crates/nuntio-term/src/image.rs)) writes placeholder cells: char `PLACEHOLDER` (U+10EEEE), fg = the 24-bit image id, and two zero-width marks for row and column. Images therefore scroll, reflow, clear and get overwritten like text.
+4. `image::place` ([`image.rs`](crates/nuntio-term/src/image.rs)) writes placeholder cells: char `PLACEHOLDER` (U+10EEEE), fg = the 24-bit image id, and two zero-width marks for row and column. Images therefore scroll, reflow, clear and get overwritten like text. If `ESC 7 CSI n A` comes right before the image (omp draws images upward from their last row), rows that would lie above line 0 are left out (`rows_above_screen`) instead of shifting the whole image down.
 5. `Snapshot.images` (runs of `ImagePiece`) feeds the renderer's image atlas.
 6. `CSI 16 t` is answered with the cell size. Copy (`strip_image_text`) and URL detection skip placeholder cells.
 

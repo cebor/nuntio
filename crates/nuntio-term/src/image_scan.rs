@@ -10,6 +10,9 @@ const CSI_CELL_SIZE: &[u8] = b"\x1b[16t";
 const MAX_ARGS: usize = 4096;
 /// Largest base64 payload that is kept; larger images are dropped.
 const MAX_PAYLOAD: usize = 64 << 20;
+/// Text bytes kept to recognize `ESC 7 CSI n A` right before an image:
+/// `ESC 7 ESC [`, 10 digits and `A` are 15 bytes.
+const TAIL_LEN: usize = 16;
 
 const BEL: u8 = 0x07;
 const ESC: u8 = 0x1b;
@@ -30,6 +33,10 @@ pub(crate) struct ImageRequest {
     pub args: Vec<u8>,
     /// The base64 data, without whitespace.
     pub payload: Vec<u8>,
+    /// Rows the program moved the cursor up right after saving it
+    /// (`ESC 7 CSI n A`), directly before the image: it draws the image
+    /// upward from the saved line, as omp does.
+    pub cursor_up: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +65,9 @@ pub(crate) struct ImageScanner {
     held: Vec<u8>,
     args: Vec<u8>,
     payload: Vec<u8>,
+    /// The last text bytes passed on, up to `TAIL_LEN`, cleared by any
+    /// other event.
+    tail: Vec<u8>,
 }
 
 impl ImageScanner {
@@ -70,6 +80,7 @@ impl ImageScanner {
                     .position(|&b| b == ESC)
                     .map_or(input.len(), |p| i + p);
                 if end > i {
+                    remember(&mut self.tail, &input[i..end]);
                     on_event(ScanEvent::Text(&input[i..end]));
                 }
                 if end == input.len() {
@@ -142,6 +153,7 @@ impl ImageScanner {
         if self.held == CSI_CELL_SIZE {
             self.held.clear();
             self.state = State::Ground;
+            self.tail.clear();
             on_event(ScanEvent::CellSizeQuery);
         } else if self.held == OSC_FILE {
             self.held.clear();
@@ -150,10 +162,12 @@ impl ImageScanner {
             // No match: pass the bytes on. A new ESC may start a sequence.
             if b == ESC {
                 self.held.pop();
+                remember(&mut self.tail, &self.held);
                 on_event(ScanEvent::Text(&self.held));
                 self.held.clear();
                 self.held.push(ESC);
             } else {
+                remember(&mut self.tail, &self.held);
                 on_event(ScanEvent::Text(&self.held));
                 self.held.clear();
                 self.state = State::Ground;
@@ -175,7 +189,9 @@ impl ImageScanner {
         let request = ImageRequest {
             args: std::mem::take(&mut self.args),
             payload: std::mem::take(&mut self.payload),
+            cursor_up: saved_cursor_up(&self.tail),
         };
+        self.tail.clear();
         self.state = State::Ground;
         on_event(ScanEvent::Image(request));
     }
@@ -185,7 +201,36 @@ impl ImageScanner {
         self.args = Vec::new();
         self.payload = Vec::new();
         self.state = State::Ground;
+        self.tail.clear();
     }
+}
+
+/// Append `text` to `tail`, keeping only the last `TAIL_LEN` bytes.
+fn remember(tail: &mut Vec<u8>, text: &[u8]) {
+    if text.len() >= TAIL_LEN {
+        tail.clear();
+        tail.extend_from_slice(&text[text.len() - TAIL_LEN..]);
+    } else {
+        tail.extend_from_slice(text);
+        let excess = tail.len().saturating_sub(TAIL_LEN);
+        tail.drain(..excess);
+    }
+}
+
+/// The rows of `ESC 7 CSI n A` if `tail` ends with it. A missing or zero
+/// count moves one row, as CUU does.
+fn saved_cursor_up(tail: &[u8]) -> Option<u32> {
+    let rest = tail.strip_suffix(b"A")?;
+    let digits = rest.len() - rest.iter().rev().take_while(|b| b.is_ascii_digit()).count();
+    let (prefix, count) = rest.split_at(digits);
+    if !prefix.ends_with(b"\x1b7\x1b[") || count.len() > 10 {
+        return None;
+    }
+    if count.is_empty() {
+        return Some(1);
+    }
+    let n: u32 = std::str::from_utf8(count).ok()?.parse().ok()?;
+    Some(n.max(1))
 }
 
 #[cfg(test)]
@@ -221,10 +266,11 @@ mod tests {
         Owned::Text(s.to_vec())
     }
 
-    fn image(args: &[u8], payload: &[u8]) -> Owned {
+    fn image(args: &[u8], payload: &[u8], cursor_up: Option<u32>) -> Owned {
         Owned::Image(ImageRequest {
             args: args.to_vec(),
             payload: payload.to_vec(),
+            cursor_up,
         })
     }
 
@@ -251,7 +297,7 @@ mod tests {
                 ]),
                 [
                     text(b"before"),
-                    image(b"inline=1;width=2", b"YWJjWFlaWQ="),
+                    image(b"inline=1;width=2", b"YWJjWFlaWQ=", None),
                     text(b"after"),
                 ]
             );
@@ -262,7 +308,43 @@ mod tests {
     fn esc_in_payload_ends_the_image() {
         assert_eq!(
             scan(&[b"\x1b]1337;File=inline=1:AAAA\x1b[1mX"]),
-            [image(b"inline=1", b"AAAA"), text(b"\x1b[1mX")]
+            [image(b"inline=1", b"AAAA", None), text(b"\x1b[1mX")]
+        );
+    }
+
+    #[test]
+    fn saved_cursor_up_before_an_image() {
+        let input: &[u8] = b"\x1b[2K\x1b7\x1b[3A\x1b]1337;File=inline=1:AAAA\x07";
+        let expected = [
+            text(b"\x1b[2K\x1b7\x1b[3A"),
+            image(b"inline=1", b"AAAA", Some(3)),
+        ];
+        assert_eq!(scan(&[input]), expected);
+        for split in 1..input.len() {
+            let (head, tail) = input.split_at(split);
+            assert_eq!(scan(&[head, tail]), expected, "split at {split}");
+        }
+        assert_eq!(
+            scan(&[b"\x1b7\x1b[A\x1b]1337;File=inline=1:AAAA\x07"]),
+            [text(b"\x1b7\x1b[A"), image(b"inline=1", b"AAAA", Some(1))]
+        );
+        assert_eq!(
+            scan(&[b"\x1b[3A\x1b]1337;File=inline=1:AAAA\x07"]),
+            [text(b"\x1b[3A"), image(b"inline=1", b"AAAA", None)]
+        );
+        assert_eq!(
+            scan(&[b"\x1b7\x1b[3Ax\x1b]1337;File=inline=1:AAAA\x07"]),
+            [text(b"\x1b7\x1b[3Ax"), image(b"inline=1", b"AAAA", None)]
+        );
+        assert_eq!(
+            scan(&[
+                b"\x1b7\x1b[3A\x1b]1337;File=inline=1:AAAA\x07\x1b]1337;File=inline=1:BBBB\x07"
+            ]),
+            [
+                text(b"\x1b7\x1b[3A"),
+                image(b"inline=1", b"AAAA", Some(3)),
+                image(b"inline=1", b"BBBB", None),
+            ]
         );
     }
 

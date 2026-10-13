@@ -647,9 +647,29 @@ pub(crate) fn crop_columns<T: EventListener>(term: &mut Term<T>, columns: usize)
     }
 }
 
+/// Rows of an image above the screen: the program saved the cursor on the
+/// image's last row and moved `cursor_up` rows up to its top, past line 0.
+pub(crate) fn rows_above_screen<T: EventListener>(term: &Term<T>, cursor_up: Option<u32>) -> usize {
+    let Some(up) = cursor_up else {
+        return 0;
+    };
+    let saved_line = i64::from(term.grid().saved_cursor.point.line.0);
+    (i64::from(up) - saved_line).max(0) as usize
+}
+
 /// Write the cells of image `id` at the cursor, scrolling as needed, and
-/// leave the cursor after its bottom-right corner, as iTerm2 does.
-pub(crate) fn place<T: EventListener>(term: &mut Term<T>, id: u32, image: &TermImage) {
+/// leave the cursor after its bottom-right corner, as iTerm2 does. Rows
+/// before `hidden` lie above the screen and aren't drawn: row `hidden` goes
+/// on the cursor's line.
+pub(crate) fn place<T: EventListener>(
+    term: &mut Term<T>,
+    id: u32,
+    image: &TermImage,
+    hidden: usize,
+) {
+    if hidden >= image.lines {
+        return;
+    }
     if term.grid().cursor.input_needs_wrap && term.mode().contains(TermMode::LINE_WRAP) {
         term.carriage_return();
         term.linefeed();
@@ -662,8 +682,8 @@ pub(crate) fn place<T: EventListener>(term: &mut Term<T>, id: u32, image: &TermI
         bg,
         ..Cell::default()
     };
-    for row in 0..image.lines {
-        if row > 0 {
+    for row in hidden..image.lines {
+        if row > hidden {
             let before = term.grid().cursor.point.line;
             term.linefeed();
             let line = term.grid().cursor.point.line;
@@ -733,6 +753,7 @@ mod tests {
         ImageRequest {
             args: args.as_bytes().to_vec(),
             payload,
+            cursor_up: None,
         }
     }
 
@@ -886,7 +907,7 @@ mod tests {
         let mut term = term(10, 5);
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, b"ab");
-        place(&mut term, 7, &test_image(3, 2));
+        place(&mut term, 7, &test_image(3, 2), 0);
         for (row, col) in [(0, 0), (0, 2), (1, 1)] {
             assert_eq!(
                 image_cell_ref(cell_at(&term, row as i32, 2 + col)),
@@ -904,7 +925,7 @@ mod tests {
         let mut term = term(10, 3);
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, b"\r\n\r\n");
-        place(&mut term, 1, &test_image(2, 2));
+        place(&mut term, 1, &test_image(2, 2), 0);
         let cursor = term.grid().cursor.point;
         assert_eq!(cursor.line.0, 2);
         assert_eq!(image_cell_ref(cell_at(&term, 1, 0)), Some((1, 0, 0)));
@@ -917,7 +938,7 @@ mod tests {
         let mut term = term(5, 3);
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, b"abc");
-        place(&mut term, 1, &test_image(4, 1));
+        place(&mut term, 1, &test_image(4, 1), 0);
         assert_eq!(image_cell_ref(cell_at(&term, 0, 4)), Some((1, 0, 1)));
         assert!(term.grid().cursor.input_needs_wrap);
         assert_eq!(term.grid().cursor.point.column.0, 4);
@@ -932,7 +953,7 @@ mod tests {
         parser.advance(&mut term, "a界b界".as_bytes());
         // Over the spacer of the first 界 and the first half of the second.
         parser.advance(&mut term, b"\x1b[1;3H");
-        place(&mut term, 1, &test_image(3, 1));
+        place(&mut term, 1, &test_image(3, 1), 0);
         assert_eq!(cell_at(&term, 0, 1).c, ' ');
         assert!(!cell_at(&term, 0, 1).flags.contains(Flags::WIDE_CHAR));
         assert_eq!(cell_at(&term, 0, 5).c, ' ');
@@ -945,7 +966,7 @@ mod tests {
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, b"abc");
         assert!(term.grid().cursor.input_needs_wrap);
-        place(&mut term, 1, &test_image(1, 1));
+        place(&mut term, 1, &test_image(1, 1), 0);
         assert_eq!(cell_at(&term, 0, 2).c, 'c');
         assert_eq!(image_cell_ref(cell_at(&term, 1, 0)), Some((1, 0, 0)));
     }
@@ -979,10 +1000,10 @@ mod tests {
         // Each test image is 4 cells × 4 bytes.
         let mut store = ImageStore::with_budget(20);
         let old = store.insert(key(1), test_image(2, 2));
-        place(&mut term, old, &test_image(2, 2));
+        place(&mut term, old, &test_image(2, 2), 0);
         parser.advance(&mut term, b"\x1b[Hxx\r\nxx");
         let kept = store.insert(key(2), test_image(2, 2));
-        place(&mut term, kept, &test_image(2, 2));
+        place(&mut term, kept, &test_image(2, 2), 0);
         store.evict(&term);
         assert!(store.get(old).is_none());
         assert_eq!(store.cached(key(1)), None);
@@ -997,10 +1018,10 @@ mod tests {
         // Budget 16 bytes, limit 32; each image is 16 bytes.
         let mut store = ImageStore::with_budget(16);
         let a = store.insert(test_key(1), test_image(2, 2));
-        place(&mut term, a, &test_image(2, 2));
+        place(&mut term, a, &test_image(2, 2), 0);
         parser.advance(&mut term, b"\x1b[1;3H");
         let b = store.insert(test_key(2), test_image(2, 2));
-        place(&mut term, b, &test_image(2, 2));
+        place(&mut term, b, &test_image(2, 2), 0);
         store.evict(&term);
         assert!(store.get(a).is_some() && store.get(b).is_some());
         assert_eq!(store.next_scan, 36);
@@ -1031,7 +1052,7 @@ mod tests {
         let mut parser: Processor = Processor::new();
         [1, 2, 3].map(|n| {
             let id = store.insert(test_key(n), test_image(2, 2));
-            place(term, id, &test_image(2, 2));
+            place(term, id, &test_image(2, 2), 0);
             if n < 3 {
                 parser.advance(term, b"\r\n\r\n\r\n");
             }
@@ -1042,7 +1063,7 @@ mod tests {
     #[test]
     fn cropping_before_narrowing_keeps_images_in_one_piece_per_row() {
         let mut term = term(8, 4);
-        place(&mut term, 1, &test_image(6, 2));
+        place(&mut term, 1, &test_image(6, 2), 0);
         // The cursor below the image, as after a prompt: a cursor right of
         // the new width would reflow its own line.
         let mut parser: Processor = Processor::new();
@@ -1075,7 +1096,7 @@ mod tests {
         let mut parser: Processor = Processor::new();
         // Lines 1 to 3 scroll; the cursor goes to the last line, below them.
         parser.advance(&mut term, b"\x1b[1;3r\x1b[5;1H");
-        place(&mut term, 1, &test_image(2, 3));
+        place(&mut term, 1, &test_image(2, 3), 0);
         assert_eq!(image_cell_ref(cell_at(&term, 4, 0)), Some((1, 0, 0)));
         for line in 0..4 {
             assert!(
@@ -1085,6 +1106,34 @@ mod tests {
         }
         assert_eq!(term.grid().cursor.point.line.0, 4);
         assert_eq!(term.grid().cursor.point.column.0, 2);
+    }
+
+    #[test]
+    fn image_drawn_up_past_the_top_shows_only_its_bottom() {
+        let mut term = term(4, 4);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\x1b[2;1H\x1b7\x1b[3A");
+        assert_eq!(rows_above_screen(&term, Some(3)), 2);
+        assert_eq!(rows_above_screen(&term, Some(1)), 0);
+        assert_eq!(rows_above_screen(&term, None), 0);
+        place(&mut term, 1, &test_image(2, 4), 2);
+        assert_eq!(image_cell_ref(cell_at(&term, 0, 0)), Some((1, 2, 0)));
+        assert_eq!(image_cell_ref(cell_at(&term, 1, 0)), Some((1, 3, 0)));
+        for line in 2..4 {
+            assert_eq!(image_cell_ref(cell_at(&term, line, 0)), None, "line {line}");
+        }
+
+        let mut term = self::term(4, 4);
+        parser.advance(&mut term, b"\x1b[2;2H");
+        let cursor = term.grid().cursor.point;
+        place(&mut term, 1, &test_image(2, 4), 4);
+        assert_eq!(term.grid().cursor.point, cursor);
+        for line in 0..4 {
+            assert!(
+                (0..4).all(|c| image_cell_ref(cell_at(&term, line, c)).is_none()),
+                "line {line}"
+            );
+        }
     }
 
     #[test]
@@ -1119,11 +1168,11 @@ mod tests {
         let mut parser: Processor = Processor::new();
         let mut store = ImageStore::with_budget(16);
         let primary = store.insert(test_key(1), test_image(2, 2));
-        place(&mut term, primary, &test_image(2, 2));
+        place(&mut term, primary, &test_image(2, 2), 0);
         store.placed(primary, false);
         parser.advance(&mut term, b"\x1b[?1049h");
         let alt = store.insert(test_key(2), test_image(2, 2));
-        place(&mut term, alt, &test_image(2, 2));
+        place(&mut term, alt, &test_image(2, 2), 0);
         store.placed(alt, true);
         // Never placed anywhere, so nothing protects it.
         let unplaced = store.insert(test_key(3), test_image(2, 2));
@@ -1140,12 +1189,12 @@ mod tests {
         let mut store = ImageStore::with_budget(16);
         parser.advance(&mut term, b"\x1b[?1049h");
         let alt = store.insert(test_key(1), test_image(2, 2));
-        place(&mut term, alt, &test_image(2, 2));
+        place(&mut term, alt, &test_image(2, 2), 0);
         store.placed(alt, true);
         // alacritty clears the alternate screen whenever it is entered.
         parser.advance(&mut term, b"\x1b[?1049l");
         let primary = store.insert(test_key(2), test_image(2, 2));
-        place(&mut term, primary, &test_image(2, 2));
+        place(&mut term, primary, &test_image(2, 2), 0);
         store.placed(primary, false);
         store.evict(&term);
         assert!(store.get(alt).is_none());
@@ -1162,7 +1211,7 @@ mod tests {
         let [first, second, third] = [1, 2, 3].map(|n| {
             parser.advance(&mut term, format!("\x1b[1;{n}H").as_bytes());
             let id = store.insert(test_key(n), test_image(2, 2));
-            place(&mut term, id, &test_image(2, 2));
+            place(&mut term, id, &test_image(2, 2), 0);
             id
         });
         store.evict(&term);

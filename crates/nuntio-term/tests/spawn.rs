@@ -141,6 +141,31 @@ fn inline_image_is_placed_at_the_cursor() {
     assert_eq!(snapshot.cell(2, 0).c, 'X');
 }
 
+#[test]
+fn image_drawn_up_past_the_top_is_cropped() {
+    use base64::Engine;
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    // As omp draws images: save the cursor on the last row, move up to the
+    // top, here past line 0. `\033\067` is `ESC 7`; `\0337` would be octal.
+    let (handle, rx) = spawn(&format!(
+        "printf '\\033[2;1H\\033\\067\\033[3A\\033]1337;File=inline=1;width=2;height=4:%s\\007' '{data}'"
+    ));
+    wait_for_exit(&rx);
+
+    let pieces: Vec<_> = handle
+        .snapshot()
+        .images
+        .iter()
+        .map(|p| (p.line, p.column, p.columns, p.image_line))
+        .collect();
+    assert_eq!(pieces, [(0, 0, 2, 2), (1, 0, 2, 3)]);
+}
+
 /// How long vte keeps a synchronized update (DEC 2026) open; it flushes it
 /// with a legitimate wakeup after that.
 const SYNC_TIMEOUT: Duration = Duration::from_millis(150);

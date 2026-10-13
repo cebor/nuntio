@@ -433,6 +433,7 @@ mod tests {
                 &ImageRequest {
                     args: Vec::new(),
                     payload: Vec::new(),
+                    cursor_up: None,
                 },
                 CellGeometry::from(WindowSize {
                     num_lines: 3,
@@ -445,7 +446,7 @@ mod tests {
         } else {
             5
         };
-        place(&mut term, id, &image());
+        place(&mut term, id, &image(), 0);
         (term, parser, store)
     }
 

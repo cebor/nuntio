@@ -575,8 +575,11 @@ impl IoLoop {
                     // The screen is known only once the output buffered in a
                     // synchronized update is applied.
                     let mut alt = false;
+                    let cursor_up = request.cursor_up;
                     with_flushed_sync(parser, term, |term| {
-                        image::place(term, id, &image);
+                        // `ESC 7` and `CSI A` are applied only by the flush.
+                        let hidden = image::rows_above_screen(term, cursor_up);
+                        image::place(term, id, &image, hidden);
                         alt = term.mode().contains(TermMode::ALT_SCREEN);
                     });
                     let mut store = lock(images);
