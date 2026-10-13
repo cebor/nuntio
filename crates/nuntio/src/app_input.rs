@@ -21,7 +21,7 @@ use crate::actions_menu::{MenuKind, Step};
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
-use crate::mouse::{Button, MULTI_CLICK_INTERVAL, MouseAction};
+use crate::mouse::{Button, MouseAction};
 use crate::pane_tree::Axis;
 use crate::shell_words::path_word;
 use crate::shells::{self, Launch};
@@ -788,19 +788,11 @@ impl Core {
             BarHit::TabList => state.open_tab_menu(&self.config),
             BarHit::Empty => {
                 // Double click maximizes, like a title bar.
-                let now = Instant::now();
-                let double = state
-                    .mouse
-                    .last_bar_click
-                    .is_some_and(|t| now.duration_since(t) < MULTI_CLICK_INTERVAL);
-                if double {
-                    state.mouse.last_bar_click = None;
+                if state.mouse.bar_clicks.click(Instant::now(), 0, 0) == 2 {
+                    state.mouse.bar_clicks.reset();
                     state.toggle_maximized();
-                } else {
-                    state.mouse.last_bar_click = Some(now);
-                    if state.press_drag_area(pos) {
-                        self.grab_window(state, Grab::Move);
-                    }
+                } else if state.press_drag_area(pos) {
+                    self.grab_window(state, Grab::Move);
                 }
             }
             BarHit::Minimize => state.window.set_minimized(true),

@@ -52,8 +52,8 @@ pub struct MouseState {
     pub bar_scroll_pixels: f64,
     /// Tab bar element under the pointer.
     pub hovered_bar: Option<BarHit>,
-    /// Time of the last click on free tab bar space, to detect double clicks.
-    pub last_bar_click: Option<Instant>,
+    /// Clicks on free tab bar space, to detect double clicks.
+    pub bar_clicks: ClickCounter,
     /// A tab is being pressed or dragged to reorder it.
     pub tab_drag: Option<TabDrag>,
     /// A pane divider is being dragged.

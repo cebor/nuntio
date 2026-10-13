@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use nuntio_term::TermMode;
 
 /// Clicks closer together than this count as double/triple clicks.
-pub const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(400);
+const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
@@ -174,6 +174,11 @@ impl ClickCounter {
         self.last = Some((now, column, line));
         self.count
     }
+
+    /// Forget the clicks so far: the next one is the first again.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 #[cfg(test)]
@@ -297,5 +302,8 @@ mod tests {
         assert_eq!(counter.click(t + ms(300), 1, 1), 1);
         assert_eq!(counter.click(t + ms(350), 2, 1), 1);
         assert_eq!(counter.click(t + ms(2000), 2, 1), 1);
+        assert_eq!(counter.click(t + ms(2100), 2, 1), 2);
+        counter.reset();
+        assert_eq!(counter.click(t + ms(2200), 2, 1), 1);
     }
 }
