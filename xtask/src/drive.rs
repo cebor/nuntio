@@ -16,7 +16,7 @@ use anyhow::{Context, Result, bail, ensure};
 use resvg::tiny_skia::{IntSize, Paint, Pixmap, PixmapPaint, Rect, Transform};
 use serde_json::{Value, json};
 
-use crate::{root, run};
+use crate::{on_path, root, run};
 
 const USAGE: &str = "\
 usage: cargo xtask drive <command>
@@ -443,14 +443,6 @@ fn launch(nuntio: PathBuf, mut args: Vec<String>, headless: bool) -> Launch {
         headless: true,
         ..plain(args)
     }
-}
-
-/// Where a program is on the `PATH`.
-fn on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
 }
 
 /// nuntio started so that it outlives the driver and doesn't hold on to

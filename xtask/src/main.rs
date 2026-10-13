@@ -16,6 +16,7 @@
 
 mod drive;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,7 +29,6 @@ const NAME: &str = "nuntio";
 const HELPERS: [&str; 2] = ["nuntio-config", "nuntio-apps"];
 /// The dependency license notices shipped in every package.
 const THIRD_PARTY: &str = "THIRD-PARTY-LICENSES.html";
-const PNG_SIZES: [u32; 9] = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
 const ICO_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 const ICNS_SIZES: [u32; 7] = [16, 32, 64, 128, 256, 512, 1024];
 const LINUX_ICON_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
@@ -75,6 +75,15 @@ fn run(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
+/// Where a program is on the `PATH`.
+fn on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Whether `program` runs and answers `--version`.
 fn available(program: &str) -> bool {
     Command::new(program)
         .arg("--version")
@@ -277,6 +286,15 @@ fn render_rgba(
         .collect())
 }
 
+/// The sizes of the committed PNGs: every size one of the icon formats uses.
+fn png_sizes() -> BTreeSet<u32> {
+    [ICO_SIZES.as_slice(), &ICNS_SIZES, &LINUX_ICON_SIZES]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
+}
+
 fn icons() -> Result<()> {
     let assets = root().join("assets");
     let svg = fs::read(assets.join("icon.svg"))?;
@@ -297,7 +315,7 @@ fn icons() -> Result<()> {
 
     let mut ico = ico::IconDir::new(ico::ResourceType::Icon);
     let mut icns = icns::IconFamily::new();
-    for size in PNG_SIZES {
+    for size in png_sizes() {
         let rgba = render_rgba(&tree, size, full)?;
         let image = ico::IconImage::from_rgba_data(size, size, rgba.clone());
         image.write_png(fs::File::create(out.join(format!("png/{size}.png")))?)?;
@@ -423,14 +441,7 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
     // share/icons.
     let tree = stage.join(&base);
     fresh_dir(&tree)?;
-    copy(&binary, &tree.join("bin").join(NAME))?;
-    for helper in HELPERS {
-        copy(
-            &helper_of(&binary, helper),
-            &tree.join("lib").join(NAME).join(helper),
-        )?;
-    }
-    install_desktop_files(&assets, &tree.join("share"))?;
+    install_linux_tree(&tree, &binary, &assets)?;
     copy_docs(&tree, &notices)?;
     let tarball = dist.join(format!("{base}.tar.gz"));
     run(Command::new("tar")
@@ -455,14 +466,7 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
     if available(&appimagetool) {
         let appdir = stage.join("AppDir");
         fresh_dir(&appdir)?;
-        copy(&binary, &appdir.join("usr/bin").join(NAME))?;
-        for helper in HELPERS {
-            copy(
-                &helper_of(&binary, helper),
-                &appdir.join("usr/lib").join(NAME).join(helper),
-            )?;
-        }
-        install_desktop_files(&assets, &appdir.join("usr/share"))?;
+        install_linux_tree(&appdir.join("usr"), &binary, &assets)?;
         copy_docs(&appdir.join("usr/share/doc").join(NAME), &notices)?;
         copy(
             &assets.join("nuntio.desktop"),
@@ -487,6 +491,20 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
     }
     eprintln!("packages written to {}", dist.display());
     Ok(())
+}
+
+/// The files every Linux package installs below `prefix`: the binary in
+/// `bin/`, the helpers in `lib/nuntio/`, the desktop entry, metainfo and
+/// icons in `share/`.
+fn install_linux_tree(prefix: &Path, binary: &Path, assets: &Path) -> Result<()> {
+    copy(binary, &prefix.join("bin").join(NAME))?;
+    for helper in HELPERS {
+        copy(
+            &helper_of(binary, helper),
+            &prefix.join("lib").join(NAME).join(helper),
+        )?;
+    }
+    install_desktop_files(assets, &prefix.join("share"))
 }
 
 fn install_desktop_files(assets: &Path, share: &Path) -> Result<()> {
@@ -672,10 +690,6 @@ fn find_iscc() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("ISCC") {
         return Some(path.into());
     }
-    let on_path = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .map(|dir| dir.join("ISCC.exe"));
     let installed = ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"]
         .into_iter()
         .filter_map(std::env::var_os)
@@ -686,7 +700,7 @@ fn find_iscc() -> Option<PathBuf> {
                 dir.join("Programs/Inno Setup 6/ISCC.exe"),
             ]
         });
-    on_path.chain(installed).find(|path| path.is_file())
+    on_path("ISCC.exe").or_else(|| installed.into_iter().find(|path| path.is_file()))
 }
 
 #[cfg(test)]
