@@ -47,7 +47,7 @@ For changes to rendering or terminal emulation, please also check the affected c
 | `xtask` | Icons, packaging, changelog, website, debug driver (`drive`) |
 
 Conventions:
-- Errors: `thiserror` in library crates, `anyhow` in the binary.
+- Errors: `thiserror` in the reusable library crates (`nuntio-config`, `nuntio-term`, `nuntio-render`), `anyhow` in the binary and the app crates (`nuntio-config-tui`, `nuntio-apps`).
 - Log with `tracing`, not `println!`.
 - Keep pure logic (config, pane layout, key encoding) free of GPU/window dependencies so it can be unit tested.
 
