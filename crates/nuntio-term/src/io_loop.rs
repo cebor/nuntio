@@ -459,7 +459,7 @@ impl IoLoop {
         // Text was parsed outside a synchronized update.
         let mut outside_text = false;
         loop {
-            let limit = read_limit(buf.len());
+            let limit = MAX_LOCKED_READ.min(buf.len());
             let n = match self.pty.read(&mut buf[..limit]) {
                 Ok(0) => {
                     // On macOS the master reads 0 once the slave hung up.
@@ -694,11 +694,6 @@ fn is_eio(err: &io::Error) -> bool {
     }
 }
 
-/// How much of a `buf_len` buffer one read may fill.
-fn read_limit(buf_len: usize) -> usize {
-    MAX_LOCKED_READ.min(buf_len)
-}
-
 /// Write the queued input to the PTY until it would block. Replies are
 /// dropped, not written, while the PTY already holds too many unread bytes.
 fn write_pending(
@@ -805,12 +800,6 @@ fn with_flushed_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_are_capped_to_the_locked_read_limit() {
-        assert_eq!(read_limit(READ_BUFFER_SIZE), MAX_LOCKED_READ);
-        assert_eq!(read_limit(10), 10);
-    }
 
     #[test]
     fn replies_beyond_the_cap_are_refused() {
