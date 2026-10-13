@@ -9,6 +9,7 @@ mod error;
 mod font;
 mod frame;
 mod gpu;
+mod mask;
 mod renderer;
 
 pub use error::RenderError;

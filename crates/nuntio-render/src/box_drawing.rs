@@ -4,6 +4,8 @@
 //! media control symbols (U+23F4–U+23FA, such as `⏵` and `⏸`), which few
 //! fonts cover.
 
+use crate::mask::Mask;
+
 /// Line weight of one arm of a box-drawing character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Weight {
@@ -20,52 +22,10 @@ const RIGHT: usize = 1;
 const DOWN: usize = 2;
 const LEFT: usize = 3;
 
-/// A coverage mask of one cell.
-struct Canvas {
-    width: u32,
-    height: u32,
-    data: Vec<u8>,
-}
-
-impl Canvas {
-    fn new(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            data: vec![0; (width * height) as usize],
-        }
-    }
-
-    /// Fill a rectangle given in pixels, clipped to the cell.
-    fn rect(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, alpha: u8) {
-        // Reversed ranges (tiny cells) are empty.
-        let x1 = (x1.max(0) as u32).min(self.width);
-        let x0 = (x0.max(0) as u32).min(x1);
-        let y1 = (y1.max(0) as u32).min(self.height);
-        let y0 = (y0.max(0) as u32).min(y1);
-        for y in y0..y1 {
-            let row = (y * self.width) as usize;
-            self.data[row + x0 as usize..row + x1 as usize].fill(alpha);
-        }
-    }
-
-    /// Antialiased coverage from a signed distance function (in pixels).
-    fn shape(&mut self, half_thickness: f32, distance: impl Fn(f32, f32) -> f32) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let d = distance(x as f32 + 0.5, y as f32 + 0.5);
-                let coverage = (half_thickness + 0.5 - d).clamp(0.0, 1.0);
-                let px = &mut self.data[(y * self.width + x) as usize];
-                *px = (*px).max((coverage * 255.0) as u8);
-            }
-        }
-    }
-}
-
 /// Render `c` into a `width`×`height` mask, or `None` if the font should
 /// draw it. `stroke` is the light line thickness.
-pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Vec<u8>> {
-    let mut canvas = Canvas::new(width, height);
+pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Mask> {
+    let mut canvas = Mask::new(width, height);
     let light = stroke.max(1) as i32;
     let heavy = light * 2;
     let (w, h) = (width as i32, height as i32);
@@ -131,7 +91,7 @@ pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Vec<u8
         0x23F4..=0x23FA => draw_media(&mut canvas, c),
         _ => return None,
     }
-    Some(canvas.data)
+    Some(canvas)
 }
 
 fn weight(digit: u8) -> Weight {
@@ -206,7 +166,7 @@ fn thickness(weight: Weight, light: i32, heavy: i32) -> i32 {
 
 /// Draw straight arms from the edges into the center. Arms extend across
 /// the perpendicular band so joints are filled without gaps.
-fn draw_arms(canvas: &mut Canvas, arms: Arms, light: i32, heavy: i32) {
+fn draw_arms(canvas: &mut Mask, arms: Arms, light: i32, heavy: i32) {
     let (w, h) = (canvas.width as i32, canvas.height as i32);
     let t = |i: usize| thickness(arms[i], light, heavy);
     let band_h = t(LEFT).max(t(RIGHT)); // horizontal band thickness
@@ -296,7 +256,7 @@ enum Line {
 /// - A single line crosses if it continues on the other side, and
 ///   otherwise stops at the near rail of a double line that runs through
 ///   (`╤`) or the far rail of one that ends here (`╒`).
-fn draw_double(canvas: &mut Canvas, arms: [Line; 4], t: i32) {
+fn draw_double(canvas: &mut Mask, arms: [Line; 4], t: i32) {
     let (w, h) = (canvas.width as i32, canvas.height as i32);
     // Single line, and the low and high rail of a double line, across a
     // side of `size` pixels.
@@ -388,7 +348,7 @@ fn draw_double(canvas: &mut Canvas, arms: [Line; 4], t: i32) {
     }
 }
 
-fn draw_dashed(canvas: &mut Canvas, arms: Arms, segments: i32, light: i32, heavy: i32) {
+fn draw_dashed(canvas: &mut Mask, arms: Arms, segments: i32, light: i32, heavy: i32) {
     let (w, h) = (canvas.width as i32, canvas.height as i32);
     let horizontal = arms[LEFT] != Weight::None;
     let weight = if horizontal { arms[LEFT] } else { arms[UP] };
@@ -413,7 +373,7 @@ fn draw_dashed(canvas: &mut Canvas, arms: Arms, segments: i32, light: i32, heavy
 /// Powerline arrows: a filled triangle pointing right (``) or left
 /// (``), or just its two slanted edges (`` ``), spanning the cell's
 /// full height.
-fn draw_powerline(canvas: &mut Canvas, c: char, stroke: i32) {
+fn draw_powerline(canvas: &mut Mask, c: char, stroke: i32) {
     let (w, h) = (canvas.width as f32, canvas.height as f32);
     let len = w.hypot(h / 2.0);
     let pointing_left = matches!(c, '\u{E0B2}' | '\u{E0B3}');
@@ -440,7 +400,7 @@ fn draw_powerline(canvas: &mut Canvas, c: char, stroke: i32) {
 
 /// Media control symbols `⏴⏵⏶⏷⏸⏹⏺`, filled shapes in a square centered in
 /// the cell.
-fn draw_media(canvas: &mut Canvas, c: char) {
+fn draw_media(canvas: &mut Mask, c: char) {
     let (cx, cy) = (canvas.width as f32 / 2.0, canvas.height as f32 / 2.0);
     let half = 0.35 * canvas.width.min(canvas.height) as f32;
     // Signed distance to an axis-aligned rectangle around (bx, by).
@@ -471,7 +431,7 @@ fn draw_media(canvas: &mut Canvas, c: char) {
     }
 }
 
-fn draw_block(canvas: &mut Canvas, c: char) -> Option<()> {
+fn draw_block(canvas: &mut Mask, c: char) -> Option<()> {
     let (w, h) = (canvas.width as i32, canvas.height as i32);
     let eighth_h = |n: i32| h * n / 8;
     let eighth_w = |n: i32| w * n / 8;
@@ -528,7 +488,9 @@ mod tests {
     const H: u32 = 20;
 
     fn render(c: char) -> Vec<u8> {
-        rasterize(c, W, H, 2).unwrap_or_else(|| panic!("{c} not drawn"))
+        rasterize(c, W, H, 2)
+            .unwrap_or_else(|| panic!("{c} not drawn"))
+            .data
     }
 
     fn at(mask: &[u8], x: u32, y: u32) -> u8 {
@@ -617,7 +579,7 @@ mod tests {
     #[test]
     fn rounded_corners_line_up_with_straight_lines() {
         // Odd stroke in an even cell: straight lines sit left of the middle.
-        let mask = |c| rasterize(c, W, H, 1).unwrap();
+        let mask = |c| rasterize(c, W, H, 1).unwrap().data;
         let column = |m: &[u8], y| (0..W).filter(|&x| at(m, x, y) == 255).collect::<Vec<_>>();
         let row = |m: &[u8], x| (0..H).filter(|&y| at(m, x, y) == 255).collect::<Vec<_>>();
         let (vertical, horizontal) = (mask('│'), mask('─'));
@@ -629,7 +591,8 @@ mod tests {
     /// A mask as rows of `#` and `.`, for readable assertions.
     fn picture(c: char, width: u32, height: u32) -> Vec<String> {
         let mask = rasterize(c, width, height, 1).unwrap();
-        mask.chunks(width as usize)
+        mask.data
+            .chunks(width as usize)
             .map(|row| row.iter().map(|&p| if p > 0 { '#' } else { '.' }).collect())
             .collect()
     }
@@ -731,6 +694,6 @@ mod tests {
 
     #[test]
     fn other_characters_are_left_to_the_font() {
-        assert_eq!(rasterize('a', W, H, 2), None);
+        assert!(rasterize('a', W, H, 2).is_none());
     }
 }

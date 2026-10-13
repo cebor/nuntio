@@ -4,12 +4,7 @@
 
 use nuntio_term::UnderlineStyle;
 
-/// A coverage mask for one cell's underline.
-pub struct Mask {
-    pub width: u32,
-    pub height: u32,
-    pub data: Vec<u8>,
-}
+use crate::mask::Mask;
 
 /// Rasterize `style` for cells `width` pixels wide with lines `stroke`
 /// pixels thick. `None` for the styles drawn with solid quads.
@@ -17,7 +12,7 @@ pub fn rasterize(style: UnderlineStyle, width: u32, stroke: u32) -> Option<Mask>
     let stroke = stroke.max(1);
     let (height, data) = match style {
         UnderlineStyle::Single | UnderlineStyle::Double => return None,
-        UnderlineStyle::Curly => curly(width, stroke),
+        UnderlineStyle::Curly => return Some(curly(width, stroke)),
         UnderlineStyle::Dotted => {
             // Whole periods per cell, each a square dot followed by a gap, so
             // neighbors never touch: the last dot ends at least a stroke before
@@ -52,26 +47,21 @@ pub fn rasterize(style: UnderlineStyle, width: u32, stroke: u32) -> Option<Mask>
 }
 
 /// One period of a wave per cell, antialiased.
-fn curly(width: u32, stroke: u32) -> (u32, Vec<u8>) {
+fn curly(width: u32, stroke: u32) -> Mask {
     let height = (stroke * 4).max(4);
     let half = stroke as f32 / 2.0;
     let amplitude = (height as f32 - stroke as f32) / 2.0;
     let period = std::f32::consts::TAU / width.max(1) as f32;
-    let mut data = vec![0; (width * height) as usize];
-    for x in 0..width {
-        let px = x as f32 + 0.5;
+    let mut mask = Mask::new(width, height);
+    mask.shape(half, |px, py| {
         let center = half + amplitude * (1.0 + (px * period).cos());
         // Distance across the line rather than straight down, so the
         // slopes are as thick as the crests.
         let slope = -amplitude * period * (px * period).sin();
         let scale = (1.0 + slope * slope).sqrt();
-        for y in 0..height {
-            let distance = ((y as f32 + 0.5) - center).abs() / scale;
-            let coverage = (half + 0.5 - distance).clamp(0.0, 1.0);
-            data[(y * width + x) as usize] = (coverage * 255.0) as u8;
-        }
-    }
-    (height, data)
+        (py - center).abs() / scale
+    });
+    mask
 }
 
 #[cfg(test)]

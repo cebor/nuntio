@@ -15,6 +15,7 @@ use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::font::{CellMetrics, FaceStyle, Fonts, TextSize};
 use crate::frame::{Frame, Rect, UiRect, UiText};
 use crate::gpu::{FrameStatus, GpuContext, GpuOptions, oom_checked};
+use crate::mask::Mask;
 use crate::{box_drawing, decoration};
 
 const KIND_SOLID: u32 = 0;
@@ -1186,16 +1187,7 @@ impl Renderer {
         else {
             return self.font_sprites(&c.to_string(), style, size);
         };
-        let region = self
-            .mask_atlas
-            .insert(&self.gpu.queue, metrics.width, metrics.height, &mask)
-            .ok_or(AtlasFull::Mask)?;
-        Ok(vec![Sprite {
-            x: 0,
-            y: 0,
-            region,
-            color: false,
-        }])
+        self.mask_sprite(&mask, 0)
     }
 
     /// Rasterize `text` with the font into the atlases.
@@ -1237,14 +1229,19 @@ impl Renderer {
         let Some(mask) = decoration::rasterize(style, m.width, m.stroke) else {
             return Ok(Vec::new());
         };
+        let y = m.underline_y.min(m.height.saturating_sub(mask.height));
+        self.mask_sprite(&mask, y as i32)
+    }
+
+    /// Put `mask` into the mask atlas as one sprite, `y` below the cell's top.
+    fn mask_sprite(&mut self, mask: &Mask, y: i32) -> Result<Vec<Sprite>, AtlasFull> {
         let region = self
             .mask_atlas
             .insert(&self.gpu.queue, mask.width, mask.height, &mask.data)
             .ok_or(AtlasFull::Mask)?;
-        let y = m.underline_y.min(m.height.saturating_sub(mask.height));
         Ok(vec![Sprite {
             x: 0,
-            y: y as i32,
+            y,
             region,
             color: false,
         }])
