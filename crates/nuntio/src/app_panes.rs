@@ -90,13 +90,12 @@ impl Core {
     // ----- Starting panes ----------------------------------------------------
 
     /// Start `launch` in a new pane of `size`, in `dir` if it suits the
-    /// shell, with the environment variables `extra_env` on top.
+    /// shell.
     fn spawn_pane(
         &mut self,
         dir: Option<StartDir>,
         launch: Launch,
         size: TermSize,
-        extra_env: Vec<(String, String)>,
     ) -> Result<Pane> {
         let id = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
@@ -143,12 +142,7 @@ impl Core {
             },
             term: term_options(&self.config),
             palette: self.palette.clone(),
-            env: {
-                let mut env =
-                    crate::pane_env::pane_env(self.config_path.as_deref(), distro.is_some());
-                env.extend(extra_env);
-                env
-            },
+            env: crate::pane_env::pane_env(self.config_path.as_deref(), distro.is_some()),
             window_id: self.window_id,
             transport,
         };
@@ -172,7 +166,7 @@ impl Core {
         };
         let dir = first_pane_dir(asked, dir, dirs::home_dir());
         let may_fall_back = matches!(&launch, Launch::Shell(ShellChoice { shell: Some(_), .. }));
-        let err = match self.spawn_pane(dir, launch, INITIAL_GRID, Vec::new()) {
+        let err = match self.spawn_pane(dir, launch, INITIAL_GRID) {
             Ok(pane) => return Ok(pane),
             Err(err) => err,
         };
@@ -184,12 +178,7 @@ impl Core {
             name: shells::shell_name(None),
             shell: None,
         });
-        let fallback = self.spawn_pane(
-            dirs::home_dir().map(StartDir::Local),
-            system,
-            INITIAL_GRID,
-            Vec::new(),
-        );
+        let fallback = self.spawn_pane(dirs::home_dir().map(StartDir::Local), system, INITIAL_GRID);
         let Ok(pane) = fallback else {
             return Err(err);
         };
@@ -218,7 +207,7 @@ impl Core {
         inherit: bool,
     ) -> Option<Pane> {
         let dir = self.start_dir(state, launch.distro().as_ref(), inherit);
-        self.spawn_reported(dir, launch, state.grid(), Vec::new())
+        self.spawn_reported(dir, launch, state.grid())
     }
 
     /// Where a new tab or split whose shell runs in `target` (WSL) or on
@@ -243,9 +232,8 @@ impl Core {
         dir: Option<StartDir>,
         launch: Launch,
         size: TermSize,
-        extra_env: Vec<(String, String)>,
     ) -> Option<Pane> {
-        self.spawn_pane(dir, launch, size, extra_env)
+        self.spawn_pane(dir, launch, size)
             .inspect_err(|err| {
                 self.notify(Banner::new(
                     Severity::Error,
@@ -344,21 +332,19 @@ impl Core {
     ) {
         let inherit = self.config.tabs.inherit_directory;
         let dir = self.start_dir(state, launch.distro().as_ref(), inherit);
-        self.new_tab_in(state, launch, placement, dir, Vec::new());
+        self.new_tab_in(state, launch, placement, dir);
     }
 
-    /// Open a tab that runs `launch` at `placement`, in `dir`, with the
-    /// environment variables `extra_env` on top of the usual ones. Returns
-    /// the new pane, now focused.
+    /// Open a tab that runs `launch` at `placement`, in `dir`. Returns the
+    /// new pane, now focused.
     pub(super) fn new_tab_in(
         &mut self,
         state: &mut WindowState,
         launch: Launch,
         placement: Placement,
         dir: Option<StartDir>,
-        extra_env: Vec<(String, String)>,
     ) -> Option<PaneId> {
-        let pane = self.spawn_reported(dir, launch, state.grid(), extra_env)?;
+        let pane = self.spawn_reported(dir, launch, state.grid())?;
         let id = pane.id;
         state.send_focus(false);
         state.tabs.open(TabContent::new(pane), placement);

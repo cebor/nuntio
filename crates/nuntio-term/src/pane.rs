@@ -435,14 +435,17 @@ impl TermHandle {
             ),
         ]);
         // omp/pi pick an image protocol only from variables of terminals they
-        // know; nuntio speaks iTerm2's OSC 1337. Not in ConPTY panes: the
-        // ConPTY built into Windows passes OSC 1337 ahead of the cursor moves
-        // before it, so omp stays with its text fallback there. Empty rather
-        // than absent, so a value inherited from a nuntio pane doesn't win.
+        // know. Kitty rather than iTerm2: herdr passes only Kitty graphics on
+        // to its outer terminal, and a herdr server started in a nuntio pane
+        // hands this variable to every pane of its own. Not in ConPTY panes:
+        // the ConPTY built into Windows passes image sequences ahead of the
+        // cursor moves before them, so omp stays with its text fallback there.
+        // Empty rather than absent, so a value inherited from a nuntio pane
+        // doesn't win.
         let images = cfg!(not(windows)) || matches!(options.transport, Transport::WslHelper { .. });
         env.insert(
             "PI_FORCE_IMAGE_PROTOCOL".into(),
-            if images { "iterm2" } else { "" }.into(),
+            if images { "kitty" } else { "" }.into(),
         );
         // alacritty sets both to the window id it is given and offers no way to
         // unset them; `Options::env` is applied last, so empty values win. Empty

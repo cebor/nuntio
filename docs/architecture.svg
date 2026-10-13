@@ -267,7 +267,7 @@
   <text x="1212" y="220" class="desc">Linux · macOS: forkpty (alacritty tty)</text>
   <text x="1212" y="236" class="desc">macOS wraps the shell in login(1)</text>
   <text x="1212" y="252" class="desc">TERM=xterm-256color · COLORTERM</text>
-  <text x="1212" y="268" class="desc">PI_FORCE_IMAGE_PROTOCOL=iterm2 · WINDOWID</text>
+  <text x="1212" y="268" class="desc">PI_FORCE_IMAGE_PROTOCOL=kitty · WINDOWID</text>
 
   <rect x="1196" y="305" width="348" height="80" rx="10" fill="#FF9E64" fill-opacity="0.10" stroke="#FF9E64" stroke-width="1.5"/>
   <text x="1212" y="325" class="crate child">ConPTY (Windows)</text>

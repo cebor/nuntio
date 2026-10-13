@@ -267,7 +267,7 @@ The status bar redraws only when its content changes, and `sysmon` pauses while 
 - Builds `SpawnOptions` with the `Program` (`Default`; `Login(shell)` for the user's shell; `Command(shell)` for commands and helpers), the `Transport` (`Pty`, or `WslHelper { fallback }` on Windows), `term_options`, the palette and the `pane_env` (`NUNTIO_CONFIG`, `PATH` with the helper dir, the macOS locale; empty for WSL).
 - The event callback is `proxy.send_event(UserEvent::Term(id, ev))`.
 
-`nuntio-term` sets `TERM=xterm-256color`, `COLORTERM`, `TERM_PROGRAM`, `PI_FORCE_IMAGE_PROTOCOL=iterm2` (not on native ConPTY) and `WINDOWID`. On macOS the shell is wrapped in `login(1)`.
+`nuntio-term` sets `TERM=xterm-256color`, `COLORTERM`, `TERM_PROGRAM`, `PI_FORCE_IMAGE_PROTOCOL=kitty` (not on native ConPTY) and `WINDOWID`. On macOS the shell is wrapped in `login(1)`.
 
 Working directory for new tabs and splits, first hit wins:
 
@@ -311,7 +311,7 @@ Opt-in (`[herdr]`, `[tmux]`); the code is in [`crates/nuntio/src/mux/`](crates/n
 - `run_action` first offers the action to `forward_to_mux`: new tab, split, close pane, focus, resize and zoom become the tool's own keys (herdr's `[keys]` config, tmux's `list-keys -T prefix`), encoded for the pane's keyboard mode by `input::chord_bytes`. Tab switching and closing tabs stay nuntio's. Unbound actions fall through to nuntio; a nuntio split of such a pane runs the default shell, not a second client.
 - The service thread resolves programs like a login shell would (`mux/resolve.rs`), on Windows also in every WSL distribution, and runs the tools' CLIs with a timeout (`command::output_within`). The shell menu shows its last snapshot and asks for a new one, which replaces the menu's sections in place.
 - Agents: one monitor per running herdr session lists them over the socket and re-lists on pushed events. The main thread keeps them per `SessionKey` for the `agents` item, the tab markers (`WindowState::agent_status`) and the banner when one becomes blocked out of view.
-- herdr clients that nuntio starts get `PI_FORCE_IMAGE_PROTOCOL=kitty` (not through ConPTY), so herdr's panes send images that herdr passes on as Kitty graphics.
+- Images: herdr passes only Kitty graphics on to its outer terminal and gives its panes the environment of its server. Every nuntio pane therefore gets `PI_FORCE_IMAGE_PROTOCOL=kitty`, so a herdr server started in one hands it to omp in its panes. A server that still runs with an older value (`iterm2`) has to be restarted.
 
 ## Configuration and hot reload
 

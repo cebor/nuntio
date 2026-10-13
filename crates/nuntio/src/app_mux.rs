@@ -73,20 +73,6 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-/// Whether a pane started with `target` reads Kitty images: not through
-/// ConPTY, which garbles them.
-fn kitty_images(target: &Target) -> bool {
-    #[cfg(windows)]
-    {
-        matches!(target, Target::Wsl { .. }) && crate::wsl::helper().is_some()
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = target;
-        true
-    }
-}
-
 impl Core {
     /// Start, restart or stop the multiplexer service to match the config.
     pub(super) fn sync_mux(&mut self, state: Option<&mut WindowState>) {
@@ -331,15 +317,9 @@ impl Core {
             Some(dir) => Some(StartDir::Local(PathBuf::from(dir))),
             None => self.start_dir(state, distro.as_ref(), false),
         };
-        let mut env = Vec::new();
-        if tool == Tool::Herdr && kitty_images(&wanted.target) {
-            // A herdr server this client starts gives its panes Kitty
-            // images, which reach nuntio through herdr; iTerm2 ones don't.
-            env.push(("PI_FORCE_IMAGE_PROTOCOL".to_owned(), "kitty".to_owned()));
-        }
         state.close_menu();
         let placement = self.shell_menu_placement;
-        if let Some(id) = self.new_tab_in(state, launch, placement, dir, env)
+        if let Some(id) = self.new_tab_in(state, launch, placement, dir)
             && let Some(pane) = state.content_mut().pane_mut(id)
         {
             pane.mux = Some(wanted);

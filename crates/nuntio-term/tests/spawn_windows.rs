@@ -161,5 +161,5 @@ fn conpty_panes_get_no_image_protocol() {
     let (handle, rx) = spawn("cmd.exe", &["/c", "echo [%PI_FORCE_IMAGE_PROTOCOL%]"]);
     wait_for_exit(&rx);
     assert!(screen_contains(&handle, "["));
-    assert!(!screen_contains(&handle, "iterm2"));
+    assert!(!screen_contains(&handle, "kitty"));
 }

@@ -64,7 +64,7 @@ fn omp_is_told_to_use_inline_images() {
     let (handle, rx) = spawn("printf \"$PI_FORCE_IMAGE_PROTOCOL\"");
     wait_for_exit(&rx);
 
-    assert_eq!(line_text(&handle, 0), "iterm2");
+    assert_eq!(line_text(&handle, 0), "kitty");
 }
 
 #[test]
