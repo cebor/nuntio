@@ -276,8 +276,9 @@ impl App {
     pub fn refresh(&mut self) {
         let selected = self.selected_title();
         match self.store.list() {
-            Ok(files) => {
-                let mut notes: Vec<Entry> = files
+            Ok(listing) => {
+                let mut notes: Vec<Entry> = listing
+                    .notes
                     .into_iter()
                     .map(|f| {
                         let (done, total) = counts_of(&lines_of(&f.text));
@@ -291,6 +292,11 @@ impl App {
                     .collect();
                 notes.sort_by(|a, b| b.modified.cmp(&a.modified).then(a.title.cmp(&b.title)));
                 self.notes = notes;
+                if listing.unreadable > 0 && self.message.is_none() {
+                    let n = listing.unreadable;
+                    let noun = if n == 1 { "note" } else { "notes" };
+                    self.message = Some((Tone::Warn, format!("{n} {noun} can't be read")));
+                }
             }
             Err(err) => {
                 self.message = Some((Tone::Error, format!("Couldn't list the notes: {err}")));
@@ -1337,7 +1343,7 @@ impl App {
     /// Collect the tasks of every note, in list order.
     fn build_todos(&mut self, show_done: bool) {
         let files = match self.store.list() {
-            Ok(files) => files,
+            Ok(listing) => listing.notes,
             Err(err) => {
                 self.message = Some((Tone::Error, format!("Couldn't list the notes: {err}")));
                 return;
@@ -1517,7 +1523,7 @@ mod tests {
     use std::time::UNIX_EPOCH;
 
     use super::*;
-    use crate::notes::store::NoteFile;
+    use crate::notes::store::{Listing, NoteFile};
 
     #[derive(Default)]
     struct Files {
@@ -1525,6 +1531,7 @@ mod tests {
         clock: u64,
         trashed: Vec<String>,
         fail_writes: bool,
+        unreadable: usize,
     }
 
     impl Files {
@@ -1569,18 +1576,20 @@ mod tests {
     }
 
     impl Store for Memory {
-        fn list(&self) -> io::Result<Vec<NoteFile>> {
-            Ok(self
-                .0
-                .borrow()
-                .notes
-                .iter()
-                .map(|(title, (text, stamp))| NoteFile {
-                    title: title.clone(),
-                    modified: stamp.modified,
-                    text: text.clone(),
-                })
-                .collect())
+        fn list(&self) -> io::Result<Listing> {
+            let files = self.0.borrow();
+            Ok(Listing {
+                notes: files
+                    .notes
+                    .iter()
+                    .map(|(title, (text, stamp))| NoteFile {
+                        title: title.clone(),
+                        modified: stamp.modified,
+                        text: text.clone(),
+                    })
+                    .collect(),
+                unreadable: files.unreadable,
+            })
         }
 
         fn read(&self, title: &str) -> io::Result<(String, Stamp)> {
@@ -1668,6 +1677,28 @@ mod tests {
         assert_eq!(memory.text("New").unwrap(), "xnew\n");
         assert!(!app.dirty());
         assert_eq!(app.deadline(), None);
+    }
+
+    #[test]
+    fn notes_that_cannot_be_read_are_reported() {
+        let memory = Memory::with(&[("A", "one\n")]);
+        memory.0.borrow_mut().unreadable = 2;
+        let mut app = app(&memory);
+        assert_eq!(
+            app.message,
+            Some((Tone::Warn, "2 notes can't be read".into()))
+        );
+        memory.0.borrow_mut().unreadable = 1;
+        app.message = None;
+        app.refresh();
+        assert_eq!(
+            app.message,
+            Some((Tone::Warn, "1 note can't be read".into()))
+        );
+        memory.0.borrow_mut().unreadable = 0;
+        app.message = None;
+        app.refresh();
+        assert_eq!(app.message, None);
     }
 
     #[test]

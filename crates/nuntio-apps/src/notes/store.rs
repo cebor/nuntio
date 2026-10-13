@@ -21,9 +21,18 @@ pub struct NoteFile {
     pub text: String,
 }
 
-pub trait Store {
+/// The notes of a folder.
+#[derive(Debug, Default)]
+pub struct Listing {
     /// Every note with its text (the progress counts need it).
-    fn list(&self) -> io::Result<Vec<NoteFile>>;
+    pub notes: Vec<NoteFile>,
+    /// Files that are notes by name but can't be read, for example because
+    /// they aren't UTF-8 text.
+    pub unreadable: usize,
+}
+
+pub trait Store {
+    fn list(&self) -> io::Result<Listing>;
     fn read(&self, title: &str) -> io::Result<(String, Stamp)>;
     /// `None`: the file is missing.
     fn stamp(&self, title: &str) -> io::Result<Option<Stamp>>;
@@ -83,37 +92,47 @@ fn stamp_of(meta: &fs::Metadata) -> io::Result<Stamp> {
 }
 
 impl Store for DirStore {
-    fn list(&self) -> io::Result<Vec<NoteFile>> {
-        let mut notes = Vec::new();
+    fn list(&self) -> io::Result<Listing> {
+        let mut listing = Listing::default();
         for entry in fs::read_dir(&self.0)? {
-            let Ok(entry) = entry else { continue };
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            let Ok(entry) = entry else {
+                listing.unreadable += 1;
                 continue;
             };
-            if name.starts_with('.') || path.extension().is_none_or(|e| e != "md") {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                listing.unreadable += 1;
+                continue;
+            };
+            if name.starts_with('.') {
                 continue;
             }
             let Some(title) = path.file_stem().and_then(|s| s.to_str()) else {
+                listing.unreadable += 1;
                 continue;
             };
             // Metadata first: a write in between then shows as a change.
             let Ok(meta) = fs::metadata(&path) else {
+                listing.unreadable += 1;
                 continue;
             };
             if !meta.is_file() {
                 continue;
             }
             let Ok(text) = fs::read_to_string(&path) else {
+                listing.unreadable += 1;
                 continue;
             };
-            notes.push(NoteFile {
+            listing.notes.push(NoteFile {
                 title: title.to_owned(),
                 modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                 text,
             });
         }
-        Ok(notes)
+        Ok(listing)
     }
 
     fn read(&self, title: &str) -> io::Result<(String, Stamp)> {
@@ -248,10 +267,22 @@ mod tests {
         fs::create_dir(tmp.0.join("Dir.md")).unwrap();
         store.trash("One").unwrap();
         store.write("Two", "b").unwrap();
-        let notes = store.list().unwrap();
-        assert_eq!(notes.len(), 1);
-        assert_eq!(notes[0].title, "Two");
-        assert_eq!(notes[0].text, "b");
+        let listing = store.list().unwrap();
+        assert_eq!(listing.notes.len(), 1);
+        assert_eq!(listing.notes[0].title, "Two");
+        assert_eq!(listing.notes[0].text, "b");
+        assert_eq!(listing.unreadable, 0);
+    }
+
+    #[test]
+    fn list_counts_notes_that_are_not_text() {
+        let tmp = TempDir::new("unreadable");
+        let mut store = tmp.store();
+        store.write("Fine", "b").unwrap();
+        fs::write(tmp.0.join("Binary.md"), [0xff, 0xfe, 0x00]).unwrap();
+        let listing = store.list().unwrap();
+        assert_eq!(listing.notes.len(), 1);
+        assert_eq!(listing.unreadable, 1);
     }
 
     #[test]
@@ -319,6 +350,6 @@ mod tests {
         let tmp = TempDir::new("object");
         let mut store: Box<dyn Store> = Box::new(tmp.store());
         store.create("A").unwrap();
-        assert_eq!(store.list().unwrap().len(), 1);
+        assert_eq!(store.list().unwrap().notes.len(), 1);
     }
 }
