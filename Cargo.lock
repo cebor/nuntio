@@ -2009,10 +2009,10 @@ name = "nuntio-apps"
 version = "0.2.2"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "dirs",
  "lexopt",
  "nuntio-config",
+ "nuntio-tui",
  "pulldown-cmark",
  "ratatui",
  "unicode-segmentation",
@@ -2045,6 +2045,7 @@ dependencies = [
  "fontdb",
  "lexopt",
  "nuntio-config",
+ "nuntio-tui",
  "ratatui",
  "toml",
  "unicode-width",
@@ -2082,6 +2083,15 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nuntio-tui"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "ratatui",
 ]
 
 [[package]]

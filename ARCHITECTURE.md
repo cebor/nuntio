@@ -66,14 +66,17 @@ flowchart TD
     nuntio --> tui[nuntio-config-tui]
     nuntio --> apps[nuntio-apps]
     apps --> config
+    apps --> termui[nuntio-tui]
     render --> term
     tui --> config
+    tui --> termui
     term -.->|"cfg(windows): proto only"| wsl[nuntio-wsl]
     term --> alacritty[alacritty_terminal]
     render --> wgpu[wgpu + cosmic-text]
     nuntio --> winit[winit]
     tui --> ratatui[ratatui]
     apps --> ratatui
+    termui --> ratatui
 ```
 
 |Crate|Owns|Must not know about|
@@ -83,7 +86,8 @@ flowchart TD
 |[`nuntio-render`](crates/nuntio-render)|wgpu, fonts, glyph and image atlases. Input is only a `Frame` and `nuntio_term::Snapshot`.|config, tabs, winit beyond raw window handles|
 |[`nuntio-config`](crates/nuntio-config)|Config types, `schema.rs`, loading and validation, `edit.rs`, themes, `keys.rs`, the file watcher, shell and WSL detection (`detect.rs`).|any other nuntio crate|
 |[`nuntio-config-tui`](crates/nuntio-config-tui)|The ratatui settings editor: its logic in `state.rs` (behind the `Store` trait) and `state_keys.rs` (key handling), the state of its choice list and text input in `widgets.rs`, the splitting of program arguments in `args.rs`; `ui.rs` draws.|the running nuntio|
-|[`nuntio-apps`](crates/nuntio-apps)|Terminal apps that nuntio opens in panes, one subcommand each: `notes` (Markdown notes). Terminal I/O only in `notes/mod.rs` and `term.rs`; `notes/ui.rs` draws. The rest (`store`, `buffer`, `markdown`, `edit`, `layout`, `state`, `widgets`) takes crossterm events and ratatui styles but never touches the terminal.|the running nuntio|
+|[`nuntio-tui`](crates/nuntio-tui)|What both terminal apps share: terminal setup and restore (`terminal.rs`: raw mode, alternate screen, bracketed paste, optional mouse and focus events, panic hook), key normalization (releases dropped, AltGr as text on Windows) and the OSC 52 clipboard.|any other nuntio crate|
+|[`nuntio-apps`](crates/nuntio-apps)|Terminal apps that nuntio opens in panes, one subcommand each: `notes` (Markdown notes). Terminal I/O only in `notes/mod.rs`; `notes/ui.rs` draws. The rest (`store`, `buffer`, `markdown`, `edit`, `layout`, `state`, `widgets`) takes crossterm events and ratatui styles but never touches the terminal.|the running nuntio|
 |[`nuntio-wsl`](crates/nuntio-wsl)|The Linux-only relay binary and `proto`, which nuntio-term shares on Windows.|nuntio internals|
 |[`xtask`](xtask)|Icons, packaging, changelog, website, `drive`.|nuntio crates: it talks via processes, files and TCP|
 

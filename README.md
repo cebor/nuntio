@@ -175,7 +175,7 @@ In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>
 
 ## Architecture
 
-nuntio is a Cargo workspace: the `nuntio` binary (window, tabs, panes, input), `nuntio-term` (PTY and terminal state on top of `alacritty_terminal`), `nuntio-render` (wgpu), `nuntio-config` and its editor `nuntio-config-tui`, the notes app `nuntio-apps`, and the WSL helper `nuntio-wsl`. [ARCHITECTURE.md](ARCHITECTURE.md) describes the threads, data flows and platform specifics.
+nuntio is a Cargo workspace: the `nuntio` binary (window, tabs, panes, input), `nuntio-term` (PTY and terminal state on top of `alacritty_terminal`), `nuntio-render` (wgpu), `nuntio-config` and its editor `nuntio-config-tui`, the notes app `nuntio-apps`, `nuntio-tui` (the terminal setup both TUIs share), and the WSL helper `nuntio-wsl`. [ARCHITECTURE.md](ARCHITECTURE.md) describes the threads, data flows and platform specifics.
 
 ## Contributing
 

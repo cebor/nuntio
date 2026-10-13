@@ -21,6 +21,7 @@ nuntio-term = { path = "crates/nuntio-term" }
 nuntio-config-tui = { path = "crates/nuntio-config-tui" }
 nuntio-wsl = { path = "crates/nuntio-wsl" }
 nuntio-apps = { path = "crates/nuntio-apps" }
+nuntio-tui = { path = "crates/nuntio-tui" }
 
 anyhow = "1"
 thiserror = "2"

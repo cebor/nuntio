@@ -16,10 +16,15 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{self, Event};
 
-use crate::term;
+use nuntio_tui::terminal::Modes;
 use state::{App, Tone};
 use store::DirStore;
 
+/// Mouse clicks and focus changes both matter to the notes.
+const MODES: Modes = Modes {
+    mouse: true,
+    focus: true,
+};
 const HELP: &str = "Usage: nuntio-apps notes [--dir <path>] [--config <path>]\n\nMarkdown notes, saved as .md files in one folder.\n\nOptions:\n  --dir <path>     Use this folder instead of notes.directory\n  --config <path>  Read notes.directory from this config file\n  -h, --help       Print this help\n";
 
 struct Args {
@@ -95,7 +100,7 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
         Err(message) => App::failed(Box::new(DirStore(PathBuf::new())), String::new(), message),
     };
 
-    let mut terminal = term::init()?;
+    let mut terminal = nuntio_tui::terminal::init(MODES)?;
     let result = (|| -> Result<()> {
         // Starts crossterm's event reader, which only then listens for
         // resizes: nuntio resizes a new split's pane right after starting it.
@@ -109,7 +114,7 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
                     ui::draw(frame, &app);
                 })?;
                 if let Some(text) = app.take_clipboard() {
-                    term::copy_to_clipboard(&text)?;
+                    nuntio_tui::terminal::copy_to_clipboard(&text)?;
                 }
             }
             // Blocks until there is input or an autosave is due: no CPU use
@@ -131,7 +136,9 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
                     app.tick(now);
                     true
                 }
-                Some(Event::Key(key)) => term::normalize(key).is_some_and(|k| app.key(k, now)),
+                Some(Event::Key(key)) => {
+                    nuntio_tui::terminal::normalize_key(key).is_some_and(|k| app.key(k, now))
+                }
                 Some(Event::Paste(text)) => app.paste(&text, now),
                 Some(Event::Mouse(mouse)) => app.mouse(mouse, now),
                 Some(Event::FocusGained) => {
@@ -144,6 +151,6 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
         }
         Ok(())
     })();
-    term::restore();
+    nuntio_tui::terminal::restore(MODES);
     result.context("the notes app failed")
 }

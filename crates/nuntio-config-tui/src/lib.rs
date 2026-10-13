@@ -12,12 +12,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use nuntio_config::ThemeSet;
-use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
-};
+use nuntio_tui::terminal::{self, Modes};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
 use crate::state::{App, Key, Sources, Store, Tone};
+
+/// Keys and pasted text only.
+const MODES: Modes = Modes {
+    mouse: false,
+    focus: false,
+};
 
 struct FileStore(PathBuf);
 
@@ -154,16 +158,11 @@ fn run_editor(path: &Path) -> Result<()> {
 }
 
 fn map_key(event: KeyEvent) -> Option<Key> {
-    if event.kind == KeyEventKind::Release {
-        return None;
-    }
-    // On Windows AltGr arrives as Ctrl+Alt: that is text. Elsewhere Ctrl+Alt
-    // is a real combination.
-    let ctrl = event.modifiers.contains(KeyModifiers::CONTROL)
-        && !(cfg!(windows) && event.modifiers.contains(KeyModifiers::ALT));
+    let event = terminal::normalize_key(event)?;
+    let ctrl = event.modifiers.contains(KeyModifiers::CONTROL);
     let shift = event.modifiers.contains(KeyModifiers::SHIFT);
     Some(match event.code {
-        KeyCode::Char(c) if ctrl => Key::Ctrl(c.to_ascii_lowercase()),
+        KeyCode::Char(c) if ctrl => Key::Ctrl(c),
         KeyCode::Char(c) => Key::Char(c),
         KeyCode::Up if shift => Key::ShiftUp,
         KeyCode::Down if shift => Key::ShiftDown,
@@ -185,26 +184,6 @@ fn map_key(event: KeyEvent) -> Option<Key> {
     })
 }
 
-/// Set up the terminal for the UI. Fails with an error instead of a panic
-/// when there is no terminal. Bracketed paste is switched off again if the
-/// program panics: the panic message goes to a terminal that keeps it on
-/// otherwise.
-fn init_terminal() -> Result<ratatui::DefaultTerminal> {
-    static HOOK: std::sync::Once = std::sync::Once::new();
-    let terminal = ratatui::try_init().context("cannot set up the terminal")?;
-    HOOK.call_once(|| {
-        // After ratatui's hook (installed by `try_init`), which restores the
-        // screen: this one runs first.
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = ratatui::crossterm::execute!(io::stdout(), DisableBracketedPaste);
-            previous(info);
-        }));
-    });
-    let _ = ratatui::crossterm::execute!(io::stdout(), EnableBracketedPaste);
-    Ok(terminal)
-}
-
 pub fn main() -> Result<()> {
     let path = nuntio_config::config_path(parse_args()?)
         .context("no home directory to look for the config in")?;
@@ -224,7 +203,7 @@ pub fn main() -> Result<()> {
     app.editor_name = editor_name(&editor());
 
     let mut view = ui::View::default();
-    let mut terminal = init_terminal()?;
+    let mut terminal = terminal::init(MODES)?;
     let result = (|| -> Result<()> {
         while !app.quit {
             terminal.draw(|frame| ui::draw(frame, &app, &mut view))?;
@@ -240,10 +219,9 @@ pub fn main() -> Result<()> {
             }
             if app.open_editor {
                 app.open_editor = false;
-                let _ = ratatui::crossterm::execute!(io::stdout(), DisableBracketedPaste);
-                ratatui::restore();
+                terminal::restore(MODES);
                 let edited = run_editor(&path);
-                terminal = init_terminal()?;
+                terminal = terminal::init(MODES)?;
                 match edited {
                     Ok(()) => app.reload(),
                     Err(err) => app.message = Some((Tone::Error, format!("{err:#}"))),
@@ -252,8 +230,7 @@ pub fn main() -> Result<()> {
         }
         Ok(())
     })();
-    let _ = ratatui::crossterm::execute!(io::stdout(), DisableBracketedPaste);
-    ratatui::restore();
+    terminal::restore(MODES);
     result
 }
 
@@ -264,19 +241,8 @@ mod tests {
     use nuntio_config::testutil::TempDir;
 
     #[test]
-    fn altgr_characters_are_text_not_ctrl() {
+    fn ctrl_letters_are_lower_case() {
         let ev = |c, m| KeyEvent::new(KeyCode::Char(c), m);
-        if cfg!(windows) {
-            assert_eq!(
-                map_key(ev('@', KeyModifiers::CONTROL | KeyModifiers::ALT)),
-                Some(Key::Char('@'))
-            );
-        } else {
-            assert_eq!(
-                map_key(ev('d', KeyModifiers::CONTROL | KeyModifiers::ALT)),
-                Some(Key::Ctrl('d'))
-            );
-        }
         assert_eq!(
             map_key(ev('c', KeyModifiers::CONTROL)),
             Some(Key::Ctrl('c'))

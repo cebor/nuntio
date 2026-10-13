@@ -2,7 +2,6 @@
 //! with a subcommand per app; only `notes` so far.
 
 mod notes;
-mod term;
 
 use anyhow::Result;
 

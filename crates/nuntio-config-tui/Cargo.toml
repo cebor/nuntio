@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 nuntio-config.workspace = true
+nuntio-tui.workspace = true
 anyhow.workspace = true
 toml.workspace = true
 dirs.workspace = true
