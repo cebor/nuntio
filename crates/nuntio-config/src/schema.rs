@@ -664,37 +664,39 @@ mod tests {
         assert_eq!(paths.len(), SETTINGS.len());
     }
 
+    /// The row of `path` in the table under its section heading of
+    /// docs/config.md. `window.padding.x` and `.y` share the `padding` row.
+    fn documented_row<'a>(docs: &'a str, path: &str) -> Option<&'a str> {
+        let (heading, key) = match path {
+            "window.padding.x" | "window.padding.y" => ("### `[window]`".to_owned(), "padding"),
+            _ => match path.split_once('.') {
+                Some(("shell", key)) => ("### Shell".to_owned(), key),
+                Some((section, key)) => (format!("### `[{section}]`"), key),
+                None => ("### Top level".to_owned(), path),
+            },
+        };
+        let section = docs.split(&heading).nth(1)?;
+        let section = section.split("\n### ").next()?;
+        section
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{key}` |")))
+    }
+
+    /// The documented default of `path`: the third column of its row.
+    fn documented_default<'a>(docs: &'a str, path: &str) -> Option<&'a str> {
+        documented_row(docs, path)?.split('|').nth(3).map(str::trim)
+    }
+
     #[test]
     fn every_setting_is_documented() {
         let docs = include_str!("../../../docs/config.md");
         for s in SETTINGS {
-            let key = s.path.rsplit('.').next().unwrap();
-            let key = if s.path.starts_with("window.padding") {
-                "padding"
-            } else {
-                key
-            };
             assert!(
-                docs.contains(&format!("`{key}`")),
+                documented_row(docs, s.path).is_some(),
                 "{} is undocumented",
                 s.path
             );
         }
-    }
-
-    /// The documented default of `path`: the third column of its row in
-    /// the table under its section heading.
-    fn documented_default<'a>(docs: &'a str, path: &str) -> Option<&'a str> {
-        let (heading, key) = match path.split_once('.') {
-            Some((section, key)) => (format!("### `[{section}]`"), key),
-            None => ("### Top level".to_owned(), path),
-        };
-        let section = docs.split(&heading).nth(1)?;
-        let section = section.split("\n### ").next()?;
-        let row = section
-            .lines()
-            .find(|line| line.starts_with(&format!("| `{key}` |")))?;
-        row.split('|').nth(3).map(str::trim)
     }
 
     #[test]

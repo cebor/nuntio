@@ -4,6 +4,7 @@ nuntio is configured with a single TOML file. Every setting is optional, so an e
 
 - [Location](#location)
 - [Editing in the terminal](#editing-in-the-terminal)
+- [Notes](#notes)
 - [Reloading](#reloading)
 - [Full example](#full-example)
 - [Options](#options)
