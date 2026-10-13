@@ -158,8 +158,6 @@ pub struct App {
     register: String,
     clipboard_out: Option<String>,
     pub quit: bool,
-    /// The notes folder can't be used: only this message is shown.
-    pub fatal: Option<String>,
 }
 
 /// The lines of a note's text, as `Buffer` splits them.
@@ -183,23 +181,7 @@ fn ctrl(key: &KeyEvent) -> Option<char> {
 impl App {
     /// The app on `store` with its newest note open.
     pub fn new(store: Box<dyn Store>, dir_label: String) -> Self {
-        let mut app = Self::new_empty(store, dir_label);
-        app.refresh();
-        if !app.notes.is_empty() {
-            app.open_title(&app.notes[0].title.clone());
-        }
-        app
-    }
-
-    /// An app that only shows `message` and quits on `q`.
-    pub fn failed(store: Box<dyn Store>, dir_label: String, message: String) -> Self {
-        let mut app = Self::new_empty(store, dir_label);
-        app.fatal = Some(message);
-        app
-    }
-
-    fn new_empty(store: Box<dyn Store>, dir_label: String) -> Self {
-        Self {
+        let mut app = Self {
             store,
             dir_label,
             notes: Vec::new(),
@@ -225,8 +207,12 @@ impl App {
             register: String::new(),
             clipboard_out: None,
             quit: false,
-            fatal: None,
+        };
+        app.refresh();
+        if !app.notes.is_empty() {
+            app.open_title(&app.notes[0].title.clone());
         }
+        app
     }
 
     // ----- Queries -----------------------------------------------------------
@@ -274,9 +260,6 @@ impl App {
     /// Re-read the folder: the list with its todo counts, and the open note
     /// if it changed on disk and has no unsaved changes.
     pub fn refresh(&mut self) {
-        if self.fatal.is_some() {
-            return;
-        }
         let selected = self.selected_title();
         match self.store.list() {
             Ok(files) => {
@@ -616,12 +599,6 @@ impl App {
     /// Handle a key; returns whether to redraw.
     pub fn key(&mut self, key: KeyEvent, now: Instant) -> bool {
         self.message = None;
-        if self.fatal.is_some() {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) || ctrl(&key) == Some('q') {
-                self.quit = true;
-            }
-            return true;
-        }
         if self.prompt.is_some() {
             self.prompt_key(key);
             return true;
@@ -1044,9 +1021,6 @@ impl App {
 
     /// Bracketed paste; returns whether to redraw.
     pub fn paste(&mut self, text: &str, now: Instant) -> bool {
-        if self.fatal.is_some() {
-            return false;
-        }
         match &mut self.prompt {
             Some(Prompt::NewNote(input, error) | Prompt::Rename(input, error)) => {
                 let first = text.lines().next().unwrap_or_default();
@@ -1074,7 +1048,7 @@ impl App {
 
     /// A mouse event; returns whether to redraw.
     pub fn mouse(&mut self, event: MouseEvent, now: Instant) -> bool {
-        if self.fatal.is_some() || self.prompt.is_some() {
+        if self.prompt.is_some() {
             return false;
         }
         let at = Position::new(event.column, event.row);

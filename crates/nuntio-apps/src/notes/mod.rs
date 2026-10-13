@@ -3,6 +3,7 @@
 
 mod buffer;
 mod edit;
+mod failed;
 mod layout;
 mod markdown;
 mod state;
@@ -16,6 +17,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{self, Event};
 
+use failed::Failed;
 use nuntio_tui::style::Tone;
 use nuntio_tui::terminal::Modes;
 use state::App;
@@ -76,11 +78,9 @@ fn notes_dir(args: &Args) -> Result<(PathBuf, Option<String>), String> {
         .ok_or_else(|| "No home directory for the notes folder".to_owned())
 }
 
-pub fn run(parser: lexopt::Parser) -> Result<()> {
-    let Some(args) = parse_args(parser)? else {
-        return Ok(());
-    };
-    let mut app = match notes_dir(&args) {
+/// The app, or the reason the notes folder can't be used.
+fn open(args: &Args) -> Result<App, Failed> {
+    match notes_dir(args) {
         Ok((dir, warning)) => {
             let label = nuntio_config::tilde_path(&dir, dirs::home_dir().as_deref());
             match std::fs::create_dir_all(&dir) {
@@ -89,69 +89,98 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
                     if let Some(warning) = warning {
                         app.message = Some((Tone::Warn, warning));
                     }
-                    app
+                    Ok(app)
                 }
-                Err(err) => {
-                    let message = format!("Cannot open the notes folder {label}: {err}");
-                    App::failed(Box::new(DirStore(dir)), label, message)
-                }
+                Err(err) => Err(Failed {
+                    message: format!("Cannot open the notes folder {label}: {err}"),
+                    dir_label: label,
+                }),
             }
         }
         // A process that exits closes its pane: errors are shown in the TUI.
-        Err(message) => App::failed(Box::new(DirStore(PathBuf::new())), String::new(), message),
+        Err(message) => Err(Failed {
+            message,
+            dir_label: String::new(),
+        }),
+    }
+}
+
+pub fn run(parser: lexopt::Parser) -> Result<()> {
+    let Some(args) = parse_args(parser)? else {
+        return Ok(());
     };
+    let opened = open(&args);
 
     let mut terminal = nuntio_tui::terminal::init(MODES)?;
     let result = (|| -> Result<()> {
         // Starts crossterm's event reader, which only then listens for
         // resizes: nuntio resizes a new split's pane right after starting it.
         event::poll(std::time::Duration::ZERO)?;
-        let mut redraw = true;
-        while !app.quit {
-            if redraw {
-                // Lay out for the size the frame is drawn at.
-                terminal.draw(|frame| {
-                    app.prepare(frame.area().as_size());
-                    ui::draw(frame, &app);
-                })?;
-                if let Some(text) = app.take_clipboard() {
-                    nuntio_tui::terminal::copy_to_clipboard(&text)?;
-                }
-            }
-            // Blocks until there is input or an autosave is due: no CPU use
-            // while idle.
-            let event = match app.deadline() {
-                Some(at) => {
-                    let wait = at.saturating_duration_since(Instant::now());
-                    if event::poll(wait)? {
-                        Some(event::read()?)
-                    } else {
-                        None
-                    }
-                }
-                None => Some(event::read()?),
-            };
-            let now = Instant::now();
-            redraw = match event {
-                None => {
-                    app.tick(now);
-                    true
-                }
-                Some(Event::Key(key)) => {
-                    nuntio_tui::terminal::normalize_key(key).is_some_and(|k| app.key(k, now))
-                }
-                Some(Event::Paste(text)) => app.paste(&text, now),
-                Some(Event::Mouse(mouse)) => app.mouse(mouse, now),
-                Some(Event::FocusGained) => {
-                    app.refresh();
-                    true
-                }
-                Some(Event::Resize(..)) => true,
-                _ => false,
-            };
+        match opened {
+            Ok(app) => run_notes(&mut terminal, app),
+            Err(failed) => run_failed(&mut terminal, &failed),
         }
-        Ok(())
     })();
     nuntio_tui::terminal::restore(MODES);
     result.context("the notes app failed")
+}
+
+/// Show the failure until the user quits.
+fn run_failed(terminal: &mut ratatui::DefaultTerminal, failed: &Failed) -> Result<()> {
+    loop {
+        terminal.draw(|frame| ui::draw_failed(frame, failed))?;
+        if let Event::Key(key) = event::read()?
+            && nuntio_tui::terminal::normalize_key(key).is_some_and(Failed::quits)
+        {
+            return Ok(());
+        }
+    }
+}
+
+fn run_notes(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
+    let mut redraw = true;
+    while !app.quit {
+        if redraw {
+            // Lay out for the size the frame is drawn at.
+            terminal.draw(|frame| {
+                app.prepare(frame.area().as_size());
+                ui::draw(frame, &app);
+            })?;
+            if let Some(text) = app.take_clipboard() {
+                nuntio_tui::terminal::copy_to_clipboard(&text)?;
+            }
+        }
+        // Blocks until there is input or an autosave is due: no CPU use
+        // while idle.
+        let event = match app.deadline() {
+            Some(at) => {
+                let wait = at.saturating_duration_since(Instant::now());
+                if event::poll(wait)? {
+                    Some(event::read()?)
+                } else {
+                    None
+                }
+            }
+            None => Some(event::read()?),
+        };
+        let now = Instant::now();
+        redraw = match event {
+            None => {
+                app.tick(now);
+                true
+            }
+            Some(Event::Key(key)) => {
+                nuntio_tui::terminal::normalize_key(key).is_some_and(|k| app.key(k, now))
+            }
+            Some(Event::Paste(text)) => app.paste(&text, now),
+            Some(Event::Mouse(mouse)) => app.mouse(mouse, now),
+            Some(Event::FocusGained) => {
+                app.refresh();
+                true
+            }
+            Some(Event::Resize(..)) => true,
+            _ => false,
+        };
+    }
+    Ok(())
 }

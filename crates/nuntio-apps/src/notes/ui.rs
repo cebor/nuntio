@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use super::failed::Failed;
 use super::layout::Row;
 use super::markdown::{self, PieceKind};
 use super::state::{App, Focus, Prompt, TodoRow};
@@ -34,27 +35,35 @@ pub struct Areas {
     pub too_small: bool,
 }
 
-pub fn areas(size: Size, app: &App) -> Areas {
-    let full = Rect::new(0, 0, size.width, size.height);
+/// Header, body and footer of a screen of `size`; `None` if it is too small.
+fn split(size: Size) -> Option<[Rect; 3]> {
     if size.width < 40 || size.height < 8 {
+        return None;
+    }
+    Some(
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .areas(Rect::new(0, 0, size.width, size.height)),
+    )
+}
+
+pub fn areas(size: Size, app: &App) -> Areas {
+    let Some([header, body, footer]) = split(size) else {
         return Areas {
             too_small: true,
             ..Areas::default()
         };
-    }
-    let [header, body, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .areas(full);
+    };
     let mut areas = Areas {
         header,
         body,
         footer,
         ..Areas::default()
     };
-    if app.todos.is_some() || app.fatal.is_some() {
+    if app.todos.is_some() {
         return areas;
     }
     if size.width < NARROW {
@@ -118,6 +127,24 @@ fn truncate(text: &str, width: usize) -> String {
     out
 }
 
+/// The screen of a notes app that cannot start: the reason, centered.
+pub fn draw_failed(frame: &mut Frame, failed: &Failed) {
+    let Some([header, body, _]) = split(frame.area().as_size()) else {
+        center_line(frame, frame.area(), vec![Line::from("Terminal too small")]);
+        return;
+    };
+    draw_title(frame, header, &failed.dir_label);
+    center_line(
+        frame,
+        body,
+        vec![
+            Line::styled(failed.message.clone(), Tone::Error.style()),
+            Line::from(""),
+            Line::styled("q quits", dim()),
+        ],
+    );
+}
+
 pub fn draw(frame: &mut Frame, app: &App) {
     let areas = app.areas;
     if areas.too_small {
@@ -125,18 +152,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
     draw_header(frame, app);
-    if let Some(message) = &app.fatal {
-        center_line(
-            frame,
-            areas.body,
-            vec![
-                Line::styled(message.clone(), Tone::Error.style()),
-                Line::from(""),
-                Line::styled("q quits", dim()),
-            ],
-        );
-        return;
-    }
     if app.todos.is_some() {
         draw_todos(frame, app);
     } else {
@@ -162,16 +177,21 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
-fn draw_header(frame: &mut Frame, app: &App) {
-    let area = app.areas.header;
+/// ` Notes ` and the notes folder.
+fn draw_title(frame: &mut Frame, area: Rect, dir_label: &str) {
     let left = Line::from(vec![
         Span::styled(
             " Notes ",
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(app.dir_label.clone(), dim()),
+        Span::styled(dir_label.to_owned(), dim()),
     ]);
     frame.render_widget(Paragraph::new(left), area);
+}
+
+fn draw_header(frame: &mut Frame, app: &App) {
+    let area = app.areas.header;
+    draw_title(frame, area, &app.dir_label);
     if let Some(open) = &app.open {
         let mut spans = vec![Span::raw(open.title.clone())];
         if open.dirty() {
