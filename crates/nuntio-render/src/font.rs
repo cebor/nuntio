@@ -321,18 +321,10 @@ impl Fonts {
         if system.db().faces().next().is_none() {
             return Err(NoFontsError);
         }
-        let installed = system
-            .db()
-            .faces()
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()));
-        if let Some(name) = first_installed(installed, DEFAULT_MONOSPACE) {
+        if let Some(name) = first_installed(family_names(&system), DEFAULT_MONOSPACE) {
             system.db_mut().set_monospace_family(name);
         }
-        let installed = system
-            .db()
-            .faces()
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()));
-        let symbol_family = first_installed(installed, TEXT_SYMBOL_FAMILIES);
+        let symbol_family = first_installed(family_names(&system), TEXT_SYMBOL_FAMILIES);
         // cosmic-text finds no match for fontdb's default sans-serif family
         // on macOS and logs a miss on every fallback lookup.
         if cfg!(target_os = "macos") {
@@ -368,31 +360,23 @@ impl Fonts {
     pub fn set_family(&mut self, family: Option<String>) -> Option<String> {
         let (resolved, warning) = match family {
             None => (None, None),
-            Some(requested) => {
-                let installed = self
-                    .system
-                    .db()
-                    .faces()
-                    .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()));
-                match resolve_family(installed, &requested) {
-                    FamilyMatch::Exact(name) => (Some(name), None),
-                    FamilyMatch::Reordered(name) => {
-                        let warning =
-                            format!("font \"{requested}\" found as \"{name}\"; use that name");
-                        (Some(name), Some(warning))
-                    }
-                    FamilyMatch::NotFound { suggestions } => {
-                        let mut warning = format!(
-                            "font \"{requested}\" is not installed, using the default monospace font"
-                        );
-                        if !suggestions.is_empty() {
-                            warning +=
-                                &format!(" (did you mean \"{}\"?)", suggestions.join("\", \""));
-                        }
-                        (None, Some(warning))
-                    }
+            Some(requested) => match resolve_family(family_names(&self.system), &requested) {
+                FamilyMatch::Exact(name) => (Some(name), None),
+                FamilyMatch::Reordered(name) => {
+                    let warning =
+                        format!("font \"{requested}\" found as \"{name}\"; use that name");
+                    (Some(name), Some(warning))
                 }
-            }
+                FamilyMatch::NotFound { suggestions } => {
+                    let mut warning = format!(
+                        "font \"{requested}\" is not installed, using the default monospace font"
+                    );
+                    if !suggestions.is_empty() {
+                        warning += &format!(" (did you mean \"{}\"?)", suggestions.join("\", \""));
+                    }
+                    (None, Some(warning))
+                }
+            },
         };
         self.family = resolved;
         self.remeasure();
@@ -574,6 +558,14 @@ impl Fonts {
         }
         glyphs
     }
+}
+
+/// The names of the installed font families; a family repeats for each of its faces.
+fn family_names(system: &FontSystem) -> impl Iterator<Item = &str> {
+    system
+        .db()
+        .faces()
+        .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()))
 }
 
 fn new_buffer(system: &mut FontSystem, px_size: f32) -> Buffer {

@@ -1561,35 +1561,26 @@ mod tests {
         );
     }
 
-    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
-        Rect {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
     #[test]
     fn scissors_cover_the_area_inside_the_target() {
         let size = (800, 600);
         assert_eq!(
-            scissor(rect(10.0, 20.0, 300.0, 200.0), size),
+            scissor(Rect::new(10.0, 20.0, 300.0, 200.0), size),
             Some([10, 20, 300, 200])
         );
         // Fractional edges round outwards.
         assert_eq!(
-            scissor(rect(10.5, 20.5, 100.0, 100.0), size),
+            scissor(Rect::new(10.5, 20.5, 100.0, 100.0), size),
             Some([10, 20, 101, 101])
         );
         // Cut to the target.
         assert_eq!(
-            scissor(rect(-5.0, 500.0, 900.0, 200.0), size),
+            scissor(Rect::new(-5.0, 500.0, 900.0, 200.0), size),
             Some([0, 500, 800, 100])
         );
         // Nothing visible.
-        assert_eq!(scissor(rect(850.0, 0.0, 100.0, 100.0), size), None);
-        assert_eq!(scissor(rect(0.0, 0.0, 0.0, 100.0), size), None);
+        assert_eq!(scissor(Rect::new(850.0, 0.0, 100.0, 100.0), size), None);
+        assert_eq!(scissor(Rect::new(0.0, 0.0, 0.0, 100.0), size), None);
     }
 
     #[test]
@@ -1608,7 +1599,7 @@ mod tests {
         let batch = |range: Range<u32>| PaneBatch {
             fill: false,
             range,
-            area: rect(0.0, 0.0, 1.0, 1.0),
+            area: Rect::new(0.0, 0.0, 1.0, 1.0),
         };
         let layout = || Layout {
             instances: vec![Instance::solid(0.0, 0.0, 1.0, 1.0, Rgb { r: 0, g: 0, b: 0 }); 34],
