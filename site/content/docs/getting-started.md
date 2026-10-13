@@ -91,6 +91,7 @@ On macOS, nuntio uses iTerm2's shortcuts. On Linux and Windows, most shortcuts a
 | Scroll a line | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>↑</kbd> / <kbd>↓</kbd> | <kbd>Cmd</kbd><kbd>↑</kbd> / <kbd>↓</kbd> |
 | Reload config | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>,</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>,</kbd> |
 | Open `nuntio-config` | <kbd>Ctrl</kbd><kbd>,</kbd> | <kbd>Cmd</kbd><kbd>,</kbd> |
+| Open the notes in a new tab / a split | <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> / <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd> | <kbd>Cmd</kbd><kbd>Shift</kbd><kbd>N</kbd> / <kbd>Cmd</kbd><kbd>Opt</kbd><kbd>Shift</kbd><kbd>N</kbd> |
 
 In the find bar, <kbd>Enter</kbd> jumps to the next match, <kbd>Shift</kbd><kbd>Enter</kbd> to the previous one, <kbd>Alt</kbd><kbd>R</kbd> toggles regex mode and <kbd>Esc</kbd> closes the bar.
 
@@ -111,3 +112,5 @@ nuntio [options] [[-e] <command> [<args>...]]
 | `-h`, `--help` | Print the options |
 
 When nuntio is started without a terminal (from a desktop launcher, for example), it logs to `nuntio/nuntio.log` in the platform's cache directory, such as `~/.cache/nuntio/nuntio.log` on Linux or `~/Library/Caches/nuntio/nuntio.log` on macOS (the previous run's log is kept as `nuntio.old.log`). If something goes wrong, that's the first place to look, and the log is welcome in a [bug report](https://github.com/cebor/nuntio/issues).
+
+On a system with several GPUs, nuntio skips an adapter that can't draw to the window. To choose one yourself, set `WGPU_ADAPTER_NAME` to part of its name (for example `WGPU_ADAPTER_NAME=nvidia`) or `WGPU_POWER_PREF=high`; with `--log-level debug` the log lists the adapters found.
