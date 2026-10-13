@@ -130,6 +130,58 @@ struct PaneBatch {
     area: Rect,
 }
 
+/// The frame's instances, in drawing order: the panes, then UI, then the
+/// window's corner cutouts.
+#[derive(Default)]
+struct Layout {
+    instances: Vec<Instance>,
+    /// The instances of each pane and the area they are clipped to, so
+    /// glyphs wider than their cell don't reach into the next pane.
+    panes: Vec<PaneBatch>,
+    /// Instances from here on are UI (bars, overlays), drawn unclipped.
+    ui: usize,
+    /// Instances from here on are corner cutouts, drawn with their own
+    /// pipeline.
+    cutout: usize,
+}
+
+impl Layout {
+    fn clear(&mut self) {
+        self.instances.clear();
+        self.panes.clear();
+        self.ui = 0;
+        self.cutout = 0;
+    }
+
+    /// The instances pushed from now on are UI.
+    fn mark_ui(&mut self) {
+        self.ui = self.instances.len();
+        self.cutout = self.instances.len();
+    }
+
+    /// The instances pushed from now on are corner cutouts.
+    fn mark_cutout(&mut self) {
+        self.cutout = self.instances.len();
+    }
+
+    /// Cut the layout to `limit` instances, keeping the pane batches and the
+    /// UI/cutout starts inside it. Returns whether anything was cut.
+    fn truncate(&mut self, limit: usize) -> bool {
+        if self.instances.len() <= limit {
+            return false;
+        }
+        self.instances.truncate(limit);
+        let end = u32::try_from(limit).unwrap_or(u32::MAX);
+        self.panes.retain(|batch| batch.range.start < end);
+        for batch in &mut self.panes {
+            batch.range.end = batch.range.end.min(end);
+        }
+        self.ui = self.ui.min(limit);
+        self.cutout = self.cutout.min(limit);
+        true
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GlyphKey {
     Char(char, FaceStyle, TextSize),
@@ -199,15 +251,7 @@ pub struct Renderer {
     uniforms: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
-    instances: Vec<Instance>,
-    /// The instances of each pane and the area they are clipped to, so
-    /// glyphs wider than their cell don't reach into the next pane.
-    pane_batches: Vec<PaneBatch>,
-    /// Instances from here on are UI (bars, overlays), drawn unclipped.
-    ui_start: usize,
-    /// Instances from here on are corner cutouts, drawn with their own
-    /// pipeline.
-    cutout_start: usize,
+    layout: Layout,
     /// Problem with the configured font, reported once.
     font_warning: Option<String>,
     /// Consecutive frames in which glyphs didn't fit into the atlas and
@@ -332,10 +376,7 @@ impl Renderer {
             uniforms,
             instance_buffer,
             instance_capacity,
-            instances: Vec::new(),
-            pane_batches: Vec::new(),
-            ui_start: 0,
-            cutout_start: 0,
+            layout: Layout::default(),
             font_warning,
             overflow_frames: 0,
             skip_missing: false,
@@ -595,8 +636,8 @@ impl Renderer {
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
         let limit = max_instances(self.gpu.device.limits().max_buffer_size);
-        let mut truncated = self.limit_instances(limit);
-        let wanted = next_capacity(self.instance_capacity, self.instances.len(), limit);
+        let mut truncated = self.layout.truncate(limit);
+        let wanted = next_capacity(self.instance_capacity, self.layout.instances.len(), limit);
         if wanted != self.instance_capacity {
             match try_create_instance_buffer(&self.gpu.device, wanted) {
                 Some(buffer) => {
@@ -605,7 +646,7 @@ impl Renderer {
                 }
                 // No memory to grow into: draw what the old buffer holds.
                 None if wanted > self.instance_capacity => {
-                    truncated |= self.limit_instances(self.instance_capacity);
+                    truncated |= self.layout.truncate(self.instance_capacity);
                 }
                 None => {}
             }
@@ -617,19 +658,8 @@ impl Renderer {
         self.gpu.queue.write_buffer(
             &self.instance_buffer,
             0,
-            bytemuck::cast_slice(&self.instances),
+            bytemuck::cast_slice(&self.layout.instances),
         );
-    }
-
-    /// Cut the layout to `limit` instances. Returns whether it was cut.
-    fn limit_instances(&mut self, limit: usize) -> bool {
-        truncate_layout(
-            &mut self.instances,
-            limit,
-            &mut self.pane_batches,
-            &mut self.ui_start,
-            &mut self.cutout_start,
-        )
     }
 
     /// Bind the current atlas textures, after one was replaced.
@@ -736,16 +766,19 @@ impl Renderer {
             })],
             ..Default::default()
         });
-        if self.instances.is_empty() {
+        if self.layout.instances.is_empty() {
             return;
         }
         let (width, height) = self.gpu.size();
-        let ui = self.ui_start as u32;
-        let (cutout, total) = (self.cutout_start as u32, self.instances.len() as u32);
+        let ui = self.layout.ui as u32;
+        let (cutout, total) = (
+            self.layout.cutout as u32,
+            self.layout.instances.len() as u32,
+        );
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        for batch in &self.pane_batches {
+        for batch in &self.layout.panes {
             // A pane outside the window has nothing to show.
             if let Some([x, y, w, h]) = scissor(batch.area, (width, height)) {
                 pass.set_scissor_rect(x, y, w, h);
@@ -784,13 +817,9 @@ impl Renderer {
     }
 
     fn build_instances(&mut self, frame: &Frame) -> Result<(), AtlasFull> {
-        self.instances.clear();
-        self.pane_batches.clear();
-        // Not reached yet; stale indices would point into the last frame.
-        self.ui_start = usize::MAX;
-        self.cutout_start = usize::MAX;
+        self.layout.clear();
         for pane in frame.panes {
-            let start = self.instances.len() as u32;
+            let start = self.layout.instances.len() as u32;
             // A pane whose default background differs from the clear color is
             // filled first, so `push_pane` can skip runs equal to it.
             let fill = pane.snapshot.background != frame.background;
@@ -801,25 +830,25 @@ impl Renderer {
                     self.gpu.transparent(),
                     self.gpu.premultiplied(),
                 );
-                self.instances.push(Instance::fill(pane.area, color));
+                self.layout.instances.push(Instance::fill(pane.area, color));
             }
             self.push_pane(pane.snapshot, pane.x, pane.y)?;
             if pane.dim > 0.0 {
                 let mut veil = Instance::solid_rect(pane.area, pane.snapshot.background);
                 veil.color[3] = pane.dim.min(1.0);
-                self.instances.push(veil);
+                self.layout.instances.push(veil);
             }
-            let end = self.instances.len() as u32;
-            self.pane_batches.push(PaneBatch {
+            let end = self.layout.instances.len() as u32;
+            self.layout.panes.push(PaneBatch {
                 fill,
                 range: start..end,
                 area: pane.area,
             });
         }
-        self.ui_start = self.instances.len();
+        self.layout.mark_ui();
         self.push_ui(frame.rects, frame.texts)?;
         self.push_ui(frame.popup_rects, frame.popup_texts)?;
-        self.cutout_start = self.instances.len();
+        self.layout.mark_cutout();
         let radius = frame.corner_radius.round();
         if radius > 0.0 && self.gpu.transparent() {
             let (width, height) = self.gpu.size();
@@ -827,7 +856,7 @@ impl Renderer {
             for (x, y) in [(0.0, 0.0), (right, 0.0), (0.0, bottom), (right, bottom)] {
                 let mut corner = Instance::solid(x, y, radius, radius, Rgb { r: 0, g: 0, b: 0 });
                 corner.uv[0] = radius;
-                self.instances.push(corner);
+                self.layout.instances.push(corner);
             }
         }
         Ok(())
@@ -841,7 +870,7 @@ impl Renderer {
                 instance.kind = KIND_ROUNDED;
                 instance.uv[0] = r.radius;
             }
-            self.instances.push(instance);
+            self.layout.instances.push(instance);
         }
         for text in texts {
             self.push_text(text)?;
@@ -909,7 +938,7 @@ impl Renderer {
                 &self.mask_atlas
             };
             let texel = 1.0 / atlas.size() as f32;
-            self.instances.push(Instance {
+            self.layout.instances.push(Instance {
                 pos: [x + sprite.x as f32, y + sprite.y as f32],
                 size: [r.width as f32, r.height as f32],
                 // Normalized: the atlases can differ in size.
@@ -940,7 +969,9 @@ impl Renderer {
                 if bg != snapshot.background {
                     let (x, y) = origin(start, line);
                     let width = (column - start) as f32 * cw;
-                    self.instances.push(Instance::solid(x, y, width, ch, bg));
+                    self.layout
+                        .instances
+                        .push(Instance::solid(x, y, width, ch, bg));
                 }
             }
         }
@@ -951,7 +982,7 @@ impl Renderer {
                 continue;
             };
             let (x, y) = origin(piece.column, piece.line);
-            self.instances.push(Instance {
+            self.layout.instances.push(Instance {
                 pos: [x, y],
                 size: [piece.columns as f32 * cw, ch],
                 uv: image_uv(region, self.image_atlas.size(), piece),
@@ -985,7 +1016,9 @@ impl Renderer {
                 ],
             };
             for &(x, y, w, h) in rects {
-                self.instances.push(Instance::solid(x, y, w, h, c.color));
+                self.layout
+                    .instances
+                    .push(Instance::solid(x, y, w, h, c.color));
             }
         }
 
@@ -1011,7 +1044,8 @@ impl Renderer {
                 }
                 if cell.style.strikeout {
                     let y = y + m.strikeout_y as f32;
-                    self.instances
+                    self.layout
+                        .instances
                         .push(Instance::solid(x, y, width, m.stroke as f32, fg));
                 }
                 if cell.is_blank() {
@@ -1040,14 +1074,16 @@ impl Renderer {
         let top = y + m.underline_y as f32;
         match style {
             UnderlineStyle::Single => {
-                self.instances
+                self.layout
+                    .instances
                     .push(Instance::solid(x, top, width, stroke, color));
             }
             UnderlineStyle::Double => {
                 // Two lines one stroke apart, moved up if the cell is too short.
                 let top = top.min(y + m.height as f32 - 3.0 * stroke);
                 for top in [top, top + 2.0 * stroke] {
-                    self.instances
+                    self.layout
+                        .instances
                         .push(Instance::solid(x, top, width, stroke, color));
                 }
             }
@@ -1394,29 +1430,6 @@ fn next_capacity(capacity: usize, len: usize, limit: usize) -> usize {
     }
 }
 
-/// Cut the layout to `limit` instances, keeping the pane batches and the
-/// UI/cutout starts inside it. Returns whether anything was cut.
-fn truncate_layout(
-    instances: &mut Vec<Instance>,
-    limit: usize,
-    batches: &mut Vec<PaneBatch>,
-    ui_start: &mut usize,
-    cutout_start: &mut usize,
-) -> bool {
-    if instances.len() <= limit {
-        return false;
-    }
-    instances.truncate(limit);
-    let end = u32::try_from(limit).unwrap_or(u32::MAX);
-    batches.retain(|batch| batch.range.start < end);
-    for batch in batches.iter_mut() {
-        batch.range.end = batch.range.end.min(end);
-    }
-    *ui_start = (*ui_start).min(limit);
-    *cutout_start = (*cutout_start).min(limit);
-    true
-}
-
 /// Like `create_instance_buffer`, but `None` if the GPU is out of memory.
 fn try_create_instance_buffer(device: &wgpu::Device, capacity: usize) -> Option<wgpu::Buffer> {
     oom_checked(device, || create_instance_buffer(device, capacity))
@@ -1590,55 +1603,39 @@ mod tests {
     }
 
     #[test]
-    fn truncate_layout_keeps_ranges_consistent() {
+    fn truncate_keeps_layout_ranges_consistent() {
         let batch = |range: Range<u32>| PaneBatch {
             fill: false,
             range,
             area: rect(0.0, 0.0, 1.0, 1.0),
         };
-        let layout = || {
-            (
-                vec![Instance::solid(0.0, 0.0, 1.0, 1.0, Rgb { r: 0, g: 0, b: 0 }); 34],
-                vec![batch(0..10), batch(10..20), batch(20..30)],
-            )
+        let layout = || Layout {
+            instances: vec![Instance::solid(0.0, 0.0, 1.0, 1.0, Rgb { r: 0, g: 0, b: 0 }); 34],
+            panes: vec![batch(0..10), batch(10..20), batch(20..30)],
+            ui: 30,
+            cutout: 34,
         };
-        let ranges =
-            |batches: &[PaneBatch]| batches.iter().map(|b| b.range.clone()).collect::<Vec<_>>();
+        let ranges = |layout: &Layout| {
+            layout
+                .panes
+                .iter()
+                .map(|b| b.range.clone())
+                .collect::<Vec<_>>()
+        };
 
-        let (mut instances, mut batches) = layout();
-        let (mut ui_start, mut cutout_start) = (30, 34);
-        assert!(truncate_layout(
-            &mut instances,
-            15,
-            &mut batches,
-            &mut ui_start,
-            &mut cutout_start
-        ));
-        assert_eq!(ranges(&batches), [0..10, 10..15]);
-        assert_eq!((instances.len(), ui_start, cutout_start), (15, 15, 15));
+        let mut cut = layout();
+        assert!(cut.truncate(15));
+        assert_eq!(ranges(&cut), [0..10, 10..15]);
+        assert_eq!((cut.instances.len(), cut.ui, cut.cutout), (15, 15, 15));
 
-        let (mut instances, mut batches) = layout();
-        let (mut ui_start, mut cutout_start) = (30, 34);
-        assert!(truncate_layout(
-            &mut instances,
-            20,
-            &mut batches,
-            &mut ui_start,
-            &mut cutout_start
-        ));
-        assert_eq!(ranges(&batches), [0..10, 10..20]);
-        assert_eq!((instances.len(), ui_start, cutout_start), (20, 20, 20));
+        let mut cut = layout();
+        assert!(cut.truncate(20));
+        assert_eq!(ranges(&cut), [0..10, 10..20]);
+        assert_eq!((cut.instances.len(), cut.ui, cut.cutout), (20, 20, 20));
 
-        let (mut instances, mut batches) = layout();
-        let (mut ui_start, mut cutout_start) = (30, 34);
-        assert!(!truncate_layout(
-            &mut instances,
-            34,
-            &mut batches,
-            &mut ui_start,
-            &mut cutout_start
-        ));
-        assert_eq!(ranges(&batches), [0..10, 10..20, 20..30]);
+        let mut cut = layout();
+        assert!(!cut.truncate(34));
+        assert_eq!(ranges(&cut), [0..10, 10..20, 20..30]);
     }
 
     #[test]
