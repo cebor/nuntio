@@ -54,7 +54,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 base64 = "0.22"
 cosmic-text = "0.19"
 fontdb = "0.23"
-ratatui = "0.30"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
 etagere = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control", "image-data"] }
