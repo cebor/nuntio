@@ -18,6 +18,7 @@ use crate::actions::Bindings;
 use crate::actions_menu::{ActionsMenu, Anchor, MenuKind, View};
 use crate::banner::Banner;
 use crate::event::PaneId;
+use crate::input;
 use crate::pane_tree::{Direction, Layout, PaneTree};
 use crate::search_bar::SearchBar;
 use crate::shell_words::PathSyntax;
@@ -1128,11 +1129,7 @@ impl WindowState {
     pub fn send_focus(&self, focused: bool) {
         let term = self.term();
         if self.focused && term.mode().contains(TermMode::FOCUS_IN_OUT) {
-            term.send(if focused {
-                &b"\x1b[I"[..]
-            } else {
-                &b"\x1b[O"[..]
-            });
+            term.send(input::focus_report(focused));
         }
     }
 }

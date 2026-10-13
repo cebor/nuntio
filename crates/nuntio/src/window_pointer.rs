@@ -11,6 +11,7 @@ use winit::window::ResizeDirection;
 
 use super::{Chrome, WindowState};
 use crate::event::PaneId;
+use crate::input;
 use crate::mouse::{self, Button, ClickCounter, HeldButtons, MouseAction, MouseMods};
 use crate::pane_tree::{Axis, Divider};
 use crate::tab_bar::{BarHit, TabBar};
@@ -432,13 +433,7 @@ impl WindowState {
             }
         } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
             // Full-screen apps without mouse support (less, man) get arrow keys.
-            let app_cursor = mode.contains(TermMode::APP_CURSOR);
-            let arrow: &[u8] = match (lines > 0, app_cursor) {
-                (true, true) => b"\x1bOA",
-                (true, false) => b"\x1b[A",
-                (false, true) => b"\x1bOB",
-                (false, false) => b"\x1b[B",
-            };
+            let arrow = input::wheel_arrow(lines > 0, mode);
             term.write(arrow.repeat(lines.unsigned_abs() as usize));
         } else {
             term.scroll(lines);

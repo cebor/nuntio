@@ -244,10 +244,8 @@ fn encode_named(key: NamedKey, input: &KeyInput, mode: TermMode) -> Option<Vec<u
     if let Some(f) = cursor_final {
         return Some(if !plain {
             format!("\x1b[1;{m}{}", f as char).into_bytes()
-        } else if mode.contains(TermMode::APP_CURSOR) {
-            vec![0x1b, b'O', f]
         } else {
-            vec![0x1b, b'[', f]
+            plain_cursor_key(f, mode).to_vec()
         });
     }
 
@@ -352,6 +350,28 @@ fn is_latin(c: char) -> bool {
         c as u32,
         0..0x0250 | 0x1E00..0x1F00 | 0x2C60..0x2C80 | 0xA720..0xA800 | 0xAB30..0xAB70
     )
+}
+
+/// A cursor key without modifiers: `final_byte` after SS3 in application
+/// cursor mode, after CSI otherwise.
+fn plain_cursor_key(final_byte: u8, mode: TermMode) -> [u8; 3] {
+    let intro = if mode.contains(TermMode::APP_CURSOR) {
+        b'O'
+    } else {
+        b'['
+    };
+    [0x1b, intro, final_byte]
+}
+
+/// What a wheel notch sends to a full-screen program without mouse
+/// support (alternate scroll): the arrow key up or down.
+pub fn wheel_arrow(up: bool, mode: TermMode) -> [u8; 3] {
+    plain_cursor_key(if up { b'A' } else { b'B' }, mode)
+}
+
+/// The report that the window gained or lost focus (`TermMode::FOCUS_IN_OUT`).
+pub fn focus_report(focused: bool) -> &'static [u8] {
+    if focused { b"\x1b[I" } else { b"\x1b[O" }
 }
 
 /// Shift, Ctrl, Alt, Super and the like: keys that only modify others.
@@ -495,6 +515,16 @@ mod tests {
     #[test]
     fn ctrl_slash_is_unit_separator() {
         assert_eq!(char_key("/", Some("/"), CTRL), Some(vec![0x1f]));
+    }
+
+    #[test]
+    fn wheel_arrows_and_focus_reports() {
+        assert_eq!(wheel_arrow(true, TermMode::empty()), *b"\x1b[A");
+        assert_eq!(wheel_arrow(true, TermMode::APP_CURSOR), *b"\x1bOA");
+        assert_eq!(wheel_arrow(false, TermMode::empty()), *b"\x1b[B");
+        assert_eq!(wheel_arrow(false, TermMode::APP_CURSOR), *b"\x1bOB");
+        assert_eq!(focus_report(true), b"\x1b[I");
+        assert_eq!(focus_report(false), b"\x1b[O");
     }
 
     #[test]
