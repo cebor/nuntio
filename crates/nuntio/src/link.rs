@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use nuntio_render::{Rect, UiRect, UiText};
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{Palette, UiMetrics, hairline, truncate, truncate_start};
+use crate::style::{Corner, Palette, UiMetrics, corner_box, truncate, truncate_start};
 
 /// Distance from the pane's bottom corner, in logical pixels.
 const MARGIN: f64 = 6.0;
@@ -282,21 +282,13 @@ fn hint_bounds(columns: usize, pane: Rect, pointer: (f32, f32), metrics: UiMetri
     let cell = metrics.small;
     let margin = metrics.logical(MARGIN);
     let padding = metrics.logical(PADDING);
-    let width = (columns as f32 * cell.width as f32 + 2.0 * padding)
-        .min(pane.width - 2.0 * margin)
-        .max(0.0);
-    let height = cell.height as f32 + 2.0 * padding;
-    let left = Rect {
-        x: pane.x + margin,
-        y: pane.y + pane.height - margin - height,
-        width,
-        height,
-    };
+    let size = (
+        columns as f32 * cell.width as f32 + 2.0 * padding,
+        cell.height as f32 + 2.0 * padding,
+    );
+    let left = corner_box(pane, size, margin, Corner::BottomLeft);
     if left.contains(pointer.0, pointer.1) {
-        Rect {
-            x: pane.x + pane.width - margin - width,
-            ..left
-        }
+        corner_box(pane, size, margin, Corner::BottomRight)
     } else {
         left
     }
@@ -342,7 +334,7 @@ pub fn draw_hint(
         ((pane.width - 2.0 * (margin + padding)) / metrics.small.width as f32).max(0.0) as usize;
     let text = hint_text(url, fits);
     let bounds = hint_bounds(text.width(), pane, pointer, metrics);
-    let rects = palette.framed_box(bounds, hairline(metrics.scale));
+    let rects = palette.framed_box(bounds, metrics.hairline());
     let texts = vec![
         UiText::new(
             bounds.x + padding,

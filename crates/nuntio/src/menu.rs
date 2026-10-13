@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::actions::{Action, Bindings};
 use crate::pane_tree::Direction::{Down, Left, Right, Up};
-use crate::style::{Palette, UiMetrics, hairline, mix, truncate};
+use crate::style::{Palette, UiMetrics, mix, truncate};
 
 /// Space above the first and below the last row, in logical pixels.
 const PADDING: f64 = 4.0;
@@ -340,7 +340,7 @@ impl Menu {
             bounds: Rect::new(x.round(), y.round(), width, height),
             row_height,
             padding,
-            border: hairline(metrics.scale),
+            border: metrics.hairline(),
             cell_width: cw,
             first,
             visible,

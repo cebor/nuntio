@@ -20,6 +20,17 @@ impl UiMetrics {
     pub fn logical(&self, px: f64) -> f32 {
         (px * self.scale).round() as f32
     }
+
+    /// `px` logical pixels in whole physical pixels, in single precision as
+    /// the bars' icon and inset sizes are computed.
+    pub fn physical(&self, px: f32) -> f32 {
+        (px * self.scale as f32).round()
+    }
+
+    /// Width of a one-pixel line, in whole physical pixels.
+    pub fn hairline(&self) -> f32 {
+        self.scale.round().max(1.0) as f32
+    }
 }
 
 pub const WHITE: Rgb = rgb(0xffffff);
@@ -94,9 +105,31 @@ pub fn rect(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> UiRect {
     UiRect::fill(Rect::new(x, y, width, height), color)
 }
 
-/// Width of a one-pixel line at `scale`, in whole physical pixels.
-pub fn hairline(scale: f64) -> f32 {
-    scale.round().max(1.0) as f32
+/// A corner of a pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Corner {
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// A box of `size` in `corner` of `pane`, `margin` away from both edges and
+/// narrowed to fit between the margins.
+pub fn corner_box(pane: Rect, (width, height): (f32, f32), margin: f32, corner: Corner) -> Rect {
+    let width = width.min(pane.width - 2.0 * margin);
+    let right = pane.x + pane.width - margin - width;
+    let bottom = pane.y + pane.height - margin - height;
+    let (x, y) = match corner {
+        Corner::TopRight => (right, pane.y + margin),
+        Corner::BottomLeft => (pane.x + margin, bottom),
+        Corner::BottomRight => (right, bottom),
+    };
+    Rect {
+        x,
+        y,
+        width: width.max(0.0),
+        height,
+    }
 }
 
 /// Cut `text` to at most `cells` columns, ending in an ellipsis if cut.

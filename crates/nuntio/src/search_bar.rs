@@ -5,7 +5,7 @@ use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::{MatchPosition, Rgb, Search, TermHandle, rgb};
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{Palette, UiMetrics, hairline, mix, tail};
+use crate::style::{Corner, Palette, UiMetrics, corner_box, mix, tail};
 
 /// Widest the bar gets, in cells.
 const MAX_CELLS: f32 = 44.0;
@@ -124,13 +124,11 @@ impl SearchBar {
         let cell = metrics.cell;
         let margin = metrics.logical(MARGIN);
         let padding = metrics.logical(PADDING);
-        let width = (MAX_CELLS * cell.width as f32 + 2.0 * padding).min(pane.width - 2.0 * margin);
-        Rect {
-            x: pane.x + pane.width - margin - width,
-            y: pane.y + margin,
-            width: width.max(0.0),
-            height: cell.height as f32 + 2.0 * padding,
-        }
+        let size = (
+            MAX_CELLS * cell.width as f32 + 2.0 * padding,
+            cell.height as f32 + 2.0 * padding,
+        );
+        corner_box(pane, size, margin, Corner::TopRight)
     }
 
     pub fn contains(&self, pane: Rect, metrics: UiMetrics, x: f32, y: f32) -> bool {
@@ -153,7 +151,7 @@ impl SearchBar {
         let padding = (bounds.height - cell.height as f32) / 2.0;
         let columns = ((bounds.width - 2.0 * padding) / cell.width as f32).max(0.0) as usize;
 
-        let rects = palette.framed_box(bounds, hairline(metrics.scale));
+        let rects = palette.framed_box(bounds, metrics.hairline());
 
         // "query▏" on the left, ".* status" on the right, cut to fit.
         let mut right = String::new();

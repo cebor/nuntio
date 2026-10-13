@@ -5,11 +5,11 @@
 use std::collections::VecDeque;
 
 use nuntio_config::StatusItem;
-use nuntio_render::{CellMetrics, UiRect, UiText};
+use nuntio_render::{UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{Palette, UiMetrics, hairline, luminance, mix, rect};
+use crate::style::{Palette, UiMetrics, luminance, mix, rect};
 use crate::sysmon::Sample;
 
 /// Samples kept per graph: one minute at one sample per second.
@@ -111,10 +111,9 @@ pub struct StatusBar {
     pub height: f32,
     width: f32,
     padding: f32,
-    scale: f32,
-    cell: CellMetrics,
-    /// Cells of the terminal font, which is a bit larger.
-    term_cell: CellMetrics,
+    /// The bar is laid out in the small UI font (`small`); the terminal
+    /// font's cell (`cell`) is a bit larger.
+    metrics: UiMetrics,
     /// Items that fit, left to right.
     slots: Vec<Slot>,
     /// An item shown as pressed, e.g. while its menu is open.
@@ -201,9 +200,7 @@ impl StatusBar {
             height,
             width,
             padding,
-            scale: metrics.scale as f32,
-            cell,
-            term_cell: metrics.cell,
+            metrics,
             slots,
             active: None,
             shell: shell.to_owned(),
@@ -265,7 +262,7 @@ impl StatusBar {
         };
         // A thin line in the middle of the gap between neighbouring items;
         // springs separate items by space alone.
-        let gap = GAP_CELLS as f32 * self.cell.width as f32;
+        let gap = GAP_CELLS as f32 * self.metrics.small.width as f32;
         let (line_top, line_height) = self.graph_box();
         let stroke = self.stroke();
         for slot in self.slots.iter().skip(1).filter(|s| !s.spring_before) {
@@ -309,7 +306,7 @@ impl StatusBar {
         datetime: &str,
         colors: &Colors,
     ) {
-        let cw = self.cell.width as f32;
+        let cw = self.metrics.small.width as f32;
         let text_y = self.top + self.padding;
         let text = |cells: usize, text: String, color: Rgb, out: &mut Output| {
             out.texts
@@ -381,9 +378,9 @@ impl StatusBar {
     /// An arrow centered over `cells` cells from `x`. Arrows are small in
     /// the UI font, so they take the terminal font, on the text's baseline.
     fn arrow(&self, out: &mut Output, x: f32, cells: usize, arrow: &str, color: Rgb) {
-        let width = cells as f32 * self.cell.width as f32;
-        let overhang = (self.term_cell.width as f32 - width) / 2.0;
-        let baseline_shift = self.cell.baseline as f32 - self.term_cell.baseline as f32;
+        let width = cells as f32 * self.metrics.small.width as f32;
+        let overhang = (self.metrics.cell.width as f32 - width) / 2.0;
+        let baseline_shift = self.metrics.small.baseline as f32 - self.metrics.cell.baseline as f32;
         let y = self.top + self.padding + baseline_shift;
         out.texts
             .push(UiText::new((x - overhang).floor(), y, arrow, color));
@@ -391,22 +388,22 @@ impl StatusBar {
 
     /// Vertical extent of graphs: the text row, slightly inset.
     fn graph_box(&self) -> (f32, f32) {
-        let inset = (2.0 * self.scale).round();
+        let inset = self.metrics.physical(2.0);
         let top = self.top + self.padding + inset;
-        (top, self.cell.height as f32 - 2.0 * inset)
+        (top, self.metrics.small.height as f32 - 2.0 * inset)
     }
 
     /// Samples that fit into a graph.
     fn graph_samples(&self) -> usize {
-        let width = GRAPH_CELLS as f32 * self.cell.width as f32;
+        let width = GRAPH_CELLS as f32 * self.metrics.small.width as f32;
         ((width / self.stroke()) as usize).min(HISTORY)
     }
 
     fn track(&self, out: &mut Output, x: f32, colors: &Colors) {
         let (top, height) = self.graph_box();
-        let width = GRAPH_CELLS as f32 * self.cell.width as f32;
+        let width = GRAPH_CELLS as f32 * self.metrics.small.width as f32;
         let mut track = rect(x, top, width, height, colors.track);
-        track.radius = (2.0 * self.scale).round();
+        track.radius = self.metrics.physical(2.0);
         out.rects.push(track);
     }
 
@@ -457,7 +454,7 @@ impl StatusBar {
         let n = self.graph_samples();
         let count = history.recent(n).count();
         let bar = self.stroke();
-        let right = x + GRAPH_CELLS as f32 * self.cell.width as f32;
+        let right = x + GRAPH_CELLS as f32 * self.metrics.small.width as f32;
         history
             .recent(n)
             .enumerate()
@@ -465,14 +462,14 @@ impl StatusBar {
     }
 
     fn stroke(&self) -> f32 {
-        hairline(f64::from(self.scale))
+        self.metrics.hairline()
     }
 
     /// Left edge, top edge and size of the square an icon is drawn in,
     /// centered in the icon cells.
     fn icon_box(&self, x: f32) -> (f32, f32, f32) {
         let (top, size) = self.graph_box();
-        let width = ICON_CELLS as f32 * self.cell.width as f32;
+        let width = ICON_CELLS as f32 * self.metrics.small.width as f32;
         ((x + (width - size) / 2.0).floor(), top, size)
     }
 
@@ -508,7 +505,7 @@ impl StatusBar {
     fn memory_icon(&self, out: &mut Output, x: f32, colors: &Colors) {
         let st = self.stroke();
         let (_, y0, size) = self.icon_box(x);
-        let width = ICON_CELLS as f32 * self.cell.width as f32;
+        let width = ICON_CELLS as f32 * self.metrics.small.width as f32;
         let (x0, board_w) = (x.floor() + st, (width - 2.0 * st).floor());
         let board_top = y0 + (size * 0.15).round();
         let board_h = (size * 0.55).round();
@@ -628,9 +625,9 @@ impl StatusBar {
     /// with a bolt over the fill while `charging`.
     fn battery_icon(&self, out: &mut Output, x: f32, level: f32, charging: bool, colors: &Colors) {
         let stroke = self.stroke();
-        let cw = self.cell.width as f32;
+        let cw = self.metrics.small.width as f32;
         let (top, height) = self.graph_box();
-        let knob = (2.0 * self.scale).round().max(1.0);
+        let knob = self.metrics.physical(2.0).max(1.0);
         let body = ICON_CELLS as f32 * cw - knob - stroke;
         let color = colors.label;
         outline(out, x, top, body, height, stroke, color);

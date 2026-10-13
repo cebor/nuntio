@@ -24,7 +24,7 @@ use crate::search_bar::SearchBar;
 use crate::shell_words::PathSyntax;
 use crate::shells::ShellChoice;
 use crate::status_bar::{Stats, StatusBar};
-use crate::style::{BLACK, Palette, UiMetrics, WHITE, hairline};
+use crate::style::{BLACK, Palette, UiMetrics, WHITE};
 use crate::tab_bar::{TabBar, TabBarOptions};
 use crate::tab_title::{self, TitleInfo};
 use crate::tabs::Tabs;
@@ -763,7 +763,7 @@ impl WindowState {
 
     /// Thickness of the lines between panes.
     fn divider_width(&self) -> f32 {
-        hairline(self.scale())
+        self.ui_metrics().hairline()
     }
 
     /// Pane layout of the active tab.

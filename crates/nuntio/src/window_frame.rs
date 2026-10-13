@@ -212,9 +212,7 @@ impl WindowState {
 
         if let Some(banner) = banner {
             let width = self.window.inner_size().width as f32;
-            let (rect, text) = banner.draw(width, self.banner_bottom(config), metrics);
-            overlay.rects.push(rect);
-            overlay.texts.push(text);
+            overlay.add(banner.draw(width, self.banner_bottom(config), metrics));
         }
 
         if let Some(menu) = &self.menu {

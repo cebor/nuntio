@@ -135,16 +135,14 @@ impl Banner {
 
     /// `x` is on the ×.
     pub fn on_close(&self, x: f32, window_width: f32, metrics: UiMetrics) -> bool {
-        let cell = metrics.cell;
-        let (_, height) = self.bounds(0.0, metrics);
-        let padding = (height - cell.height as f32) / 2.0;
-        x >= window_width - padding - 3.0 * cell.width as f32
+        let padding = Layout::new(0.0, metrics).padding;
+        x >= window_width - padding - 3.0 * metrics.cell.width as f32
     }
 
     /// Top edge and height of the banner, which ends at `bottom`.
     pub fn bounds(&self, bottom: f32, metrics: UiMetrics) -> (f32, f32) {
-        let height = metrics.cell.height as f32 + 2.0 * metrics.logical(PADDING);
-        (bottom - height, height)
+        let Layout { top, height, .. } = Layout::new(bottom, metrics);
+        (top, height)
     }
 
     pub fn contains(&self, y: f32, bottom: f32, metrics: UiMetrics) -> bool {
@@ -152,15 +150,23 @@ impl Banner {
         y >= top && y < top + height
     }
 
-    pub fn draw(&self, window_width: f32, bottom: f32, metrics: UiMetrics) -> (UiRect, UiText) {
+    pub fn draw(
+        &self,
+        window_width: f32,
+        bottom: f32,
+        metrics: UiMetrics,
+    ) -> (Vec<UiRect>, Vec<UiText>) {
         let cell = metrics.cell;
-        let (top, height) = self.bounds(bottom, metrics);
+        let Layout {
+            top,
+            height,
+            padding,
+        } = Layout::new(bottom, metrics);
         let (background, foreground) = match self.severity {
             Severity::Error => (rgb(0xb3261e), rgb(0xffffff)),
             Severity::Warning => (rgb(0x7a5c00), rgb(0xffffff)),
             Severity::Info => (INFO_COLOR, rgb(0xffffff)),
         };
-        let padding = (height - cell.height as f32) / 2.0;
         // Leave room for the closing "×" at the right.
         let columns = ((window_width - 2.0 * padding) / cell.width as f32) as usize;
         let text = crate::style::truncate(&self.text(), columns.saturating_sub(2));
@@ -168,9 +174,33 @@ impl Banner {
         let pad = columns.saturating_sub(2).saturating_sub(text.width());
         let text = format!("{text}{} ×", " ".repeat(pad));
         (
-            UiRect::fill(Rect::new(0.0, top, window_width, height), background),
-            UiText::new(padding, top + padding, text, foreground),
+            vec![UiRect::fill(
+                Rect::new(0.0, top, window_width, height),
+                background,
+            )],
+            vec![UiText::new(padding, top + padding, text, foreground)],
         )
+    }
+}
+
+/// Where a banner sits: the strip of `height` at `top`, with `padding`
+/// above and below the text.
+struct Layout {
+    top: f32,
+    height: f32,
+    padding: f32,
+}
+
+impl Layout {
+    /// The banner that ends at `bottom`.
+    fn new(bottom: f32, metrics: UiMetrics) -> Self {
+        let cell_height = metrics.cell.height as f32;
+        let height = cell_height + 2.0 * metrics.logical(PADDING);
+        Self {
+            top: bottom - height,
+            height,
+            padding: (height - cell_height) / 2.0,
+        }
     }
 }
 
@@ -221,20 +251,20 @@ mod tests {
     #[test]
     fn sits_at_the_bottom_and_fits_the_width() {
         let banner = Banner::config(Severity::Error, vec!["x".repeat(500)]).unwrap();
-        let (rect, text) = banner.draw(400.0, 600.0, METRICS);
-        assert_eq!((rect.y, rect.height), (572.0, 28.0));
+        let (rects, texts) = banner.draw(400.0, 600.0, METRICS);
+        assert_eq!((rects[0].y, rects[0].height), (572.0, 28.0));
         assert!(banner.contains(580.0, 600.0, METRICS));
         assert!(!banner.contains(560.0, 600.0, METRICS));
         // 400px minus padding fit 39 columns.
-        assert_eq!(text.text.chars().count(), 39);
-        assert!(text.text.ends_with(" ×"));
+        assert_eq!(texts[0].text.chars().count(), 39);
+        assert!(texts[0].text.ends_with(" ×"));
     }
 
     #[test]
     fn wide_text_keeps_the_close_button_at_the_edge() {
         let banner = Banner::config(Severity::Warning, vec!["日本".into()]).unwrap();
-        let (_, text) = banner.draw(400.0, 600.0, METRICS);
-        assert_eq!(text.text.width(), 39);
-        assert!(text.text.ends_with(" ×"));
+        let (_, texts) = banner.draw(400.0, 600.0, METRICS);
+        assert_eq!(texts[0].text.width(), 39);
+        assert!(texts[0].text.ends_with(" ×"));
     }
 }

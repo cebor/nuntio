@@ -2,10 +2,10 @@
 
 use std::ops::Range;
 
-use nuntio_render::{CellMetrics, Rect, UiRect, UiText};
+use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::{Rgb, rgb};
 
-use crate::style::{INFO_COLOR, Palette, UiMetrics, WHITE, hairline, mix, rect, truncate};
+use crate::style::{INFO_COLOR, Palette, UiMetrics, WHITE, mix, rect, truncate};
 use unicode_width::UnicodeWidthStr;
 
 /// Widest a tab gets, in cells, so a few tabs don't stretch across the window.
@@ -92,8 +92,7 @@ pub struct TabBar {
     inset: f32,
     gap: f32,
     radius: f32,
-    scale: f32,
-    cell: CellMetrics,
+    metrics: UiMetrics,
     /// The visible tabs: `slots[n]` is tab `first + n`.
     slots: Vec<Slot>,
     /// Index of the tab in `slots[0]`.
@@ -142,7 +141,7 @@ impl TabBar {
             update_badge,
             scroll,
         } = options;
-        let (cell, scale) = (metrics.cell, metrics.scale);
+        let cell = metrics.cell;
         let (cw, ch) = (cell.width as f32, cell.height as f32);
         let logical = |px| metrics.logical(px);
         let padding = logical(BAR_PADDING);
@@ -201,8 +200,7 @@ impl TabBar {
             inset,
             gap,
             radius: logical(PILL_RADIUS),
-            scale: scale as f32,
-            cell,
+            metrics,
             slots,
             first,
             count,
@@ -285,13 +283,13 @@ impl TabBar {
     /// There must be room for the button, the indicator and two cells of
     /// title.
     fn has_close(&self, slot: Slot) -> bool {
-        let side = self.cell.height as f32;
-        slot.width >= 2.0 * (self.padding + side) + 2.0 * self.cell.width as f32
+        let side = self.metrics.cell.height as f32;
+        slot.width >= 2.0 * (self.padding + side) + 2.0 * self.metrics.cell.width as f32
     }
 
     /// Square area of the close button inside a tab.
     fn close_rect(&self, slot: Slot) -> (f32, f32, f32) {
-        let size = self.cell.height as f32;
+        let size = self.metrics.cell.height as f32;
         (slot.x + slot.width - self.padding - size, self.top, size)
     }
 
@@ -374,7 +372,10 @@ impl TabBar {
         let active_bg = mix(background, foreground, 0.08);
         let hover_bg = mix(bar_bg, foreground, 0.08);
         let inactive_text = mix(foreground, background, 0.45);
-        let (cw, ch) = (self.cell.width as f32, self.cell.height as f32);
+        let (cw, ch) = (
+            self.metrics.cell.width as f32,
+            self.metrics.cell.height as f32,
+        );
 
         let mut rects = vec![rect(0.0, 0.0, self.width, self.height, bar_bg)];
         let mut texts = Vec::new();
@@ -387,7 +388,7 @@ impl TabBar {
         );
 
         // A hairline between two neighbouring tabs that have no pill.
-        let stroke = hairline(f64::from(self.scale));
+        let stroke = self.metrics.hairline();
         let has_pill = |i: usize| labels[i].active || hovered_tab == Some(i);
 
         for (n, (slot, label)) in self.slots.iter().zip(&labels[self.first..]).enumerate() {
@@ -439,11 +440,11 @@ impl TabBar {
                 let close_hovered = hovered == Some(BarHit::Close(i));
                 if close_hovered {
                     let under = if label.active { active_bg } else { hover_bg };
-                    let inset = (CLOSE_INSET as f32 * self.scale).round();
+                    let inset = self.metrics.physical(CLOSE_INSET as f32);
                     rects.push(UiRect::rounded(
                         Rect::new(cx, cy, size, size).inset(inset),
                         mix(under, foreground, 0.10),
-                        (CLOSE_RADIUS as f32 * self.scale).round(),
+                        self.metrics.physical(CLOSE_RADIUS as f32),
                     ));
                 }
                 let color = if close_hovered {
@@ -521,8 +522,8 @@ impl TabBar {
         chevron: Chevron,
         color: Rgb,
     ) {
-        let icon = (CONTROL_ICON as f32 * self.scale).round();
-        let stroke = hairline(f64::from(self.scale));
+        let icon = self.metrics.physical(CONTROL_ICON as f32);
+        let stroke = self.metrics.hairline();
         let half = (icon / 2.0).floor();
         let steps = (half / stroke) as usize;
         let (box_width, box_height) = match chevron {
@@ -562,8 +563,8 @@ impl TabBar {
             rects.push(self.pill(x, size, hover_bg));
         }
         let color = if hovered { hover_color } else { color };
-        let stroke = hairline(f64::from(self.scale));
-        let icon = (CONTROL_ICON as f32 * self.scale).round();
+        let stroke = self.metrics.hairline();
+        let icon = self.metrics.physical(CONTROL_ICON as f32);
         let x0 = (x + (size - icon) / 2.0).floor();
         let y0 = ((self.height - icon) / 2.0).floor();
         let middle = ((icon - stroke) / 2.0).round();
@@ -586,7 +587,7 @@ impl TabBar {
         };
         rects.push(self.pill(x, size, color));
         texts.push(UiText::new(
-            (x + (size - self.cell.width as f32) / 2.0).floor(),
+            (x + (size - self.metrics.cell.width as f32) / 2.0).floor(),
             self.top,
             "↑",
             WHITE,
@@ -602,8 +603,8 @@ impl TabBar {
         maximized: bool,
         palette: &Palette,
     ) {
-        let stroke = hairline(f64::from(self.scale));
-        let icon = (CONTROL_ICON as f32 * self.scale).round();
+        let stroke = self.metrics.hairline();
+        let icon = self.metrics.physical(CONTROL_ICON as f32);
         if let Some(i) = CONTROLS.iter().position(|&c| hovered == Some(c)) {
             let hover_bg = if CONTROLS[i] == BarHit::CloseWindow {
                 CLOSE_HOVER
@@ -642,7 +643,7 @@ impl TabBar {
                 }
                 BarHit::Maximize if maximized => {
                     // Restore: a front square with another peeking out behind.
-                    let offset = (2.0 * self.scale).round();
+                    let offset = self.metrics.physical(2.0);
                     let front = icon - offset;
                     push(x0 + offset, y0, front, stroke, color);
                     push(x0 + icon - stroke, y0, stroke, front, color);
