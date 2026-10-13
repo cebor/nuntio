@@ -5,6 +5,7 @@ pub mod detect;
 mod edit;
 mod keys;
 mod load;
+mod paths;
 pub mod schema;
 mod theme;
 mod watch;
@@ -21,6 +22,7 @@ pub use load::{
     CONFIG_ENV, ConfigError, ConfigLocation, Loaded, config_dir, config_path, load, locate_config,
     parse, themes_dir,
 };
+pub use paths::{expand_home, tilde_path};
 pub use theme::{DEFAULT_THEME, Theme, ThemeSet};
 pub use toml_edit;
 pub use watch::ConfigWatcher;
@@ -532,10 +534,7 @@ impl Notes {
 
 fn notes_dir(dir: Option<&str>, home: Option<PathBuf>, data: Option<PathBuf>) -> Option<PathBuf> {
     match dir {
-        Some(d) => match d.strip_prefix('~') {
-            Some(rest) => Some(home?.join(rest.trim_start_matches(['/', '\\']))),
-            None => Some(PathBuf::from(d)),
-        },
+        Some(d) => expand_home(d, home.as_deref()),
         None => Some(data?.join("nuntio").join("notes")),
     }
 }

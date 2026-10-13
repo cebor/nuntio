@@ -64,16 +64,6 @@ fn parse_args() -> Result<Option<PathBuf>, lexopt::Error> {
     Ok(config)
 }
 
-/// The path with the home directory shortened to `~`.
-fn display_path(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir()
-        && let Ok(rest) = path.strip_prefix(&home)
-    {
-        return Path::new("~").join(rest).display().to_string();
-    }
-    path.display().to_string()
-}
-
 /// Families of the installed monospace fonts, sorted.
 fn installed_fonts() -> Vec<String> {
     let mut db = fontdb::Database::new();
@@ -221,7 +211,7 @@ pub fn main() -> Result<()> {
     let (themes, theme_warnings) = ThemeSet::load(nuntio_config::themes_dir(&path).as_deref());
     let mut app = App::new(
         Box::new(FileStore(path.clone())),
-        display_path(&path),
+        nuntio_config::tilde_path(&path, dirs::home_dir().as_deref()),
         themes,
         Sources {
             fonts: Box::new(installed_fonts),

@@ -255,13 +255,7 @@ impl Core {
         if let Some(distro) = target {
             return self.wsl_cd(distro, &dir).map(StartDir::Wsl);
         }
-        let path = match dir.strip_prefix('~') {
-            Some(rest) => {
-                let rest = rest.trim_start_matches(['/', '\\']);
-                dirs::home_dir()?.join(rest)
-            }
-            None => PathBuf::from(dir),
-        };
+        let path = nuntio_config::expand_home(&dir, dirs::home_dir().as_deref())?;
         self.existing_dir(path).map(StartDir::Local)
     }
 

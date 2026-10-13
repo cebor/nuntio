@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Identifies a version of a file on disk, to notice outside changes.
@@ -178,16 +178,6 @@ impl Store for DirStore {
         }
         fs::rename(self.path(title), target)
     }
-}
-
-/// `path` with the home directory shortened to `~`.
-pub fn display_path(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir()
-        && let Ok(rest) = path.strip_prefix(&home)
-    {
-        return Path::new("~").join(rest).display().to_string();
-    }
-    path.display().to_string()
 }
 
 #[cfg(test)]

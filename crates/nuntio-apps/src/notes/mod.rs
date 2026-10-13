@@ -18,7 +18,7 @@ use ratatui::crossterm::event::{self, Event};
 
 use crate::term;
 use state::{App, Tone};
-use store::{DirStore, display_path};
+use store::DirStore;
 
 const HELP: &str = "Usage: nuntio-apps notes [--dir <path>] [--config <path>]\n\nMarkdown notes, saved as .md files in one folder.\n\nOptions:\n  --dir <path>     Use this folder instead of notes.directory\n  --config <path>  Read notes.directory from this config file\n  -h, --help       Print this help\n";
 
@@ -76,7 +76,7 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
     };
     let mut app = match notes_dir(&args) {
         Ok((dir, warning)) => {
-            let label = display_path(&dir);
+            let label = nuntio_config::tilde_path(&dir, dirs::home_dir().as_deref());
             match std::fs::create_dir_all(&dir) {
                 Ok(()) => {
                     let mut app = App::new(Box::new(DirStore(dir)), label);

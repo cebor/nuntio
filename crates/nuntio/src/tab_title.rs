@@ -19,7 +19,11 @@ pub struct TitleInfo {
 }
 
 pub fn title(mode: TabTitle, info: TitleInfo, home: Option<&Path>) -> String {
-    let directory = || info.directory.as_deref().map(|dir| tilde_path(dir, home));
+    let directory = || {
+        info.directory
+            .as_deref()
+            .map(|dir| nuntio_config::tilde_path(dir, home))
+    };
     let application = || info.application.as_deref().map(strip_user_host);
     let title = match mode {
         TabTitle::Application => info.application.clone(),
@@ -46,21 +50,11 @@ pub fn strip_user_host(title: &str) -> String {
     }
 }
 
-/// `path` with the home directory shortened to `~`.
-pub fn tilde_path(path: &Path, home: Option<&Path>) -> String {
-    let home = home.filter(|home| home.parent().is_some());
-    match home.and_then(|home| path.strip_prefix(home).ok()) {
-        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
-        None => path.display().to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `~` and `rest` joined as `tilde_path` does on this platform.
+    /// `~` and `rest` joined as `nuntio_config::tilde_path` does on this platform.
     fn tilde(rest: &str) -> String {
         format!("~{}{rest}", std::path::MAIN_SEPARATOR)
     }
@@ -72,33 +66,6 @@ mod tests {
         assert_eq!(strip_user_host("vim foo.rs"), "vim foo.rs");
         assert_eq!(strip_user_host("foo:bar"), "foo:bar", "no @");
         assert_eq!(strip_user_host("mail a@b: x"), "mail a@b: x", "space");
-    }
-
-    #[test]
-    fn home_becomes_tilde() {
-        let home = Some(Path::new("/home/felix"));
-        assert_eq!(tilde_path(Path::new("/home/felix"), home), "~");
-        assert_eq!(
-            tilde_path(Path::new("/home/felix/code/nuntio"), home),
-            tilde("code/nuntio")
-        );
-        assert_eq!(tilde_path(Path::new("/home/felixx"), home), "/home/felixx");
-        assert_eq!(tilde_path(Path::new("/etc"), None), "/etc");
-        // A root as home would put `~` in front of every path.
-        assert_eq!(tilde_path(Path::new("/etc"), Some(Path::new("/"))), "/etc");
-        assert_eq!(tilde_path(Path::new("/"), Some(Path::new("/"))), "/");
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn home_becomes_tilde_on_windows() {
-        assert_eq!(
-            tilde_path(
-                Path::new(r"C:\Users\f\code"),
-                Some(Path::new(r"C:\Users\f"))
-            ),
-            "~\\code"
-        );
     }
 
     fn info(shell_idle: Option<bool>) -> TitleInfo {
