@@ -324,6 +324,8 @@ With `check` on, nuntio asks GitHub once a day whether a newer release exists. N
 
 In a pane running herdr, new tab, split, close pane, focus, resize and zoom shortcuts send herdr's own keys for that action (read from herdr's `[keys]` config), so they act inside herdr. Switching and closing nuntio tabs stays with nuntio.
 
+herdr sets the title of the terminal it runs in from its own `ui.window_title`, by default `{hostname}: {workspace}`: the workspace's name, which stays the same when the shell changes directory. For a tab title that follows the focused herdr pane (its directory, or the title an agent sets), put `window_title = "{terminal_title}"` under `[ui]` in herdr's `config.toml` and run `herdr server reload-config`.
+
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `false` | Offer herdr sessions in the shell menu and work with herdr running in a pane. |
