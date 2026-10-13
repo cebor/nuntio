@@ -130,6 +130,8 @@ cargo xtask icons     # regenerate assets/icons/ after editing assets/icon.svg
 
 `cargo xtask package` also needs [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) (`cargo install cargo-about --locked --features cli`); it writes `THIRD-PARTY-LICENSES.html` into every package.
 
+Without `cargo-deb`, `appimagetool` or Inno Setup, `cargo xtask package` skips the `.deb`, the AppImage or the installer and still succeeds. With `NUNTIO_PACKAGE_STRICT=1` a missing tool is an error instead; the CI `package` job sets it.
+
 To release, bump `version` in the workspace `Cargo.toml`, run `cargo check` so `Cargo.lock` picks it up (packaging builds with `--locked`), add a `<release>` entry at the top of `assets/nuntio.metainfo.xml` (a test checks it), commit, and push a tag like `v0.2.0`. The release workflow checks that the tag matches the version, builds all packages and publishes a GitHub release with the changelog since the previous tag.
 
 ## License

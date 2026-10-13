@@ -397,6 +397,18 @@ fn copy(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Reports a package that cannot be built because its optional tool is
+/// missing: a notice, or an error when `NUNTIO_PACKAGE_STRICT=1` (CI), so a
+/// release cannot go out without it.
+fn skipped(message: &str) -> Result<()> {
+    ensure!(
+        std::env::var_os("NUNTIO_PACKAGE_STRICT").is_none_or(|v| v != "1"),
+        "{message}; not allowed with NUNTIO_PACKAGE_STRICT=1"
+    );
+    eprintln!("{message}");
+    Ok(())
+}
+
 fn package() -> Result<()> {
     let dist = root().join("dist");
     fs::create_dir_all(&dist)?;
@@ -474,7 +486,7 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
             .args(["deb", "-p", NAME, "--no-build", "--output"])
             .arg(dist))?;
     } else {
-        eprintln!("cargo-deb not found, skipping .deb (cargo install cargo-deb)");
+        skipped("cargo-deb not found, skipping .deb (cargo install cargo-deb)")?;
     }
 
     // AppImage, if appimagetool is available (or $APPIMAGETOOL points to it).
@@ -503,7 +515,7 @@ fn package_linux(dist: &Path, version: &str) -> Result<()> {
             .arg(&appdir)
             .arg(dist.join(format!("{base}.AppImage"))))?;
     } else {
-        eprintln!("appimagetool not found, skipping AppImage");
+        skipped("appimagetool not found, skipping AppImage")?;
     }
     eprintln!("packages written to {}", dist.display());
     Ok(())
@@ -695,7 +707,7 @@ fn package_windows(dist: &Path, version: &str) -> Result<()> {
             .arg(root().join("assets/nuntio.iss")))?;
         eprintln!("installer written to {}", dist.display());
     } else {
-        eprintln!("Inno Setup not found, skipping installer (winget install JRSoftware.InnoSetup)");
+        skipped("Inno Setup not found, skipping installer (winget install JRSoftware.InnoSetup)")?;
     }
     Ok(())
 }

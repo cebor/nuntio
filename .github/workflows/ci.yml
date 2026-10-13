@@ -140,6 +140,8 @@ jobs:
       - if: runner.os == 'Windows'
         run: choco install innosetup -y --no-progress
       - run: cargo xtask package
+        env:
+          NUNTIO_PACKAGE_STRICT: "1"
 
   site:
     runs-on: ubuntu-latest
