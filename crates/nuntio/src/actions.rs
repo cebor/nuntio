@@ -2,6 +2,7 @@
 
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
+use crate::input;
 use crate::pane_tree::Direction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,19 +364,8 @@ fn config_named_key(key: NamedKey) -> Option<nuntio_config::NamedKey> {
         NamedKey::ArrowDown => N::Down,
         NamedKey::ArrowLeft => N::Left,
         NamedKey::ArrowRight => N::Right,
-        NamedKey::F1 => N::F(1),
-        NamedKey::F2 => N::F(2),
-        NamedKey::F3 => N::F(3),
-        NamedKey::F4 => N::F(4),
-        NamedKey::F5 => N::F(5),
-        NamedKey::F6 => N::F(6),
-        NamedKey::F7 => N::F(7),
-        NamedKey::F8 => N::F(8),
-        NamedKey::F9 => N::F(9),
-        NamedKey::F10 => N::F(10),
-        NamedKey::F11 => N::F(11),
-        NamedKey::F12 => N::F(12),
-        _ => return None,
+        // The config knows F1 to F12.
+        _ => N::F(input::function_number(key).filter(|n| *n <= 12)?),
     })
 }
 
@@ -397,20 +387,7 @@ pub(crate) fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
         N::Down => NamedKey::ArrowDown,
         N::Left => NamedKey::ArrowLeft,
         N::Right => NamedKey::ArrowRight,
-        N::F(n) => [
-            NamedKey::F1,
-            NamedKey::F2,
-            NamedKey::F3,
-            NamedKey::F4,
-            NamedKey::F5,
-            NamedKey::F6,
-            NamedKey::F7,
-            NamedKey::F8,
-            NamedKey::F9,
-            NamedKey::F10,
-            NamedKey::F11,
-            NamedKey::F12,
-        ][usize::from(n.clamp(1, 12)) - 1],
+        N::F(n) => input::function_key(n.clamp(1, 12)).expect("F1 to F12 exist"),
     }
 }
 

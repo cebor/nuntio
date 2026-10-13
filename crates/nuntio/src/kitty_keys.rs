@@ -8,7 +8,7 @@
 use nuntio_term::TermMode;
 use winit::keyboard::{Key, KeyCode, KeyLocation, NamedKey, PhysicalKey};
 
-use crate::input::{KeyEventKind, KeyInput, altgr_text, printable, us_char};
+use crate::input::{self, KeyEventKind, KeyInput, altgr_text, printable, us_char};
 
 const SHIFT: u8 = 1;
 const ALT: u8 = 2;
@@ -296,15 +296,6 @@ fn functional(input: &KeyInput) -> Option<Functional> {
         F10 => Functional::tilde(21),
         F11 => Functional::tilde(23),
         F12 => Functional::tilde(24),
-        F13 | F14 | F15 | F16 | F17 | F18 | F19 | F20 | F21 | F22 | F23 | F24 | F25 | F26 | F27
-        | F28 | F29 | F30 | F31 | F32 | F33 | F34 | F35 => {
-            let f = [
-                F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28,
-                F29, F30, F31, F32, F33, F34, F35,
-            ];
-            let i = f.iter().position(|k| k == key)? as u32;
-            Functional::u(57376 + i)
-        }
         MediaPlay => Functional::u(57428),
         MediaPause => Functional::u(57429),
         MediaPlayPause => Functional::u(57430),
@@ -324,7 +315,8 @@ fn functional(input: &KeyInput) -> Option<Functional> {
         Hyper => Functional::modifier(side(57445), 0),
         Meta => Functional::modifier(side(57446), 0),
         AltGraph => Functional::modifier(57453, 0),
-        _ => return None,
+        // F13 and up have their own numbers.
+        _ => Functional::u(57376 + u32::from(input::function_number(*key)?.checked_sub(13)?)),
     })
 }
 
@@ -535,6 +527,7 @@ mod tests {
         assert_eq!(named(NamedKey::F5).ctrl().sends(m), "\x1b[15;5~");
         assert_eq!(named(NamedKey::Delete).sends(m), "\x1b[3~");
         assert_eq!(named(NamedKey::F13).sends(m), "\x1b[57376u");
+        assert_eq!(named(NamedKey::F35).sends(m), "\x1b[57398u");
         assert_eq!(named(NamedKey::ContextMenu).sends(m), "\x1b[57363u");
     }
 

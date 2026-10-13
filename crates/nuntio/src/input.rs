@@ -199,14 +199,8 @@ fn with_meta(mut bytes: Vec<u8>, meta: bool) -> Vec<u8> {
 /// F25–F35 are Ctrl+F1–F11. Returns the base key and whether Ctrl (not
 /// Shift) is added.
 fn high_function_key(key: NamedKey) -> Option<(NamedKey, bool)> {
-    use NamedKey::*;
-    const HIGH: [NamedKey; 23] = [
-        F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30,
-        F31, F32, F33, F34, F35,
-    ];
-    const LOW: [NamedKey; 12] = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
-    let i = HIGH.iter().position(|&k| k == key)?;
-    Some((LOW[i % 12], i >= 12))
+    let i = function_number(key)?.checked_sub(13)?;
+    Some((function_key(i % 12 + 1)?, i >= 12))
 }
 
 fn encode_named(key: NamedKey, input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
@@ -350,6 +344,25 @@ fn is_latin(c: char) -> bool {
         c as u32,
         0..0x0250 | 0x1E00..0x1F00 | 0x2C60..0x2C80 | 0xA720..0xA800 | 0xAB30..0xAB70
     )
+}
+
+const FUNCTION_KEYS: [NamedKey; 35] = {
+    use NamedKey::*;
+    [
+        F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20,
+        F21, F22, F23, F24, F25, F26, F27, F28, F29, F30, F31, F32, F33, F34, F35,
+    ]
+};
+
+/// The function key F`n`, for `n` from 1 to 35.
+pub fn function_key(n: u8) -> Option<NamedKey> {
+    FUNCTION_KEYS.get(usize::from(n).checked_sub(1)?).copied()
+}
+
+/// The `n` of a function key F`n`.
+pub fn function_number(key: NamedKey) -> Option<u8> {
+    let index = FUNCTION_KEYS.iter().position(|&k| k == key)?;
+    u8::try_from(index + 1).ok()
 }
 
 /// A cursor key without modifiers: `final_byte` after SS3 in application
@@ -510,6 +523,17 @@ mod tests {
         assert_eq!(named(NamedKey::F24, NONE, none), b"\x1b[24;2~");
         assert_eq!(named(NamedKey::F25, NONE, none), b"\x1b[1;5P");
         assert_eq!(named(NamedKey::F13, SHIFT, none), b"\x1b[1;2P");
+        assert_eq!(named(NamedKey::F35, NONE, none), b"\x1b[23;5~");
+    }
+
+    #[test]
+    fn function_keys_are_numbered_from_one_to_35() {
+        for n in 1..=35 {
+            assert_eq!(function_key(n).and_then(function_number), Some(n));
+        }
+        assert_eq!(function_key(0), None);
+        assert_eq!(function_key(36), None);
+        assert_eq!(function_number(NamedKey::Enter), None);
     }
 
     #[test]
