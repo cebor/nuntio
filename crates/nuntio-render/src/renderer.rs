@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthChar;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
-use crate::font::{CellMetrics, FaceStyle, Fonts};
+use crate::font::{CellMetrics, FaceStyle, Fonts, TextSize};
 use crate::frame::{Frame, Rect, UiRect, UiText};
 use crate::gpu::{FrameStatus, GpuContext, GpuError, GpuOptions, oom_checked};
 use crate::{box_drawing, decoration};
@@ -132,9 +132,7 @@ struct PaneBatch {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GlyphKey {
-    Char(char, FaceStyle),
-    /// A character of small UI text.
-    Small(char, FaceStyle),
+    Char(char, FaceStyle, TextSize),
     /// A patterned underline, one cell wide.
     Underline(UnderlineStyle),
 }
@@ -396,12 +394,12 @@ impl Renderer {
     }
 
     pub fn cell_metrics(&self) -> CellMetrics {
-        self.fonts.metrics()
+        self.fonts.metrics(TextSize::Terminal)
     }
 
     /// Cell metrics of small UI text ([`UiText::small`]).
     pub fn small_cell_metrics(&self) -> CellMetrics {
-        self.fonts.small_metrics()
+        self.fonts.metrics(TextSize::Small)
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -852,11 +850,12 @@ impl Renderer {
     }
 
     fn push_text(&mut self, text: &UiText) -> Result<(), AtlasFull> {
-        let metrics = if text.small {
-            self.fonts.small_metrics()
+        let size = if text.small {
+            TextSize::Small
         } else {
-            self.fonts.metrics()
+            TextSize::Terminal
         };
+        let metrics = self.fonts.metrics(size);
         let cw = metrics.width as f32;
         let style = FaceStyle {
             bold: text.bold,
@@ -886,14 +885,9 @@ impl Renderer {
             }
             let has_marks = marks.len() > c.len_utf8();
             let sprites = if has_marks {
-                Some(self.cluster_sprites(&marks, style, text.small))
+                Some(self.cluster_sprites(&marks, style, size))
             } else if c != ' ' {
-                let key = if text.small {
-                    GlyphKey::Small(c, style)
-                } else {
-                    GlyphKey::Char(c, style)
-                };
-                Some(self.glyph_sprites(key))
+                Some(self.glyph_sprites(GlyphKey::Char(c, style, size)))
             } else {
                 None
             };
@@ -928,7 +922,7 @@ impl Renderer {
     }
 
     fn push_pane(&mut self, snapshot: &Snapshot, x0: f32, y0: f32) -> Result<(), AtlasFull> {
-        let m = self.fonts.metrics();
+        let m = self.fonts.metrics(TextSize::Terminal);
         let (cw, ch) = (m.width as f32, m.height as f32);
         let origin = |column: usize, line: usize| (x0 + column as f32 * cw, y0 + line as f32 * ch);
         let cursor = snapshot.cursor;
@@ -1040,7 +1034,7 @@ impl Renderer {
         cells: u32,
         color: Rgb,
     ) -> Result<(), AtlasFull> {
-        let m = self.fonts.metrics();
+        let m = self.fonts.metrics(TextSize::Terminal);
         let stroke = m.stroke.max(1) as f32;
         let width = (cells * m.width) as f32;
         let top = y + m.underline_y as f32;
@@ -1074,13 +1068,13 @@ impl Renderer {
             italic: cell.style.italic,
         };
         match &cell.zerowidth {
-            None => self.glyph_sprites(GlyphKey::Char(cell.c, style)),
+            None => self.glyph_sprites(GlyphKey::Char(cell.c, style, TextSize::Terminal)),
             Some(marks) => {
                 let mut text = std::mem::take(&mut self.cluster_text);
                 text.clear();
                 text.push(cell.c);
                 text.extend(marks.iter().copied());
-                let result = self.cluster_sprites(&text, style, false);
+                let result = self.cluster_sprites(&text, style, TextSize::Terminal);
                 self.cluster_text = text;
                 result
             }
@@ -1093,9 +1087,9 @@ impl Renderer {
         &mut self,
         text: &str,
         style: FaceStyle,
-        small: bool,
+        size: TextSize,
     ) -> Result<Rc<[Sprite]>, AtlasFull> {
-        let slot = usize::from(small) * 4 + usize::from(style.bold) * 2 + usize::from(style.italic);
+        let slot = size.slot() * 4 + usize::from(style.bold) * 2 + usize::from(style.italic);
         if let Some(sprites) = self
             .clusters
             .get(text)
@@ -1103,7 +1097,7 @@ impl Renderer {
         {
             return Ok(sprites.clone());
         }
-        let sprites: Rc<[Sprite]> = match self.font_sprites(text, style, small) {
+        let sprites: Rc<[Sprite]> = match self.font_sprites(text, style, size) {
             Ok(sprites) => sprites.into(),
             // Blank for this frame; not cached, so it is tried again later.
             Err(_) if self.skip_missing => return Ok(Rc::from(Vec::new())),
@@ -1124,8 +1118,7 @@ impl Renderer {
             return Ok(sprites.clone());
         }
         let built = match &key {
-            GlyphKey::Char(c, style) => self.char_sprites(*c, *style, false),
-            GlyphKey::Small(c, style) => self.char_sprites(*c, *style, true),
+            GlyphKey::Char(c, style, size) => self.char_sprites(*c, *style, *size),
             GlyphKey::Underline(style) => self.underline_sprites(*style),
         };
         let sprites: Rc<[Sprite]> = match built {
@@ -1145,16 +1138,12 @@ impl Renderer {
         &mut self,
         c: char,
         style: FaceStyle,
-        small: bool,
+        size: TextSize,
     ) -> Result<Vec<Sprite>, AtlasFull> {
-        let metrics = if small {
-            self.fonts.small_metrics()
-        } else {
-            self.fonts.metrics()
-        };
+        let metrics = self.fonts.metrics(size);
         let Some(mask) = box_drawing::rasterize(c, metrics.width, metrics.height, metrics.stroke)
         else {
-            return self.font_sprites(&c.to_string(), style, small);
+            return self.font_sprites(&c.to_string(), style, size);
         };
         let region = self
             .mask_atlas
@@ -1173,15 +1162,11 @@ impl Renderer {
         &mut self,
         text: &str,
         style: FaceStyle,
-        small: bool,
+        size: TextSize,
     ) -> Result<Vec<Sprite>, AtlasFull> {
-        let baseline = if small {
-            self.fonts.small_metrics().baseline
-        } else {
-            self.fonts.metrics().baseline
-        } as i32;
+        let baseline = self.fonts.metrics(size).baseline as i32;
         let mut sprites = Vec::new();
-        for glyph in self.fonts.rasterize(text, style, small) {
+        for glyph in self.fonts.rasterize(text, style, size) {
             let atlas = if glyph.color {
                 &mut self.color_atlas
             } else {
@@ -1207,7 +1192,7 @@ impl Renderer {
     /// Rasterize a patterned underline into the mask atlas, placed at the
     /// font's underline position but kept inside the cell.
     fn underline_sprites(&mut self, style: UnderlineStyle) -> Result<Vec<Sprite>, AtlasFull> {
-        let m = self.fonts.metrics();
+        let m = self.fonts.metrics(TextSize::Terminal);
         let Some(mask) = decoration::rasterize(style, m.width, m.stroke) else {
             return Ok(Vec::new());
         };

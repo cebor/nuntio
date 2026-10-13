@@ -35,20 +35,49 @@ pub struct RasterGlyph {
     pub data: Vec<u8>,
 }
 
+/// Which of the two font sizes text is drawn in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TextSize {
+    /// The terminal font.
+    Terminal,
+    /// The smaller UI text (see [`SMALL_TEXT_SCALE`]).
+    Small,
+}
+
+impl TextSize {
+    /// Index into the per-size state of [`Fonts`] and the glyph caches.
+    pub const fn slot(self) -> usize {
+        match self {
+            Self::Terminal => 0,
+            Self::Small => 1,
+        }
+    }
+
+    fn scale(self) -> f32 {
+        match self {
+            Self::Terminal => 1.0,
+            Self::Small => SMALL_TEXT_SCALE,
+        }
+    }
+}
+
+/// Shaping state and cell metrics of one [`TextSize`].
+struct Face {
+    buffer: Buffer,
+    metrics: CellMetrics,
+}
+
 /// Font discovery, fallback, shaping and rasterization.
 pub struct Fonts {
     system: FontSystem,
     swash: SwashCache,
-    buffer: Buffer,
-    /// Shapes the smaller UI text (see [`SMALL_TEXT_SCALE`]).
-    small_buffer: Buffer,
+    /// Indexed by [`TextSize::slot`].
+    faces: [Face; 2],
     family: Option<String>,
     /// Monochrome symbol font for text-presentation emoji (see
     /// [`prefers_text_presentation`]).
     symbol_family: Option<&'static str>,
     px_size: f32,
-    metrics: CellMetrics,
-    small_metrics: CellMetrics,
 }
 
 /// The font database being loaded by `preload_fonts`.
@@ -310,8 +339,6 @@ impl Fonts {
             system.db_mut().set_sans_serif_family("Helvetica");
         }
         let px_size = points_to_pixels(size_points, scale_factor);
-        let buffer = new_buffer(&mut system, px_size);
-        let small_buffer = new_buffer(&mut system, px_size * SMALL_TEXT_SCALE);
         let placeholder = CellMetrics {
             width: 1,
             height: 1,
@@ -320,16 +347,17 @@ impl Fonts {
             stroke: 1,
             strikeout_y: 1,
         };
+        let faces = [TextSize::Terminal, TextSize::Small].map(|size| Face {
+            buffer: new_buffer(&mut system, px_size * size.scale()),
+            metrics: placeholder,
+        });
         let mut fonts = Self {
             system,
             swash: SwashCache::new(),
-            buffer,
-            small_buffer,
+            faces,
             family: None,
             symbol_family,
             px_size,
-            metrics: placeholder,
-            small_metrics: placeholder,
         };
         let warning = fonts.set_family(family);
         Ok((fonts, warning))
@@ -368,32 +396,30 @@ impl Fonts {
         };
         self.family = resolved;
         self.remeasure();
-        tracing::info!(family = ?self.family, px_size = self.px_size, metrics = ?self.metrics, "font loaded");
+        tracing::info!(family = ?self.family, px_size = self.px_size, metrics = ?self.metrics(TextSize::Terminal), "font loaded");
         warning
     }
 
-    /// Change font size or scale factor. Returns the new cell metrics.
+    /// Change font size or scale factor. Returns the new terminal cell metrics.
     pub fn set_size(&mut self, size_points: f32, scale_factor: f64) -> CellMetrics {
         self.px_size = points_to_pixels(size_points, scale_factor);
         self.remeasure();
-        self.metrics
+        self.metrics(TextSize::Terminal)
     }
 
-    /// Rebuild both buffers and their metrics after a size or family change.
+    /// Rebuild the buffers and metrics of both sizes after a size or family change.
     fn remeasure(&mut self) {
-        self.buffer = new_buffer(&mut self.system, self.px_size);
-        self.small_buffer = new_buffer(&mut self.system, self.px_size * SMALL_TEXT_SCALE);
-        self.metrics = self.measure(false);
-        self.small_metrics = self.measure(true);
+        for size in [TextSize::Terminal, TextSize::Small] {
+            self.faces[size.slot()].buffer =
+                new_buffer(&mut self.system, self.px_size * size.scale());
+        }
+        for size in [TextSize::Terminal, TextSize::Small] {
+            self.faces[size.slot()].metrics = self.measure(size);
+        }
     }
 
-    pub fn metrics(&self) -> CellMetrics {
-        self.metrics
-    }
-
-    /// Cell metrics of small UI text.
-    pub fn small_metrics(&self) -> CellMetrics {
-        self.small_metrics
+    pub fn metrics(&self, size: TextSize) -> CellMetrics {
+        self.faces[size.slot()].metrics
     }
 
     fn attrs(&self, style: FaceStyle, symbols: bool) -> Attrs<'_> {
@@ -416,44 +442,28 @@ impl Fonts {
             })
     }
 
-    fn buffer(&self, small: bool) -> &Buffer {
-        if small {
-            &self.small_buffer
-        } else {
-            &self.buffer
-        }
-    }
-
     /// Shape `text`; `symbols` puts the monochrome symbol font first.
-    fn shape(&mut self, text: &str, style: FaceStyle, small: bool, symbols: bool) {
+    fn shape(&mut self, text: &str, style: FaceStyle, size: TextSize, symbols: bool) {
         let attrs = self.attrs(style, symbols);
         // `attrs` borrows `self.family`; clone it out so the buffer can be borrowed mutably.
         let attrs = cosmic_text::AttrsOwned::new(&attrs);
-        let buffer = if small {
-            &mut self.small_buffer
-        } else {
-            &mut self.buffer
-        };
+        let buffer = &mut self.faces[size.slot()].buffer;
         buffer.set_text(text, &attrs.as_attrs(), Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.system, false);
     }
 
-    fn measure(&mut self, small: bool) -> CellMetrics {
+    fn measure(&mut self, size: TextSize) -> CellMetrics {
         self.shape(
             "M",
             FaceStyle {
                 bold: false,
                 italic: false,
             },
-            small,
+            size,
             false,
         );
-        let px_size = if small {
-            self.px_size * SMALL_TEXT_SCALE
-        } else {
-            self.px_size
-        };
-        let run = self.buffer(small).layout_runs().next();
+        let px_size = self.px_size * size.scale();
+        let run = self.faces[size.slot()].buffer.layout_runs().next();
         let glyph = run.and_then(|run| run.glyphs.first());
         let (advance, font_id) = match glyph {
             Some(g) => (g.w, Some(g.font_id)),
@@ -496,15 +506,15 @@ impl Fonts {
     }
 
     /// Shape one grapheme (with fallback) and rasterize its glyphs.
-    pub fn rasterize(&mut self, text: &str, style: FaceStyle, small: bool) -> Vec<RasterGlyph> {
-        let glyphs = self.rasterize_with(text, style, small, false);
+    pub fn rasterize(&mut self, text: &str, style: FaceStyle, size: TextSize) -> Vec<RasterGlyph> {
+        let glyphs = self.rasterize_with(text, style, size, false);
         // The fallback list may prefer the color emoji font for symbols
         // that default to text presentation; take them from a symbol font.
         if glyphs.iter().any(|g| g.color)
             && self.symbol_family.is_some()
             && prefers_text_presentation(text)
         {
-            let symbols = self.rasterize_with(text, style, small, true);
+            let symbols = self.rasterize_with(text, style, size, true);
             if !symbols.is_empty() && !symbols.iter().any(|g| g.color) {
                 return symbols;
             }
@@ -516,15 +526,11 @@ impl Fonts {
         &mut self,
         text: &str,
         style: FaceStyle,
-        small: bool,
+        size: TextSize,
         symbols: bool,
     ) -> Vec<RasterGlyph> {
-        self.shape(text, style, small, symbols);
-        let buffer = if small {
-            &self.small_buffer
-        } else {
-            &self.buffer
-        };
+        self.shape(text, style, size, symbols);
+        let buffer = &self.faces[size.slot()].buffer;
         let Some(run) = buffer.layout_runs().next() else {
             return Vec::new();
         };
