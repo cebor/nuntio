@@ -373,13 +373,17 @@ mod tests {
             assert!(quiet(&rx), "reported a change to the directory");
         }
 
-        // Several writes in a burst are reported once.
+        // Several writes in a burst are reported once. Only writes closer
+        // than `DEBOUNCE` are a burst: on a busy machine the second one may
+        // come later, and two reports are right then.
+        let started = std::time::Instant::now();
         std::fs::write(&path, "scrollback = 5").unwrap();
         std::fs::write(&path, "scrollback = 6").unwrap();
+        let burst = started.elapsed() < DEBOUNCE / 2;
         let changed = rx.recv_timeout(Duration::from_secs(3));
         let settled = quiet(&rx);
         assert!(changed.is_ok(), "no change reported");
-        assert!(settled, "burst reported more than once");
+        assert!(settled || !burst, "burst reported more than once");
     }
 
     #[test]
