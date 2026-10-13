@@ -18,6 +18,30 @@ cargo xtask site [serve] # build the website in site/ with Zola (needs `zola` on
 
 Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates. CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on all three OSes, also with `--features nuntio/debug-server`; `release.yml` builds packages when a `v*` tag is pushed.
 
+## Gate
+
+Every change that touches code passes the gate before it is committed:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --features nuntio/debug-server -- -D warnings
+cargo test --workspace
+cargo test --workspace --features nuntio/debug-server
+cargo deny --all-features check
+```
+
+A change to doc comments also runs `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`. A UI change is checked the way a user meets it: driven headless with `cargo xtask drive` and screenshotted, not only compiled. The minimum Rust version, macOS, Windows, packaging and the website are checked by CI.
+
+## Finishing a change
+
+A change is finished when its gate passed, it is committed and pushed to `origin main`, and its CI run is green. A change without code, such as documentation only, skips the gate but is still committed, pushed and watched in CI.
+
+- Stage paths explicitly, never `git add -A` or `git add .`: the checkout may hold the user's uncommitted work, which is left alone. `SPEC.md` and other local planning files are never committed.
+- Before pushing, `git pull --rebase origin main`; if that brought new commits, run the gate again. Push only to `origin` (GitHub), never to another remote such as `gitlab`.
+- A red `main` comes first, whoever's commit broke it: before pushing, look at the newest run (`gh run list --workflow ci.yml --branch main --limit 1`). If it failed, the push is its fix or waits for one.
+- After pushing, find the run of the pushed commit (`gh run list --workflow ci.yml --commit <sha> --json databaseId`, repeated until it shows up) and follow it with `gh run watch <id> --exit-status`. A failure (`gh run view <id> --log-failed`) is fixed in a new commit that goes through the gate again, until CI is green.
+
 ## Seeing and driving nuntio (`cargo xtask drive`)
 
 To look at the running terminal or try out a change, use the debug server instead of asking the user for screenshots:
