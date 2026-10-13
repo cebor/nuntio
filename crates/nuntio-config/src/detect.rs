@@ -39,11 +39,21 @@ pub fn known_shell_name(program: &str) -> Option<&'static str> {
 /// The file name of `program` without a trailing `.exe`, split on both `/`
 /// and `\` (`Path` doesn't split `\` outside Windows).
 pub fn program_stem(program: &str) -> &str {
+    file_stem(program, &["exe"])
+}
+
+/// Like [`program_stem`], and without a trailing `.cmd`, `.bat` or `.com`
+/// too: the name of a program that may be a Windows launcher script.
+pub fn launcher_stem(program: &str) -> &str {
+    file_stem(program, &["exe", "cmd", "bat", "com"])
+}
+
+/// The file name of `program` without a trailing extension from
+/// `extensions` (compared ignoring case).
+fn file_stem<'a>(program: &'a str, extensions: &[&str]) -> &'a str {
     let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    match file.len().checked_sub(4) {
-        Some(cut) if file.is_char_boundary(cut) && file[cut..].eq_ignore_ascii_case(".exe") => {
-            &file[..cut]
-        }
+    match file.rsplit_once('.') {
+        Some((stem, ext)) if extensions.iter().any(|e| ext.eq_ignore_ascii_case(e)) => stem,
         _ => file,
     }
 }
@@ -222,6 +232,18 @@ mod registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stems_strip_one_extension() {
+        assert_eq!(program_stem(r"C:\Tools\Code.EXE"), "Code");
+        assert_eq!(program_stem("/usr/bin/pwsh"), "pwsh");
+        assert_eq!(program_stem("code.cmd"), "code.cmd");
+        assert_eq!(launcher_stem("code.cmd"), "code");
+        assert_eq!(launcher_stem("x.cmd.exe"), "x.cmd");
+        assert_eq!(launcher_stem("x.exe.cmd"), "x.exe");
+        assert_eq!(launcher_stem("dir.cmd/vim"), "vim");
+        assert_eq!(launcher_stem(""), "");
+    }
 
     #[test]
     fn etc_shells() {

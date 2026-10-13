@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use nuntio_config::ThemeSet;
+use nuntio_config::{ThemeSet, detect};
 use nuntio_tui::style::Tone;
 use nuntio_tui::terminal::{self, Modes};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -105,17 +105,7 @@ fn editor_name(command: &str) -> String {
         _ => command.split_whitespace().next(),
     }
     .unwrap_or_default();
-    let file = program.rsplit(['/', '\\']).next().unwrap_or_default();
-    let name = match file.rsplit_once('.') {
-        Some((stem, ext))
-            if ["exe", "cmd", "bat", "com"]
-                .iter()
-                .any(|e| ext.eq_ignore_ascii_case(e)) =>
-        {
-            stem
-        }
-        _ => file,
-    };
+    let name = detect::launcher_stem(program);
     match name.chars().count() {
         1..=10 => name.into(),
         _ => "editor".into(),

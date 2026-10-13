@@ -340,7 +340,7 @@ enum Fetched {
 
 /// `https://api.github.com/repos/<owner>/<repo>/releases/latest`.
 fn api_url() -> String {
-    let repo = env!("CARGO_PKG_REPOSITORY")
+    let repo = REPOSITORY
         .trim_start_matches("https://github.com/")
         .trim_end_matches('/');
     format!("https://api.github.com/repos/{repo}/releases/latest")
