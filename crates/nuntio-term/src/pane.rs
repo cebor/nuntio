@@ -741,14 +741,7 @@ impl TermHandle {
 
     /// Like [`snapshot`](Self::snapshot), into `out` and its cell buffer.
     pub fn snapshot_into(&self, out: &mut Snapshot) {
-        self.listener
-            .inner
-            .wakeup_pending
-            .store(false, Ordering::Release);
-        let term = self.term.lock();
-        let palette = read(&self.listener.inner.palette);
-        let images = lock(&self.images);
-        out.refresh(&term, &palette, &images, &[], None);
+        self.refresh(None, out);
     }
 
     /// Answer the color queries programs sent (see
@@ -813,15 +806,23 @@ impl TermHandle {
     /// Like [`search_snapshot`](Self::search_snapshot), into `out` and its
     /// cell buffer.
     pub fn search_snapshot_into(&self, search: &mut Search, out: &mut Snapshot) {
-        self.listener
-            .inner
-            .wakeup_pending
-            .store(false, Ordering::Release);
+        self.refresh(Some(search), out);
+    }
+
+    /// Copy the screen into `out`, highlighting the matches of `search`. The
+    /// term lock is held only for the copy; the palette and images are taken
+    /// under it, in that order.
+    fn refresh(&self, mut search: Option<&mut Search>, out: &mut Snapshot) {
+        self.ack_wakeup();
         let term = self.term.lock();
-        let matches = search::visible_matches(&term, search);
+        let matches = search
+            .as_deref_mut()
+            .map(|search| search::visible_matches(&term, search))
+            .unwrap_or_default();
         let palette = read(&self.listener.inner.palette);
         let images = lock(&self.images);
-        out.refresh(&term, &palette, &images, &matches, search.current_in(&term));
+        let current = search.and_then(|search| search.current_in(&term));
+        out.refresh(&term, &palette, &images, &matches, current);
     }
 
     /// Select the next match upwards (older output) or downwards and scroll
