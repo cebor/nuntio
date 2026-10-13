@@ -455,9 +455,16 @@ pub fn synthetic_press(combo: &KeyCombo, kind: KeyEventKind) -> (KeyPress, Modif
     (press, mods)
 }
 
-/// What a program in a pane receives when `combo` is typed: the key press
-/// and, in the kitty protocol's event-type mode, its release.
+/// What a multiplexer receives when nuntio forwards `combo`: the key press
+/// and, in the kitty protocol's event-type mode, its release. Under the
+/// kitty protocol every key, text keys included, goes out as an escape code:
+/// herdr ignores a text key that arrives in the same read as its prefix.
 pub fn chord_bytes(combo: &KeyCombo, mode: TermMode) -> Vec<u8> {
+    let mode = if mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) {
+        mode | TermMode::REPORT_ALL_KEYS_AS_ESC
+    } else {
+        mode
+    };
     let mut bytes = Vec::new();
     for kind in [KeyEventKind::Press, KeyEventKind::Release] {
         let (press, mods) = synthetic_press(combo, kind);
@@ -1071,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn chords_encode_like_typed_keys() {
+    fn chords_under_the_kitty_protocol_are_escape_codes() {
         let ctrl_b = KeyCombo::parse("ctrl+b").unwrap();
         assert_eq!(chord_bytes(&ctrl_b, TermMode::empty()), [0x02]);
         assert_eq!(
@@ -1080,7 +1087,10 @@ mod tests {
         );
         let minus = KeyCombo::parse("minus").unwrap();
         assert_eq!(chord_bytes(&minus, TermMode::empty()), b"-");
-        assert_eq!(chord_bytes(&minus, TermMode::DISAMBIGUATE_ESC_CODES), b"-");
+        assert_eq!(
+            chord_bytes(&minus, TermMode::DISAMBIGUATE_ESC_CODES),
+            b"\x1b[45u"
+        );
     }
 
     #[test]
@@ -1088,5 +1098,15 @@ mod tests {
         let ctrl_b = KeyCombo::parse("ctrl+b").unwrap();
         let mode = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES;
         assert_eq!(chord_bytes(&ctrl_b, mode), b"\x1b[98;5u\x1b[98;5:3u");
+    }
+
+    #[test]
+    fn herdr_prefix_and_key_arrive_as_escape_codes() {
+        let mode = TermMode::DISAMBIGUATE_ESC_CODES
+            | TermMode::REPORT_EVENT_TYPES
+            | TermMode::REPORT_ALTERNATE_KEYS;
+        let mut bytes = chord_bytes(&KeyCombo::parse("ctrl+b").unwrap(), mode);
+        bytes.extend(chord_bytes(&KeyCombo::parse("v").unwrap(), mode));
+        assert_eq!(bytes, b"\x1b[98;5u\x1b[98;5:3u\x1b[118u\x1b[118;1:3u");
     }
 }
