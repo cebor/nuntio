@@ -1,5 +1,6 @@
 //! Keyboard shortcuts: platform defaults plus `[[keybindings]]` from the config.
 
+use nuntio_config::{KeyCombo, KeyName, Mods, NamedKey as Named};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::input;
@@ -119,17 +120,9 @@ impl Action {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BindKey {
-    /// Compared case-insensitively against the key without modifiers.
-    Char(char),
-    Named(NamedKey),
-}
-
 #[derive(Debug, Clone)]
 struct Binding {
-    key: BindKey,
-    mods: ModifiersState,
+    combo: KeyCombo,
     /// `None` disables the key combination (it goes to the terminal).
     action: Option<Action>,
 }
@@ -153,30 +146,34 @@ impl Bindings {
             )
         };
         let char = |c, mods, action| Binding {
-            key: BindKey::Char(c),
-            mods,
+            combo: KeyCombo {
+                mods: mods_of(mods),
+                key: KeyName::Char(c),
+            },
             action: Some(action),
         };
         let named = |key, mods, action| Binding {
-            key: BindKey::Named(key),
-            mods,
+            combo: KeyCombo {
+                mods: mods_of(mods),
+                key: KeyName::Named(key),
+            },
             action: Some(action),
         };
 
         let mut bindings = vec![
             char('c', cmd_shift, Copy),
             char('v', cmd_shift, Paste),
-            named(NamedKey::Insert, shift, Paste),
+            named(Named::Insert, shift, Paste),
             char('k', cmd_shift, ClearScrollback),
             char('=', cmd, FontIncrease),
             char('+', cmd, FontIncrease),
             char('=', cmd | shift, FontIncrease),
             char('-', cmd, FontDecrease),
             char('0', cmd, FontReset),
-            named(NamedKey::PageUp, shift, ScrollPageUp),
-            named(NamedKey::PageDown, shift, ScrollPageDown),
-            named(NamedKey::ArrowUp, cmd_shift, ScrollLineUp),
-            named(NamedKey::ArrowDown, cmd_shift, ScrollLineDown),
+            named(Named::PageUp, shift, ScrollPageUp),
+            named(Named::PageDown, shift, ScrollPageDown),
+            named(Named::Up, cmd_shift, ScrollLineUp),
+            named(Named::Down, cmd_shift, ScrollLineDown),
             char('t', cmd_shift, NewTab),
             char('t', cmd_shift | ModifiersState::ALT, OpenShellMenu),
             char('w', cmd_shift, ClosePane),
@@ -189,28 +186,28 @@ impl Bindings {
             let cmd = ModifiersState::SUPER;
             bindings.push(char(']', cmd | shift, NextTab));
             bindings.push(char('[', cmd | shift, PreviousTab));
-            bindings.push(named(NamedKey::ArrowRight, cmd, NextTab));
-            bindings.push(named(NamedKey::ArrowLeft, cmd, PreviousTab));
+            bindings.push(named(Named::Right, cmd, NextTab));
+            bindings.push(named(Named::Left, cmd, PreviousTab));
             bindings.push(char('d', cmd, SplitVertical));
             bindings.push(char('d', cmd | shift, SplitHorizontal));
-            bindings.push(named(NamedKey::Enter, cmd | shift, ZoomPane));
+            bindings.push(named(Named::Enter, cmd | shift, ZoomPane));
             // Like iTerm2; the menu also has macOS's Ctrl+Cmd+F.
-            bindings.push(named(NamedKey::Enter, cmd, ToggleFullscreen));
+            bindings.push(named(Named::Enter, cmd, ToggleFullscreen));
             // The settings shortcut of macOS apps.
             bindings.push(char(',', cmd, OpenSettings));
             // Like iTerm2: Cmd+Opt+Arrow focuses, Cmd+Ctrl+Arrow resizes.
             (cmd | ModifiersState::ALT, cmd | ModifiersState::CONTROL)
         } else {
             let ctrl = ModifiersState::CONTROL;
-            bindings.push(named(NamedKey::Tab, ctrl, NextTab));
-            bindings.push(named(NamedKey::Tab, ctrl | shift, PreviousTab));
-            bindings.push(named(NamedKey::PageDown, ctrl, NextTab));
-            bindings.push(named(NamedKey::PageUp, ctrl, PreviousTab));
+            bindings.push(named(Named::Tab, ctrl, NextTab));
+            bindings.push(named(Named::Tab, ctrl | shift, PreviousTab));
+            bindings.push(named(Named::PageDown, ctrl, NextTab));
+            bindings.push(named(Named::PageUp, ctrl, PreviousTab));
             bindings.push(char('d', ctrl | shift, SplitVertical));
             bindings.push(char('e', ctrl | shift, SplitHorizontal));
-            bindings.push(named(NamedKey::Enter, ctrl | shift, ZoomPane));
+            bindings.push(named(Named::Enter, ctrl | shift, ZoomPane));
             bindings.push(named(
-                NamedKey::F11,
+                Named::F(11),
                 ModifiersState::empty(),
                 ToggleFullscreen,
             ));
@@ -220,10 +217,10 @@ impl Bindings {
             (ctrl_alt, ctrl_alt | shift)
         };
         for (key, direction) in [
-            (NamedKey::ArrowLeft, Direction::Left),
-            (NamedKey::ArrowRight, Direction::Right),
-            (NamedKey::ArrowUp, Direction::Up),
-            (NamedKey::ArrowDown, Direction::Down),
+            (Named::Left, Direction::Left),
+            (Named::Right, Direction::Right),
+            (Named::Up, Direction::Up),
+            (Named::Down, Direction::Down),
         ] {
             bindings.push(named(key, focus_mods, FocusPane(direction)));
             bindings.push(named(key, resize_mods, ResizePane(direction)));
@@ -254,10 +251,12 @@ impl Bindings {
                 warnings.push(format!("keybinding \"{}\" has no `action`", entry.key));
                 continue;
             }
-            let parsed = parse_combo(&entry.key).and_then(|(key, mods)| {
-                let action = Action::from_name(&entry.action)?;
-                Ok(Binding { key, mods, action })
-            });
+            let parsed = KeyCombo::parse(&entry.key)
+                .map_err(|e| e.to_string())
+                .and_then(|combo| {
+                    let action = Action::from_name(&entry.action)?;
+                    Ok(Binding { combo, action })
+                });
             match parsed {
                 Ok(binding) => custom.push(binding),
                 Err(err) => warnings.push(format!("keybinding \"{}\": {err}", entry.key)),
@@ -273,126 +272,88 @@ impl Bindings {
     /// the config unbinds) don't count.
     pub fn shortcut(&self, action: Action) -> Option<String> {
         self.0.iter().enumerate().find_map(|(i, b)| {
-            let shadowed = self.0[..i]
-                .iter()
-                .any(|earlier| earlier.key == b.key && earlier.mods == b.mods);
+            let shadowed = self.0[..i].iter().any(|earlier| earlier.combo == b.combo);
             if b.action != Some(action) || shadowed {
                 return None;
             }
-            combo_of(b).map(|combo| combo.to_string())
+            Some(b.combo.to_string())
         })
     }
 
     /// `key` should be the key without modifiers applied (so Ctrl+Shift+C
     /// arrives as `c`, not `C` or a control character).
     pub fn lookup(&self, key: &Key, mods: ModifiersState) -> Option<Action> {
-        let mods = mods & relevant_mods();
+        let key = match key {
+            Key::Named(named) => KeyName::Named(config_named_key(*named)?),
+            Key::Character(s) => {
+                let mut chars = s.chars().flat_map(char::to_lowercase);
+                let c = chars.next()?;
+                chars.next().is_none().then_some(KeyName::Char(c))?
+            }
+            _ => return None,
+        };
+        let mods = mods_of(mods);
         self.0
             .iter()
-            .find(|b| {
-                b.mods == mods
-                    && match (&b.key, key) {
-                        (BindKey::Named(n), Key::Named(k)) => n == k,
-                        (BindKey::Char(c), Key::Character(s)) => {
-                            let mut chars = s.chars().flat_map(char::to_lowercase);
-                            chars.next() == Some(*c) && chars.next().is_none()
-                        }
-                        _ => false,
-                    }
-            })
+            .find(|b| b.combo.key == key && b.combo.mods == mods)
             .and_then(|b| b.action)
     }
 }
 
-/// Parse a key combination like `"Ctrl+Shift+T"` or `"Cmd+PageUp"`.
-fn parse_combo(combo: &str) -> Result<(BindKey, ModifiersState), String> {
-    use nuntio_config::KeyName;
-
-    let combo = nuntio_config::KeyCombo::parse(combo).map_err(|e| e.to_string())?;
-    let mut mods = ModifiersState::empty();
-    for (on, flag) in [
-        (combo.mods.ctrl, ModifiersState::CONTROL),
-        (combo.mods.shift, ModifiersState::SHIFT),
-        (combo.mods.alt, ModifiersState::ALT),
-        (combo.mods.super_key, ModifiersState::SUPER),
-    ] {
-        if on {
-            mods |= flag;
-        }
+/// The modifiers of `mods` that key combinations can name.
+fn mods_of(mods: ModifiersState) -> Mods {
+    Mods {
+        ctrl: mods.control_key(),
+        shift: mods.shift_key(),
+        alt: mods.alt_key(),
+        super_key: mods.super_key(),
     }
-    let key = match combo.key {
-        KeyName::Char(c) => BindKey::Char(c),
-        KeyName::Named(named) => BindKey::Named(named_key(named)),
-    };
-    Ok((key, mods))
 }
 
-/// The combination of `binding`, the reverse of `parse_combo`. `None` for
-/// a key the config has no name for.
-fn combo_of(binding: &Binding) -> Option<nuntio_config::KeyCombo> {
-    use nuntio_config::{KeyName, Mods};
-
-    let mods = Mods {
-        ctrl: binding.mods.control_key(),
-        shift: binding.mods.shift_key(),
-        alt: binding.mods.alt_key(),
-        super_key: binding.mods.super_key(),
-    };
-    let key = match &binding.key {
-        BindKey::Char(c) => KeyName::Char(*c),
-        BindKey::Named(named) => KeyName::Named(config_named_key(*named)?),
-    };
-    Some(nuntio_config::KeyCombo { mods, key })
-}
-
-/// The reverse of `named_key`.
+/// The config's name for `key`, if it has one.
 fn config_named_key(key: NamedKey) -> Option<nuntio_config::NamedKey> {
-    use nuntio_config::NamedKey as N;
     Some(match key {
-        NamedKey::Enter => N::Enter,
-        NamedKey::Tab => N::Tab,
-        NamedKey::Escape => N::Escape,
-        NamedKey::Space => N::Space,
-        NamedKey::Backspace => N::Backspace,
-        NamedKey::Delete => N::Delete,
-        NamedKey::Insert => N::Insert,
-        NamedKey::Home => N::Home,
-        NamedKey::End => N::End,
-        NamedKey::PageUp => N::PageUp,
-        NamedKey::PageDown => N::PageDown,
-        NamedKey::ArrowUp => N::Up,
-        NamedKey::ArrowDown => N::Down,
-        NamedKey::ArrowLeft => N::Left,
-        NamedKey::ArrowRight => N::Right,
+        NamedKey::Enter => Named::Enter,
+        NamedKey::Tab => Named::Tab,
+        NamedKey::Escape => Named::Escape,
+        NamedKey::Space => Named::Space,
+        NamedKey::Backspace => Named::Backspace,
+        NamedKey::Delete => Named::Delete,
+        NamedKey::Insert => Named::Insert,
+        NamedKey::Home => Named::Home,
+        NamedKey::End => Named::End,
+        NamedKey::PageUp => Named::PageUp,
+        NamedKey::PageDown => Named::PageDown,
+        NamedKey::ArrowUp => Named::Up,
+        NamedKey::ArrowDown => Named::Down,
+        NamedKey::ArrowLeft => Named::Left,
+        NamedKey::ArrowRight => Named::Right,
         // The config knows F1 to F12.
-        _ => N::F(input::function_number(key).filter(|n| *n <= 12)?),
+        _ => Named::F(input::function_number(key).filter(|n| *n <= 12)?),
     })
 }
 
+/// The key a debug server request names, as winit reports it.
+#[cfg(feature = "debug-server")]
 pub(crate) fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
-    use nuntio_config::NamedKey as N;
     match key {
-        N::Enter => NamedKey::Enter,
-        N::Tab => NamedKey::Tab,
-        N::Escape => NamedKey::Escape,
-        N::Space => NamedKey::Space,
-        N::Backspace => NamedKey::Backspace,
-        N::Delete => NamedKey::Delete,
-        N::Insert => NamedKey::Insert,
-        N::Home => NamedKey::Home,
-        N::End => NamedKey::End,
-        N::PageUp => NamedKey::PageUp,
-        N::PageDown => NamedKey::PageDown,
-        N::Up => NamedKey::ArrowUp,
-        N::Down => NamedKey::ArrowDown,
-        N::Left => NamedKey::ArrowLeft,
-        N::Right => NamedKey::ArrowRight,
-        N::F(n) => input::function_key(n.clamp(1, 12)).expect("F1 to F12 exist"),
+        Named::Enter => NamedKey::Enter,
+        Named::Tab => NamedKey::Tab,
+        Named::Escape => NamedKey::Escape,
+        Named::Space => NamedKey::Space,
+        Named::Backspace => NamedKey::Backspace,
+        Named::Delete => NamedKey::Delete,
+        Named::Insert => NamedKey::Insert,
+        Named::Home => NamedKey::Home,
+        Named::End => NamedKey::End,
+        Named::PageUp => NamedKey::PageUp,
+        Named::PageDown => NamedKey::PageDown,
+        Named::Up => NamedKey::ArrowUp,
+        Named::Down => NamedKey::ArrowDown,
+        Named::Left => NamedKey::ArrowLeft,
+        Named::Right => NamedKey::ArrowRight,
+        Named::F(n) => input::function_key(n.clamp(1, 12)).expect("F1 to F12 exist"),
     }
-}
-
-fn relevant_mods() -> ModifiersState {
-    ModifiersState::SHIFT | ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER
 }
 
 #[cfg(test)]
@@ -408,26 +369,6 @@ mod tests {
             key: key.into(),
             action: action.into(),
         }
-    }
-
-    #[test]
-    fn combos() {
-        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        assert_eq!(
-            parse_combo("Ctrl+Shift+T").unwrap(),
-            (BindKey::Char('t'), ctrl_shift)
-        );
-        assert_eq!(
-            parse_combo("cmd + pageup").unwrap(),
-            (BindKey::Named(NamedKey::PageUp), ModifiersState::SUPER)
-        );
-        assert_eq!(
-            parse_combo("Alt+Plus").unwrap(),
-            (BindKey::Char('+'), ModifiersState::ALT)
-        );
-        assert_eq!(parse_combo("F5").unwrap().0, BindKey::Named(NamedKey::F5));
-        assert!(parse_combo("Hyper+T").is_err());
-        assert!(parse_combo("Ctrl+Foo").is_err());
     }
 
     #[test]
