@@ -89,15 +89,22 @@ pub struct TermOptions {
     pub kitty_keyboard: bool,
 }
 
+/// What a pane runs.
+#[derive(Debug, Clone)]
+pub enum Program {
+    /// The user's default shell, as a login shell on macOS.
+    Default,
+    /// The user's shell. On macOS it runs as a login shell through
+    /// `login(1)`, as the default shell does and as in Terminal.app:
+    /// launched from the Dock, nuntio inherits no PATH from a profile.
+    Login(Shell),
+    /// A one-off command rather than a shell.
+    Command(Shell),
+}
+
 #[derive(Debug, Clone)]
 pub struct SpawnOptions {
-    /// `None` spawns the user's default shell.
-    pub shell: Option<Shell>,
-    /// `shell` is the user's shell rather than a one-off command. On macOS
-    /// it then runs as a login shell through `login(1)`, as the default
-    /// shell does and as in Terminal.app: launched from the Dock, nuntio
-    /// inherits no PATH from a profile.
-    pub login_shell: bool,
+    pub program: Program,
     pub working_directory: Option<PathBuf>,
     pub term: TermOptions,
     pub palette: Palette,
@@ -380,11 +387,10 @@ impl TermHandle {
         callback: impl Fn(TermEvent) + Send + Sync + 'static,
     ) -> Result<Self, SpawnError> {
         let size = size.clamped();
-        let shell_program = options
-            .shell
-            .as_ref()
-            .map(|s| s.program.clone())
-            .unwrap_or_else(default_shell_name);
+        let shell_program = match &options.program {
+            Program::Default => default_shell_name(),
+            Program::Login(shell) | Program::Command(shell) => shell.program.clone(),
+        };
         let shell_name = Path::new(&shell_program)
             .file_stem()
             .map_or(shell_program.clone(), |s| s.to_string_lossy().into_owned());
@@ -447,28 +453,29 @@ impl TermHandle {
             "WSLENV".into(),
             wslenv(std::env::var("WSLENV").ok().as_deref()),
         );
-        #[cfg(target_os = "macos")]
-        let login = match &options.shell {
-            Some(shell) if options.login_shell => {
+        let runs_command = matches!(options.program, Program::Command(_));
+        // Without a shell, alacritty runs the default one through `login`
+        // on macOS as well.
+        let (shell, via_login) = match options.program {
+            Program::Default => (None, cfg!(target_os = "macos")),
+            Program::Command(shell) => (Some(shell), false),
+            #[cfg(target_os = "macos")]
+            Program::Login(shell) => {
                 let user = std::env::var("USER").unwrap_or_default();
                 // `login` looks for `.hushlogin` in the current directory only.
                 let hush = std::env::var_os("HOME")
                     .is_some_and(|home| Path::new(&home).join(".hushlogin").exists());
-                let login = login_command(shell, &user, hush);
-                if login.is_none() {
-                    tracing::debug!("USER is not set, starting the shell without login");
+                match login_command(&shell, &user, hush) {
+                    Some(login) => (Some(login), true),
+                    None => {
+                        tracing::debug!("USER is not set, starting the shell without login");
+                        (Some(shell), false)
+                    }
                 }
-                login
             }
-            _ => None,
+            #[cfg(not(target_os = "macos"))]
+            Program::Login(shell) => (Some(shell), false),
         };
-        #[cfg(not(target_os = "macos"))]
-        let login: Option<Shell> = None;
-        // Without a shell, alacritty runs the default one through `login`
-        // on macOS as well.
-        let via_login = cfg!(target_os = "macos") && (options.shell.is_none() || login.is_some());
-        let runs_command = options.shell.is_some() && !options.login_shell;
-        let shell = login.or(options.shell);
         #[cfg(windows)]
         let mut fallback = None;
         let pty = match options.transport {

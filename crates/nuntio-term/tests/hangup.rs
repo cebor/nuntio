@@ -5,7 +5,9 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nuntio_term::{Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize, Transport};
+use nuntio_term::{
+    Program, Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize, Transport,
+};
 
 const SIZE: TermSize = TermSize {
     columns: 40,
@@ -22,11 +24,10 @@ const OPTIONS: TermOptions = TermOptions {
 
 fn options(script: &str) -> SpawnOptions {
     SpawnOptions {
-        shell: Some(Shell {
+        program: Program::Command(Shell {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), script.into()],
         }),
-        login_shell: false,
         working_directory: None,
         term: OPTIONS,
         palette: Default::default(),

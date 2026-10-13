@@ -4,8 +4,8 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use nuntio_term::{
-    GridPoint, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle, TermMode,
-    TermOptions, TermSize, Transport,
+    GridPoint, Program, ReportedDir, SelectionKind, Shell, SpawnOptions, TermEvent, TermHandle,
+    TermMode, TermOptions, TermSize, Transport,
 };
 
 const SIZE: TermSize = TermSize {
@@ -42,11 +42,10 @@ fn spawn_with(
 
 fn options(script: &str, env: Vec<(String, String)>, term: TermOptions) -> SpawnOptions {
     SpawnOptions {
-        shell: Some(Shell {
+        program: Program::Command(Shell {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), script.into()],
         }),
-        login_shell: false,
         working_directory: None,
         term,
         palette: Default::default(),
@@ -381,11 +380,10 @@ fn reported_directory() {
 fn login_shell_is_seen_behind_login() {
     let (tx, _rx) = mpsc::channel();
     let options = SpawnOptions {
-        shell: Some(Shell {
+        program: Program::Login(Shell {
             program: "/bin/zsh".into(),
             args: vec!["-f".into()],
         }),
-        login_shell: true,
         working_directory: Some("/tmp".into()),
         term: OPTIONS,
         palette: Default::default(),

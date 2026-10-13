@@ -254,7 +254,7 @@ The status bar redraws only when its content changes, and `sysmon` pauses while 
 `Core::spawn_pane(dir, launch, size)` ([`crates/nuntio/src/app_panes.rs`](crates/nuntio/src/app_panes.rs)):
 
 - `Launch::{Shell(ShellChoice), Command(argv), Helper { program, args, name }}`.
-- Builds `SpawnOptions` with the `Transport` (`Pty`, or `WslHelper { fallback }` on Windows), `term_options`, the palette and the `pane_env` (`NUNTIO_CONFIG`, `PATH` with the helper dir, the macOS locale; empty for WSL).
+- Builds `SpawnOptions` with the `Program` (`Default`; `Login(shell)` for the user's shell; `Command(shell)` for commands and helpers), the `Transport` (`Pty`, or `WslHelper { fallback }` on Windows), `term_options`, the palette and the `pane_env` (`NUNTIO_CONFIG`, `PATH` with the helper dir, the macOS locale; empty for WSL).
 - The event callback is `proxy.send_event(UserEvent::Term(id, ev))`.
 
 `nuntio-term` sets `TERM=xterm-256color`, `COLORTERM`, `TERM_PROGRAM`, `PI_FORCE_IMAGE_PROTOCOL=iterm2` (not on native ConPTY) and `WINDOWID`. On macOS the shell is wrapped in `login(1)`.

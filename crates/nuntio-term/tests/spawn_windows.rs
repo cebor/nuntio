@@ -3,7 +3,9 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use nuntio_term::{Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize, Transport};
+use nuntio_term::{
+    Program, Shell, SpawnOptions, TermEvent, TermHandle, TermOptions, TermSize, Transport,
+};
 
 const SIZE: TermSize = TermSize {
     columns: 40,
@@ -41,8 +43,7 @@ fn spawn_via(
     callback: impl Fn(TermEvent) + Send + Sync + 'static,
 ) -> TermHandle {
     let options = SpawnOptions {
-        shell: Some(shell(program, args)),
-        login_shell: false,
+        program: Program::Command(shell(program, args)),
         working_directory: None,
         term: OPTIONS,
         palette: Default::default(),

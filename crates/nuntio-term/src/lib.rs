@@ -21,7 +21,7 @@ pub use alacritty_terminal::vte::ansi::Rgb;
 pub use osc_cwd::ReportedDir;
 pub use palette::{Palette, rgb};
 pub use pane::{
-    ForegroundInfo, GridPoint, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent,
+    ForegroundInfo, GridPoint, Program, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent,
     TermHandle, TermOptions, TermSize, Transport, default_shell_name,
 };
 pub use search::{MatchPosition, Search, SearchError};

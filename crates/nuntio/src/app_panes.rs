@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
-use nuntio_term::{Shell, SpawnOptions, TermHandle, TermSize, Transport};
+use nuntio_term::{Program, Shell, SpawnOptions, TermHandle, TermSize, Transport};
 
 use super::{Confirmation, Core, INITIAL_GRID, Startup, term_options};
 use crate::banner::{Banner, Severity, Topic};
@@ -101,7 +101,6 @@ impl Core {
         self.next_pane_id += 1;
         let proxy = self.proxy.clone();
         let distro = launch.distro();
-        let login_shell = matches!(launch, Launch::Shell(_));
         let name = launch.name();
         let own_shell = match &launch {
             Launch::Shell(choice) if *choice != shells::default_choice(&self.config) => {
@@ -110,13 +109,13 @@ impl Core {
             _ => None,
         };
         let mut transport = Transport::Pty;
-        let shell = match launch {
-            Launch::Command(mut argv) => Some(Shell {
+        let program = match launch {
+            Launch::Command(mut argv) => Program::Command(Shell {
                 program: argv.remove(0),
                 args: argv,
             }),
-            Launch::Helper { program, args, .. } => Some(Shell { program, args }),
-            Launch::Shell(ShellChoice { shell: None, .. }) => None,
+            Launch::Helper { program, args, .. } => Program::Command(Shell { program, args }),
+            Launch::Shell(ShellChoice { shell: None, .. }) => Program::Default,
             Launch::Shell(ShellChoice { shell: Some(s), .. }) => {
                 let wsl_dir = match &dir {
                     Some(StartDir::Wsl(dir)) => Some(dir.as_str()),
@@ -128,15 +127,14 @@ impl Core {
                     Some(helper) => {
                         let (program, args) = s.command(wsl_dir, Some(&helper));
                         transport = Transport::WslHelper { fallback: conpty };
-                        Some(Shell { program, args })
+                        Program::Login(Shell { program, args })
                     }
-                    None => Some(conpty),
+                    None => Program::Login(conpty),
                 }
             }
         };
         let options = SpawnOptions {
-            shell,
-            login_shell,
+            program,
             // `wsl.exe --cd` picks the directory; a Windows one would be ignored.
             working_directory: match dir {
                 Some(StartDir::Local(dir)) if distro.is_none() => Some(dir),
