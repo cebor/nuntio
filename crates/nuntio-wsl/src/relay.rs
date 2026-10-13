@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use crate::proto::{Decoder, Frame, READY, Size};
 
 const CHUNK: usize = 64 * 1024;
+/// The largest buffer `login_shell` offers `getpwuid_r` for the passwd entry.
+const PASSWD_BUF_MAX: usize = 64 * 1024;
 /// Output read after the shell exited; background jobs may keep writing forever.
 const POST_EXIT_DRAIN: usize = 0x10_0000;
 /// Input from nuntio waiting for the program to read it, before stdin is left unread.
@@ -211,7 +213,7 @@ fn login_shell() -> OsString {
                 &mut found,
             )
         };
-        if rc == libc::ERANGE && buf.len() < CHUNK {
+        if rc == libc::ERANGE && buf.len() < PASSWD_BUF_MAX {
             buf.resize(buf.len() * 2, 0);
             continue;
         }
@@ -322,13 +324,14 @@ fn event_loop(
             eprintln!("nuntio-wsl: poll failed: {}", io::Error::last_os_error());
             return hang_up(pid, 1);
         }
+        let [stdin_poll, master_poll, wake_poll] = fds;
 
         if paused {
             // nuntio closed the pipe or killed wsl.exe; the unread input is moot.
-            if fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLRDHUP) != 0 {
+            if stdin_poll.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLRDHUP) != 0 {
                 return hang_up(pid, 0);
             }
-        } else if fds[0].revents & in_events != 0 {
+        } else if stdin_poll.revents & in_events != 0 {
             match read_fd(0, &mut buf) {
                 // nuntio is gone or closed the pane.
                 Ok(0) => return hang_up(pid, 0),
@@ -347,7 +350,7 @@ fn event_loop(
             }
         }
 
-        let master_events = fds[1].revents;
+        let master_events = master_poll.revents;
         if master_events & libc::POLLOUT != 0 && written < pending.len() {
             match write_fd(master_fd, &pending[written..]) {
                 Ok(n) => written += n,
@@ -378,7 +381,7 @@ fn event_loop(
             }
         }
 
-        if fds[2].revents & libc::POLLIN != 0 {
+        if wake_poll.revents & libc::POLLIN != 0 {
             drain(wake.as_raw_fd());
             let mut status = 0;
             // SAFETY: `status` is a valid out-pointer.
@@ -436,10 +439,11 @@ fn wait_for_exit(pid: libc::pid_t, wake: &OwnedFd) -> Option<libc::c_int> {
             }
             return None;
         }
-        if fds[1].revents & libc::POLLIN != 0 {
+        let [stdin_poll, wake_poll] = fds;
+        if wake_poll.revents & libc::POLLIN != 0 {
             drain(wake.as_raw_fd());
         }
-        if fds[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+        if stdin_poll.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
             // There is no terminal left to write the input to.
             match read_fd(0, &mut [0u8; 4096]) {
                 Ok(0) => {
