@@ -398,7 +398,7 @@ struct Launch {
     program: PathBuf,
     args: Vec<String>,
     /// Environment variables the program must not see (Linux only).
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg(unix)]
     env_remove: &'static [&'static str],
     headless: bool,
 }
@@ -411,6 +411,7 @@ fn launch(nuntio: PathBuf, mut args: Vec<String>, headless: bool) -> Launch {
     let plain = |args| Launch {
         program: nuntio.clone(),
         args,
+        #[cfg(unix)]
         env_remove: &[],
         headless: false,
     };
@@ -432,6 +433,7 @@ fn launch(nuntio: PathBuf, mut args: Vec<String>, headless: bool) -> Launch {
         return Launch {
             program: xvfb_run,
             args: wrapped,
+            #[cfg(unix)]
             env_remove: &["WAYLAND_DISPLAY", "WAYLAND_SOCKET"],
             headless: true,
         };
@@ -583,7 +585,7 @@ impl Detached {
 
 /// An argument for a Windows command line, quoted the way programs split
 /// it again (backslashes only escape before a quote).
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(any(windows, test))]
 fn quote(arg: &str) -> String {
     if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
         return arg.to_owned();
