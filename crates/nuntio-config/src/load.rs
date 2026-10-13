@@ -40,6 +40,18 @@ pub fn locate_config() -> Option<ConfigLocation> {
     )
 }
 
+/// Set by nuntio in its panes: the config file it uses. The helper programs
+/// (`nuntio-config`, `nuntio-apps`) read it through [`config_path`].
+pub const CONFIG_ENV: &str = "NUNTIO_CONFIG";
+
+/// The config file a helper program works on: `explicit` (`--config`), else
+/// the file nuntio told it about in [`CONFIG_ENV`], else [`locate_config`].
+pub fn config_path(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    explicit
+        .or_else(|| std::env::var_os(CONFIG_ENV).map(PathBuf::from))
+        .or_else(|| locate_config().map(|location| location.path))
+}
+
 fn choose_config(
     primary: Option<PathBuf>,
     home: Option<PathBuf>,

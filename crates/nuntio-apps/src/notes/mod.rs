@@ -20,9 +20,6 @@ use crate::term;
 use state::{App, Tone};
 use store::{DirStore, display_path};
 
-/// Set by nuntio in its panes: the config file it uses.
-const CONFIG_ENV: &str = "NUNTIO_CONFIG";
-
 const HELP: &str = "Usage: nuntio-apps notes [--dir <path>] [--config <path>]\n\nMarkdown notes, saved as .md files in one folder.\n\nOptions:\n  --dir <path>     Use this folder instead of notes.directory\n  --config <path>  Read notes.directory from this config file\n  -h, --help       Print this help\n";
 
 struct Args {
@@ -58,11 +55,7 @@ fn notes_dir(args: &Args) -> Result<(PathBuf, Option<String>), String> {
             .map(|dir| (dir, None))
             .map_err(|err| format!("Cannot open the notes folder {}: {err}", dir.display()));
     }
-    let path = args
-        .config
-        .clone()
-        .or_else(|| std::env::var_os(CONFIG_ENV).map(PathBuf::from))
-        .or_else(|| nuntio_config::locate_config().map(|l| l.path));
+    let path = nuntio_config::config_path(args.config.clone());
     let (notes, warning) = match path.map(|p| nuntio_config::load(&p)) {
         Some(Ok(loaded)) => (loaded.config.notes, None),
         Some(Err(err)) => (

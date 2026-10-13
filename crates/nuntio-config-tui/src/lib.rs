@@ -19,9 +19,6 @@ use ratatui::crossterm::event::{
 
 use crate::state::{App, Key, Sources, Store, Tone};
 
-/// Set by nuntio in its panes: the config file it uses.
-const CONFIG_ENV: &str = "NUNTIO_CONFIG";
-
 struct FileStore(PathBuf);
 
 impl Store for FileStore {
@@ -65,13 +62,6 @@ fn parse_args() -> Result<Option<PathBuf>, lexopt::Error> {
         }
     }
     Ok(config)
-}
-
-/// `--config`, else the file nuntio told us about, else the usual lookup.
-fn config_path(arg: Option<PathBuf>) -> Result<PathBuf> {
-    arg.or_else(|| std::env::var_os(CONFIG_ENV).map(PathBuf::from))
-        .or_else(|| nuntio_config::locate_config().map(|l| l.path))
-        .context("no home directory to look for the config in")
 }
 
 /// The path with the home directory shortened to `~`.
@@ -226,7 +216,8 @@ fn init_terminal() -> Result<ratatui::DefaultTerminal> {
 }
 
 pub fn main() -> Result<()> {
-    let path = config_path(parse_args()?)?;
+    let path = nuntio_config::config_path(parse_args()?)
+        .context("no home directory to look for the config in")?;
     let (themes, theme_warnings) = ThemeSet::load(nuntio_config::themes_dir(&path).as_deref());
     let mut app = App::new(
         Box::new(FileStore(path.clone())),

@@ -18,7 +18,8 @@ pub use color::{Color, ColorError};
 pub use edit::{ConfigDoc, write_config};
 pub use keys::{ACTIONS, KeyCombo, KeyComboError, KeyName, Mods, NamedKey};
 pub use load::{
-    ConfigError, ConfigLocation, Loaded, config_dir, load, locate_config, parse, themes_dir,
+    CONFIG_ENV, ConfigError, ConfigLocation, Loaded, config_dir, config_path, load, locate_config,
+    parse, themes_dir,
 };
 pub use theme::{DEFAULT_THEME, Theme, ThemeSet};
 pub use toml_edit;

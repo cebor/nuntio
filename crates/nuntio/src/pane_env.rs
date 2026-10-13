@@ -6,9 +6,6 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-/// Tells `nuntio-config` which file to edit, e.g. with `--config`.
-pub const CONFIG_ENV: &str = "NUNTIO_CONFIG";
-
 /// The config editor.
 pub const CONFIG_HELPER: &str = "nuntio-config";
 /// The apps (`nuntio-apps notes`).
@@ -102,7 +99,7 @@ pub fn pane_env(config_path: Option<&Path>, wsl: bool) -> Vec<(String, String)> 
     #[cfg(target_os = "macos")]
     env.extend(macos_locale());
     if let Some(path) = config_path.and_then(Path::to_str) {
-        env.push((CONFIG_ENV.to_owned(), path.to_owned()));
+        env.push((nuntio_config::CONFIG_ENV.to_owned(), path.to_owned()));
     }
     // Both helpers ship in the same directory.
     match installed_helper_dir(CONFIG_HELPER) {
@@ -170,6 +167,6 @@ mod tests {
     fn nothing_for_wsl_shells() {
         assert!(pane_env(Some(Path::new("/c.toml")), true).is_empty());
         let env = pane_env(Some(Path::new("/c.toml")), false);
-        assert!(env.contains(&(CONFIG_ENV.to_owned(), "/c.toml".to_owned())));
+        assert!(env.contains(&(nuntio_config::CONFIG_ENV.to_owned(), "/c.toml".to_owned())));
     }
 }

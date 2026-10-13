@@ -327,7 +327,7 @@ sequenceDiagram
 `nuntio-config` runs as a separate process inside a nuntio tab and is not linked into nuntio's event loop.
 
 - `Action::OpenSettings` → `Launch::Helper { program, .. }` with `pane_env::helper(CONFIG_HELPER)`. The helpers live in `pane_env::helper_dir` (next to the exe or in `../lib/nuntio`). They are never on the global PATH, only prepended to the PATH of nuntio's panes.
-- Config path precedence: `--config`, then `NUNTIO_CONFIG`, then `locate_config`.
+- Config path precedence: `--config`, then `NUNTIO_CONFIG`, then `locate_config` (`nuntio_config::config_path`, shared with `nuntio-apps`; nuntio itself sets `nuntio_config::CONFIG_ENV` in its panes).
 - The `App` sits behind the `Store` trait (`FileStore` in production, in-memory in tests).
 - Every valid edit re-reads the file, applies the change via `ConfigDoc` (toml_edit, keeps comments), validates with `nuntio_config::parse` and writes immediately with `write_config`. `write_config` is atomic: temp file + rename, follows a symlink to its target, fsyncs the directory on Unix.
 - There is no IPC: nuntio's watcher picks up the write, so hot reload is the live preview.
