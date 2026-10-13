@@ -187,6 +187,14 @@ impl Listener {
         self.inner.reply(text);
     }
 
+    /// Hand `msg` to the IO loop; does nothing before it exists or after it
+    /// is gone.
+    fn send(&self, msg: Msg) {
+        if let Some(sender) = self.inner.sender.get() {
+            sender.send(msg);
+        }
+    }
+
     pub(crate) fn reply_budget(&self) -> &ReplyBudget {
         &self.inner.reply_budget
     }
@@ -347,7 +355,6 @@ pub struct ForegroundInfo {
 pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
     listener: Listener,
-    sender: LoopSender,
     /// The process nuntio started: the shell, `login` running it, or
     /// `wsl.exe`; 0 if unknown. Changes when a WSL pane falls back to ConPTY.
     child_pid: Arc<AtomicU32>,
@@ -357,7 +364,6 @@ pub struct TermHandle {
     /// The shell's pid behind `login`, once known.
     #[cfg(target_os = "macos")]
     shell_pid: OnceLock<u32>,
-    shell_name: String,
     /// The pane runs a one-off command, not a shell.
     runs_command: bool,
     /// The directory the shell last reported (OSC 7, OSC 9;9).
@@ -391,7 +397,7 @@ impl TermHandle {
                 size: Mutex::new(size.window_size()),
                 wakeup_pending: AtomicBool::new(false),
                 output_generation: AtomicU64::new(0),
-                shell_name: shell_name.clone(),
+                shell_name,
                 replies: Mutex::new(Vec::new()),
                 reply_budget: ReplyBudget::default(),
                 bell_pending: AtomicBool::new(false),
@@ -515,20 +521,17 @@ impl TermHandle {
             images.clone(),
         )
         .map_err(SpawnError::EventLoop)?;
-        let sender = io_loop.sender();
         let child_pid = io_loop.child_pid();
-        let _ = listener.inner.sender.set(sender.clone());
+        let _ = listener.inner.sender.set(io_loop.sender());
         io_loop.spawn();
 
         Ok(Self {
             term,
             listener,
-            sender,
             child_pid,
             via_login,
             #[cfg(target_os = "macos")]
             shell_pid: OnceLock::new(),
-            shell_name,
             runs_command,
             reported_dir,
             images,
@@ -564,7 +567,7 @@ impl TermHandle {
         }
         // Typing jumps back to the bottom, like every terminal does.
         self.term.lock().scroll_display(Scroll::Bottom);
-        self.sender.send(Msg::Input(bytes));
+        self.listener.send(Msg::Input(bytes));
     }
 
     /// Send machine-generated input (reports) without moving the view.
@@ -573,7 +576,7 @@ impl TermHandle {
         if bytes.is_empty() {
             return;
         }
-        self.sender.send(Msg::Input(bytes));
+        self.listener.send(Msg::Input(bytes));
     }
 
     /// Paste text, wrapped in bracketed-paste markers if the app asked for them.
@@ -653,7 +656,7 @@ impl TermHandle {
         }
         term.resize(size);
         drop(term);
-        self.sender.send(Msg::Resize(size.window_size()));
+        self.listener.send(Msg::Resize(size.window_size()));
         self.touch_grid();
     }
 
@@ -682,7 +685,7 @@ impl TermHandle {
             .map(|pid| process::foreground(pid, want_directory));
         let (name, cwd) = found.map_or((None, None), |f| (f.name, f.cwd));
         ForegroundInfo {
-            process_name: name.unwrap_or_else(|| self.shell_name.clone()),
+            process_name: name.unwrap_or_else(|| self.listener.inner.shell_name.clone()),
             working_directory: if want_directory {
                 pick_directory(cwd, self.reported_directory(), check)
             } else {
@@ -867,7 +870,7 @@ impl TermHandle {
 
 impl Drop for TermHandle {
     fn drop(&mut self) {
-        self.sender.send(Msg::Shutdown);
+        self.listener.send(Msg::Shutdown);
     }
 }
 
