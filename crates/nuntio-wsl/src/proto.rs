@@ -5,7 +5,9 @@
 //! [`RESIZE`] frames carry a [`Size`].
 //!
 //! helper -> nuntio, on the helper's stdout, is the raw output of the PTY, preceded by a
-//! single [`READY`] marker once the shell is running. stderr carries the helper's own messages.
+//! single [`READY`] marker once the shell is running. Reports about the PTY ([`Marker`]) are
+//! mixed into the output as OSC sequences, which the [`MarkerFilter`] removes again. stderr
+//! carries the helper's own messages.
 
 use std::fmt;
 
@@ -144,33 +146,81 @@ fn parse(data: &[u8], on_frame: &mut impl FnMut(Frame<'_>)) -> Result<usize, Fra
     Ok(at)
 }
 
-/// Removes the first [`READY`] from the helper's output. Everything else passes unchanged,
-/// including a second READY.
-#[derive(Debug, Default)]
-pub struct ReadyFilter {
-    ready: bool,
-    /// A partial match at the end of the previous chunk.
-    held: Vec<u8>,
+/// Starts every in-band report of the helper.
+const MARKER_PREFIX: &[u8] = b"\x1b]nuntio-wsl;";
+/// Ends a report.
+const BEL: u8 = 0x07;
+/// The longest body of a report; a longer one is not ours and passes through unchanged.
+const MAX_BODY: usize = 256;
+/// The longest process name of a foreground report.
+const MAX_NAME: usize = 64;
+
+/// A report of the helper, found by the [`MarkerFilter`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Marker {
+    /// The shell has started; the same as [`READY`].
+    Ready,
+    /// The foreground process group of the PTY changed.
+    Foreground {
+        /// The `comm` name of the process group leader.
+        name: String,
+        /// Whether it is the shell itself.
+        shell: bool,
+    },
 }
 
-impl ReadyFilter {
-    /// Whether the marker has been seen.
+/// The report [`Marker::Foreground`] as bytes for the helper's stdout. Escape and bell
+/// characters are removed from `name`, and it is cut to 64 bytes.
+pub fn foreground_marker(name: &str, shell: bool) -> Vec<u8> {
+    let mut out = MARKER_PREFIX.to_vec();
+    out.extend_from_slice(b"fg;");
+    out.push(if shell { b'1' } else { b'0' });
+    out.push(b';');
+    let mut len = 0;
+    for c in name.chars().filter(|&c| c != '\x07' && c != '\x1b') {
+        len += c.len_utf8();
+        if len > MAX_NAME {
+            break;
+        }
+        let mut utf8 = [0; 4];
+        out.extend_from_slice(c.encode_utf8(&mut utf8).as_bytes());
+    }
+    out.push(BEL);
+    out
+}
+
+/// Removes the helper's reports from its output: every OSC that starts with
+/// `ESC ] nuntio-wsl ;` and ends with BEL. Everything else passes unchanged, including such an
+/// OSC with a body longer than 256 bytes.
+#[derive(Debug, Default)]
+pub struct MarkerFilter {
+    ready: bool,
+    /// A partial prefix at the end of the previous chunk.
+    held: Vec<u8>,
+    /// The body read so far of a report that has not ended yet.
+    body: Option<Vec<u8>>,
+}
+
+impl MarkerFilter {
+    /// Whether the [`Marker::Ready`] has been seen.
     pub fn is_ready(&self) -> bool {
         self.ready
     }
 
-    /// Feeds a chunk of output; `out` receives the bytes to forward.
-    pub fn feed(&mut self, bytes: &[u8], mut out: impl FnMut(&[u8])) {
-        if self.ready {
-            if !bytes.is_empty() {
-                out(bytes);
-            }
-        } else if self.held.is_empty() {
-            self.scan(bytes, &mut out);
+    /// Feeds a chunk of output; `out` receives the bytes to forward and `marker` the reports,
+    /// in the order they appeared.
+    pub fn feed(
+        &mut self,
+        bytes: &[u8],
+        mut out: impl FnMut(&[u8]),
+        mut marker: impl FnMut(Marker),
+    ) {
+        if self.held.is_empty() {
+            self.scan(bytes, &mut out, &mut marker);
         } else {
             let mut data = std::mem::take(&mut self.held);
             data.extend_from_slice(bytes);
-            self.scan(&data, &mut out);
+            self.scan(&data, &mut out, &mut marker);
         }
     }
 
@@ -180,32 +230,92 @@ impl ReadyFilter {
             out(&self.held);
             self.held.clear();
         }
+        if let Some(body) = self.body.take() {
+            out(MARKER_PREFIX);
+            out(&body);
+        }
     }
 
-    /// Looks for the marker in `data`, with nothing held.
-    fn scan(&mut self, data: &[u8], out: &mut impl FnMut(&[u8])) {
-        if let Some(at) = data.windows(READY.len()).position(|w| w == READY) {
+    fn scan(
+        &mut self,
+        mut data: &[u8],
+        out: &mut impl FnMut(&[u8]),
+        marker: &mut impl FnMut(Marker),
+    ) {
+        while !data.is_empty() {
+            let Some(body) = self.body.as_mut() else {
+                match data
+                    .windows(MARKER_PREFIX.len())
+                    .position(|w| w == MARKER_PREFIX)
+                {
+                    Some(at) => {
+                        if at > 0 {
+                            out(&data[..at]);
+                        }
+                        self.body = Some(Vec::new());
+                        data = &data[at + MARKER_PREFIX.len()..];
+                    }
+                    None => {
+                        // The longest tail that starts the prefix: it may complete in the
+                        // next chunk.
+                        let max = (MARKER_PREFIX.len() - 1).min(data.len());
+                        let keep = (1..=max)
+                            .rev()
+                            .find(|&k| data.ends_with(&MARKER_PREFIX[..k]))
+                            .unwrap_or(0);
+                        let send = data.len() - keep;
+                        if send > 0 {
+                            out(&data[..send]);
+                        }
+                        self.held.extend_from_slice(&data[send..]);
+                        return;
+                    }
+                }
+                continue;
+            };
+            let end = data.iter().position(|&b| b == BEL);
+            let fits = body.len() + end.unwrap_or(data.len()) <= MAX_BODY;
+            match (end, fits) {
+                (Some(end), true) => {
+                    body.extend_from_slice(&data[..end]);
+                    data = &data[end + 1..];
+                    let body = self.body.take().unwrap_or_default();
+                    if let Some(found) = self.interpret(&body) {
+                        marker(found);
+                    }
+                }
+                (None, true) => {
+                    body.extend_from_slice(data);
+                    return;
+                }
+                // Too long to be ours: give it back and carry on with the text.
+                (_, false) => {
+                    out(MARKER_PREFIX);
+                    out(body);
+                    self.body = None;
+                }
+            }
+        }
+    }
+
+    /// The report in `body`, if it is one this filter knows.
+    fn interpret(&mut self, body: &[u8]) -> Option<Marker> {
+        let body = String::from_utf8_lossy(body);
+        if body == "ready" {
             self.ready = true;
-            if at > 0 {
-                out(&data[..at]);
-            }
-            let rest = &data[at + READY.len()..];
-            if !rest.is_empty() {
-                out(rest);
-            }
-            return;
+            return Some(Marker::Ready);
         }
-        // The longest tail that starts the marker: it may complete in the next chunk.
-        let max = (READY.len() - 1).min(data.len());
-        let keep = (1..=max)
-            .rev()
-            .find(|&k| data.ends_with(&READY[..k]))
-            .unwrap_or(0);
-        let send = data.len() - keep;
-        if send > 0 {
-            out(&data[..send]);
-        }
-        self.held.extend_from_slice(&data[send..]);
+        let rest = body.strip_prefix("fg;")?;
+        let (shell, name) = rest.split_once(';')?;
+        let shell = match shell {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        };
+        Some(Marker::Foreground {
+            name: name.to_owned(),
+            shell,
+        })
     }
 }
 
@@ -332,66 +442,148 @@ mod tests {
         );
     }
 
-    fn filter(chunks: &[&[u8]]) -> (Vec<u8>, bool) {
-        let mut filter = ReadyFilter::default();
+    /// Output, reports and the ready flag after feeding `chunks`.
+    fn filter(chunks: &[&[u8]]) -> (Vec<u8>, Vec<Marker>, bool) {
+        let mut filter = MarkerFilter::default();
         let mut out = Vec::new();
+        let mut markers = Vec::new();
         for chunk in chunks {
-            filter.feed(chunk, |b| out.extend_from_slice(b));
+            filter.feed(chunk, |b| out.extend_from_slice(b), |m| markers.push(m));
         }
         filter.finish(|b| out.extend_from_slice(b));
-        (out, filter.is_ready())
+        (out, markers, filter.is_ready())
+    }
+
+    fn fg(name: &str, shell: bool) -> Marker {
+        Marker::Foreground {
+            name: name.to_owned(),
+            shell,
+        }
     }
 
     #[test]
-    fn ready_filter_strips_marker_split_across_chunks() {
-        let (out, ready) = filter(&[b"ab\x1b]nuntio", b"-wsl;rea", b"dy\x07cd"]);
+    fn marker_filter_strips_ready_split_across_chunks() {
+        let (out, markers, ready) = filter(&[b"ab\x1b]nuntio", b"-wsl;rea", b"dy\x07cd"]);
         assert_eq!(out, b"abcd");
+        assert_eq!(markers, [Marker::Ready]);
         assert!(ready);
     }
 
     #[test]
-    fn ready_filter_strips_marker_split_byte_by_byte() {
+    fn marker_filter_strips_ready_split_byte_by_byte() {
         let mut wire = b"before".to_vec();
         wire.extend_from_slice(READY);
         wire.extend_from_slice(b"after");
         let chunks: Vec<&[u8]> = wire.chunks(1).collect();
-        let (out, ready) = filter(&chunks);
+        let (out, markers, ready) = filter(&chunks);
         assert_eq!(out, b"beforeafter");
+        assert_eq!(markers, [Marker::Ready]);
         assert!(ready);
     }
 
     #[test]
-    fn ready_filter_forwards_text_before_marker_unchanged() {
+    fn marker_filter_forwards_text_before_ready_unchanged() {
         let mut first = b"hello\r\n".to_vec();
         first.extend_from_slice(READY);
-        let (out, ready) = filter(&[&first]);
+        let (out, _, ready) = filter(&[&first]);
         assert_eq!(out, b"hello\r\n");
         assert!(ready);
     }
 
     #[test]
-    fn ready_filter_passes_second_marker_through() {
+    fn marker_filter_strips_every_marker() {
         let mut wire = READY.to_vec();
         wire.extend_from_slice(b"x");
         wire.extend_from_slice(READY);
-        let (out, ready) = filter(&[&wire]);
-        let mut expected = b"x".to_vec();
-        expected.extend_from_slice(READY);
-        assert_eq!(out, expected);
+        let (out, markers, ready) = filter(&[&wire]);
+        assert_eq!(out, b"x");
+        assert_eq!(markers, [Marker::Ready, Marker::Ready]);
         assert!(ready);
     }
 
     #[test]
-    fn ready_filter_flushes_partial_match_at_end() {
-        let (out, ready) = filter(&[b"hi\x1b]nunt"]);
+    fn marker_filter_flushes_partial_match_at_end() {
+        let (out, markers, ready) = filter(&[b"hi\x1b]nunt"]);
         assert_eq!(out, b"hi\x1b]nunt");
+        assert!(markers.is_empty());
         assert!(!ready);
     }
 
     #[test]
-    fn ready_filter_releases_false_start() {
-        let (out, ready) = filter(&[b"\x1b]", b"0;title\x07"]);
+    fn marker_filter_flushes_unfinished_report_at_end() {
+        let (out, markers, _) = filter(&[b"hi\x1b]nuntio-wsl;fg;1;zs"]);
+        assert_eq!(out, b"hi\x1b]nuntio-wsl;fg;1;zs");
+        assert!(markers.is_empty());
+    }
+
+    #[test]
+    fn marker_filter_releases_false_start() {
+        let (out, markers, ready) = filter(&[b"\x1b]", b"0;title\x07"]);
         assert_eq!(out, b"\x1b]0;title\x07");
+        assert!(markers.is_empty());
         assert!(!ready);
+    }
+
+    #[test]
+    fn marker_filter_splits_foreground_reports_at_every_position() {
+        let mut wire = b"ab".to_vec();
+        wire.extend_from_slice(&foreground_marker("zsh", true));
+        wire.extend_from_slice(b"cd");
+        wire.extend_from_slice(&foreground_marker("tmux: client", false));
+        wire.extend_from_slice(b"ef");
+        let expected = [fg("zsh", true), fg("tmux: client", false)];
+
+        for at in 0..=wire.len() {
+            let (out, markers, ready) = filter(&[&wire[..at], &wire[at..]]);
+            assert_eq!(out, b"abcdef", "split at {at}");
+            assert_eq!(markers, expected, "split at {at}");
+            assert!(!ready);
+        }
+        let chunks: Vec<&[u8]> = wire.chunks(1).collect();
+        let (out, markers, _) = filter(&chunks);
+        assert_eq!(out, b"abcdef");
+        assert_eq!(markers, expected);
+    }
+
+    #[test]
+    fn marker_filter_passes_long_bodies_through() {
+        let mut wire = b"a".to_vec();
+        wire.extend_from_slice(MARKER_PREFIX);
+        wire.extend_from_slice(&[b'x'; MAX_BODY + 1]);
+        wire.push(BEL);
+        wire.extend_from_slice(b"b");
+        for at in 0..=wire.len() {
+            let (out, markers, _) = filter(&[&wire[..at], &wire[at..]]);
+            assert_eq!(out, wire, "split at {at}");
+            assert!(markers.is_empty(), "split at {at}");
+        }
+
+        // The longest body still is a report, an unknown one here.
+        let mut wire = MARKER_PREFIX.to_vec();
+        wire.extend_from_slice(&[b'x'; MAX_BODY]);
+        wire.push(BEL);
+        let (out, markers, _) = filter(&[&wire]);
+        assert!(out.is_empty());
+        assert!(markers.is_empty());
+    }
+
+    #[test]
+    fn marker_filter_ignores_unknown_bodies() {
+        let (out, markers, _) = filter(&[b"\x1b]nuntio-wsl;fg;2;x\x07\x1b]nuntio-wsl;what\x07z"]);
+        assert_eq!(out, b"z");
+        assert!(markers.is_empty());
+    }
+
+    #[test]
+    fn foreground_marker_cleans_and_cuts_the_name() {
+        assert_eq!(
+            foreground_marker("a\x07b\x1bc", false),
+            b"\x1b]nuntio-wsl;fg;0;abc\x07"
+        );
+        let marker = foreground_marker(&"é".repeat(100), true);
+        let body = &marker[MARKER_PREFIX.len()..marker.len() - 1];
+        assert_eq!(body.len(), "fg;1;".len() + MAX_NAME);
+        let (_, markers, _) = filter(&[&marker]);
+        assert_eq!(markers, [fg(&"é".repeat(32), true)]);
     }
 }

@@ -224,3 +224,51 @@ fn input_is_not_buffered_without_limit() {
     helper.child.kill().unwrap();
     writer.join().unwrap();
 }
+
+#[test]
+fn reports_the_foreground_process_group() {
+    // An interactive shell gives each command its own process group.
+    let mut helper = Helper::start(&["--", "sh", "-i"]);
+    helper.resize(80, 24);
+    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", 0);
+    helper.data(b"sleep 30\n");
+    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;0;sleep\x07", seen);
+    // Back at the prompt.
+    helper.data(b"\x03");
+    helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", seen);
+}
+
+#[test]
+fn the_socket_bridge_copies_both_ways() {
+    use std::os::unix::net::UnixListener;
+
+    let path = std::env::temp_dir().join(format!("nuntio-wsl-bridge-{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    let mut helper = Helper::start(&["socket", path.to_str().unwrap()]);
+    let (mut server, _) = listener.accept().unwrap();
+
+    helper.send(b"ping\n");
+    let mut got = [0u8; 5];
+    server.read_exact(&mut got).unwrap();
+    assert_eq!(&got, b"ping\n");
+
+    server.write_all(b"pong\n").unwrap();
+    helper.wait_for(b"pong\n", 0);
+
+    // Closing stdin ends our direction only; the server's close ends the bridge.
+    helper.stdin = None;
+    let mut rest = Vec::new();
+    server.read_to_end(&mut rest).unwrap();
+    assert!(rest.is_empty());
+    drop(server);
+    assert_eq!(helper.finish(), 0);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn the_socket_bridge_fails_without_a_server() {
+    let mut helper = Helper::start(&["socket", "/nonexistent/nuntio-wsl.sock"]);
+    assert_eq!(helper.finish(), 1);
+    assert!(helper.output.is_empty());
+}

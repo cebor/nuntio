@@ -358,6 +358,15 @@ pub struct ForegroundInfo {
     pub working_directory: Option<PathBuf>,
 }
 
+/// The foreground process inside a WSL distribution, as reported by nuntio-wsl.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct RemoteForeground {
+    /// The `comm` name of the process group leader; may be empty.
+    pub name: String,
+    /// The shell itself is in the foreground.
+    pub shell: bool,
+}
+
 /// One terminal: grid state, the shell's PTY and its IO thread.
 pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
@@ -377,6 +386,8 @@ pub struct TermHandle {
     reported_dir: Arc<Mutex<Option<ReportedDir>>>,
     /// The pane's inline images; locked after the term.
     images: Arc<Mutex<ImageStore>>,
+    /// The foreground process of a WSL pane as the helper reported it last.
+    remote_foreground: Arc<Mutex<Option<RemoteForeground>>>,
 }
 
 impl TermHandle {
@@ -478,6 +489,8 @@ impl TermHandle {
         };
         #[cfg(windows)]
         let mut fallback = None;
+        // What the WSL helper reports; stays empty for every other transport.
+        let remote_foreground = Arc::new(Mutex::new(None));
         let pty = match options.transport {
             Transport::Pty => {
                 let pty_options = tty_options(shell, options.working_directory, env);
@@ -500,6 +513,7 @@ impl TermHandle {
                     &helper.args,
                     &helper_env,
                     size.window_size(),
+                    remote_foreground.clone(),
                 )
                 .map_err(SpawnError::Pty)?;
                 let mut env = env;
@@ -542,6 +556,7 @@ impl TermHandle {
             runs_command,
             reported_dir,
             images,
+            remote_foreground,
         })
     }
 
@@ -691,6 +706,13 @@ impl TermHandle {
             .shell_pid()
             .map(|pid| process::foreground(pid, want_directory));
         let (name, cwd) = found.map_or((None, None), |f| (f.name, f.cwd));
+        // A WSL pane's foreground process lives in the other system: the helper reports it.
+        let name = name.or_else(|| {
+            lock(&self.remote_foreground)
+                .as_ref()
+                .map(|f| f.name.clone())
+                .filter(|name| !name.is_empty())
+        });
         ForegroundInfo {
             process_name: name.unwrap_or_else(|| self.listener.inner.shell_name.clone()),
             working_directory: if want_directory {
@@ -708,7 +730,9 @@ impl TermHandle {
         if self.runs_command {
             return None;
         }
-        self.shell_pid().and_then(process::foreground_is_shell)
+        self.shell_pid()
+            .and_then(process::foreground_is_shell)
+            .or_else(|| lock(&self.remote_foreground).as_ref().map(|f| f.shell))
     }
 
     /// Working directory of the foreground process, if it can be

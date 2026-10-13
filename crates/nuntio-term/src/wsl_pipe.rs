@@ -17,11 +17,12 @@ use std::time::Duration;
 
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::thread::spawn_named;
-use nuntio_wsl::proto::{self, ReadyFilter, Size};
+use nuntio_wsl::proto::{self, Marker, MarkerFilter, Size};
 use polling::Poller;
 use polling::os::iocp::{CompletionPacket, PollerIocpExt};
 
 use crate::backend::BackendEvent;
+use crate::pane::RemoteForeground;
 use crate::sync::{lock, unpoisoned};
 
 /// No console window for `wsl.exe`.
@@ -152,12 +153,14 @@ impl Shared {
 }
 
 impl WslPipe {
-    /// Start `program` (`wsl.exe` running nuntio-wsl) with the window `size`.
+    /// Start `program` (`wsl.exe` running nuntio-wsl) with the window `size`. The helper's
+    /// reports of the foreground process go to `foreground`.
     pub(crate) fn spawn(
         program: &str,
         args: &[String],
         env: &HashMap<String, String>,
         size: WindowSize,
+        foreground: Arc<Mutex<Option<RemoteForeground>>>,
     ) -> io::Result<Self> {
         // No `current_dir`: `wsl.exe --cd` picks the directory.
         let mut child = Command::new(program)
@@ -203,7 +206,7 @@ impl WslPipe {
 
         let out = shared.clone();
         spawn_named("nuntio-wsl stdout", move || {
-            let mut filter = ReadyFilter::default();
+            let mut filter = MarkerFilter::default();
             let mut ready = false;
             let mut buf = vec![0; READ_SIZE];
             loop {
@@ -216,13 +219,23 @@ impl WslPipe {
                         break;
                     }
                 };
-                filter.feed(&buf[..n], |bytes| out.push(bytes));
+                filter.feed(
+                    &buf[..n],
+                    |bytes| out.push(bytes),
+                    |marker| {
+                        if let Marker::Foreground { name, shell } = marker {
+                            *lock(&foreground) = Some(RemoteForeground { name, shell });
+                        }
+                    },
+                );
                 if !ready && filter.is_ready() {
                     ready = true;
                     lock(&out.state).ready = true;
                 }
             }
             filter.finish(|bytes| out.push(bytes));
+            // The helper is gone: a report about its shell would be stale.
+            *lock(&foreground) = None;
             out.reader_done();
         });
 

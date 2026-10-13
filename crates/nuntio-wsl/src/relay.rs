@@ -10,8 +10,9 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::{Duration, Instant};
 
-use crate::proto::{Decoder, Frame, READY, Size};
+use crate::proto::{Decoder, Frame, READY, Size, foreground_marker};
 
 const CHUNK: usize = 64 * 1024;
 /// The largest buffer `login_shell` offers `getpwuid_r` for the passwd entry.
@@ -20,6 +21,11 @@ const PASSWD_BUF_MAX: usize = 64 * 1024;
 const POST_EXIT_DRAIN: usize = 0x10_0000;
 /// Input from nuntio waiting for the program to read it, before stdin is left unread.
 const MAX_PENDING_INPUT: usize = 1 << 20;
+/// How long after input or output the foreground process group is looked at periodically: a
+/// command the shell starts after the user pressed Enter makes no output of its own.
+const RECHECK_WINDOW: Duration = Duration::from_secs(1);
+/// The period of those looks, in milliseconds.
+const RECHECK_EVERY: libc::c_int = 50;
 
 /// The write end of the SIGCHLD self-pipe, or -1 before it exists.
 static WAKE_FD: AtomicI32 = AtomicI32::new(-1);
@@ -69,6 +75,57 @@ pub fn run(args: Vec<OsString>) -> i32 {
         return hang_up(pid, 1);
     }
     event_loop(&master, pid, &wake, decoder, pending)
+}
+
+/// Connects stdin and stdout to the Unix socket at `path`, byte for byte, so nuntio on Windows
+/// can talk to a server inside WSL. Returns 0 when the socket closes, 1 when it can't be
+/// reached.
+pub fn socket_bridge(path: OsString) -> i32 {
+    use std::io::{Read, Write};
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
+
+    let mut reader = match UnixStream::connect(&path) {
+        Ok(socket) => socket,
+        Err(err) => {
+            eprintln!(
+                "nuntio-wsl: cannot connect to {}: {err}",
+                Path::new(&path).display()
+            );
+            return 1;
+        }
+    };
+    let mut writer = match reader.try_clone() {
+        Ok(socket) => socket,
+        Err(err) => {
+            eprintln!("nuntio-wsl: cannot use the socket: {err}");
+            return 1;
+        }
+    };
+    // Ends with the process: the main thread returns when the socket closes.
+    std::thread::spawn(move || {
+        let _ = io::copy(&mut io::stdin().lock(), &mut writer);
+        let _ = writer.shutdown(Shutdown::Write);
+    });
+
+    let mut stdout = io::stdout().lock();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => return 0,
+            Ok(n) => {
+                if stdout
+                    .write_all(&buf[..n])
+                    .and_then(|()| stdout.flush())
+                    .is_err()
+                {
+                    return 0;
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return 0,
+        }
+    }
 }
 
 /// Reads stdin until the first complete frame. `Ok(None)` at EOF. Data frames that follow the
@@ -274,6 +331,25 @@ fn spawn(args: &[OsString], slave: OwnedFd) -> Result<libc::pid_t, (OsString, io
     Ok(child.id() as libc::pid_t)
 }
 
+/// Tells nuntio the foreground process group of the PTY if it differs from the last report.
+/// Nothing is written when the terminal can't say. A group without a readable `comm` entry is
+/// reported with an empty name.
+fn report_foreground(
+    master: RawFd,
+    shell: libc::pid_t,
+    reported: &mut libc::pid_t,
+) -> io::Result<()> {
+    // SAFETY: `master` is an open descriptor.
+    let pgid = unsafe { libc::tcgetpgrp(master) };
+    if pgid <= 0 || pgid == *reported {
+        return Ok(());
+    }
+    *reported = pgid;
+    let comm = std::fs::read(format!("/proc/{pgid}/comm")).unwrap_or_default();
+    let name = String::from_utf8_lossy(&comm);
+    write_all(1, &foreground_marker(name.trim(), pgid == shell))
+}
+
 /// Forwards between stdin/stdout and the master until the session ends. Returns the exit code.
 fn event_loop(
     master: &OwnedFd,
@@ -286,7 +362,15 @@ fn event_loop(
     let mut written = 0;
     let mut reaped = None;
     let mut buf = vec![0u8; CHUNK];
+    // The foreground process group last reported to nuntio, 0 before the first report.
+    let mut reported: libc::pid_t = 0;
+    if report_foreground(master_fd, pid, &mut reported).is_err() {
+        return hang_up(pid, 0);
+    }
     let in_events = libc::POLLIN | libc::POLLHUP | libc::POLLERR;
+    // Until when the loop looks at the foreground process group without being woken: the shell
+    // may not own the terminal yet.
+    let mut recheck = Some(Instant::now() + RECHECK_WINDOW);
 
     'session: loop {
         let want_write = written < pending.len();
@@ -315,14 +399,25 @@ fn event_loop(
                 revents: 0,
             },
         ];
+        // Without output a command the shell just started is only seen by looking again.
+        let timeout = match recheck {
+            Some(until) if Instant::now() < until => RECHECK_EVERY,
+            _ => {
+                recheck = None;
+                -1
+            }
+        };
         // SAFETY: `fds` is a valid array of the given length.
-        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
         if ready < 0 {
             if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                 continue;
             }
             eprintln!("nuntio-wsl: poll failed: {}", io::Error::last_os_error());
             return hang_up(pid, 1);
+        }
+        if ready == 0 && report_foreground(master_fd, pid, &mut reported).is_err() {
+            return hang_up(pid, 0);
         }
         let [stdin_poll, master_poll, wake_poll] = fds;
 
@@ -336,6 +431,7 @@ fn event_loop(
                 // nuntio is gone or closed the pane.
                 Ok(0) => return hang_up(pid, 0),
                 Ok(n) => {
+                    recheck = Some(Instant::now() + RECHECK_WINDOW);
                     let result = decoder.feed(&buf[..n], |frame| match frame {
                         Frame::Data(bytes) => pending.extend_from_slice(bytes),
                         Frame::Resize(size) => set_winsize(master_fd, size),
@@ -366,7 +462,10 @@ fn event_loop(
             match read_fd(master_fd, &mut buf) {
                 Ok(0) => break 'session,
                 Ok(n) => {
-                    if write_all(1, &buf[..n]).is_err() {
+                    recheck = Some(Instant::now() + RECHECK_WINDOW);
+                    if report_foreground(master_fd, pid, &mut reported).is_err()
+                        || write_all(1, &buf[..n]).is_err()
+                    {
                         return hang_up(pid, 0);
                     }
                 }
@@ -382,6 +481,10 @@ fn event_loop(
         }
 
         if wake_poll.revents & libc::POLLIN != 0 {
+            // A job that ended with the shell's command may have changed the foreground.
+            if report_foreground(master_fd, pid, &mut reported).is_err() {
+                return hang_up(pid, 0);
+            }
             drain(wake.as_raw_fd());
             let mut status = 0;
             // SAFETY: `status` is a valid out-pointer.
