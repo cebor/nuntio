@@ -92,6 +92,18 @@ pub fn forwards(config: &Config, tool: Tool) -> bool {
     }
 }
 
+/// The multiplexer the first pane starts in: herdr before tmux, each only
+/// while it is enabled.
+pub fn startup_tool(config: &Config) -> Option<Tool> {
+    [Tool::Herdr, Tool::Tmux].into_iter().find(|&tool| {
+        enabled(config, tool)
+            && match tool {
+                Tool::Herdr => config.herdr.on_startup,
+                Tool::Tmux => config.tmux.on_startup,
+            }
+    })
+}
+
 /// The multiplexer running in `pane`, if its tool is enabled: the session
 /// nuntio started there, or one found by the foreground process's name.
 pub fn pane_mux(pane: &Pane, config: &Config) -> Option<MuxPane> {
@@ -112,4 +124,25 @@ pub fn pane_mux(pane: &Pane, config: &Config) -> Option<MuxPane> {
         },
         session: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_tool_prefers_herdr_and_needs_enabled() {
+        let mut config = Config::default();
+        assert_eq!(startup_tool(&config), None);
+
+        config.tmux.on_startup = true;
+        assert_eq!(startup_tool(&config), None, "tmux not enabled");
+        config.tmux.enabled = true;
+        assert_eq!(startup_tool(&config), Some(Tool::Tmux));
+
+        config.herdr.on_startup = true;
+        assert_eq!(startup_tool(&config), Some(Tool::Tmux), "herdr not enabled");
+        config.herdr.enabled = true;
+        assert_eq!(startup_tool(&config), Some(Tool::Herdr));
+    }
 }

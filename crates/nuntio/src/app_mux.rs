@@ -17,13 +17,13 @@ use crate::mux::agents::{AgentsUpdate, SessionKey};
 use crate::mux::entries::{self, MuxEntry, remote_session};
 use crate::mux::herdr::{Agent, AgentStatus, summary};
 use crate::mux::keys::MuxAction;
+use crate::mux::resolve::resolve;
 use crate::mux::service::{
     AgentRef, MuxOpen, MuxService, MuxSettings, MuxSnapshot, ProjectDir, Request,
 };
 use crate::mux::{MuxPane, Target, Tool, agent_color, forwards, pane_mux};
 use crate::shells::{Launch, ShellChoice};
 use crate::window::{self, Pane, WindowState};
-use crate::wsl::Distro;
 
 /// What the app knows about the multiplexers.
 #[derive(Default)]
@@ -38,6 +38,28 @@ pub(super) struct MuxState {
     /// The agents of the open agents menu; `Action::FocusAgent` indexes
     /// them.
     agent_choices: Vec<AgentRef>,
+}
+
+/// The tmux session the first pane attaches to (or creates) with
+/// `tmux.on_startup`.
+const STARTUP_TMUX_SESSION: &str = "main";
+
+/// What a pane runs to start the client `argv` (never empty) of `tool` in
+/// `target`: the command here, or through the WSL shell machinery.
+fn mux_launch(tool: Tool, target: &Target, argv: &[String]) -> Option<Launch> {
+    let (program, args) = argv.split_first()?;
+    Some(match target {
+        Target::Local => Launch::Command(argv.to_vec()),
+        Target::Wsl { distro, user } => Launch::Shell(ShellChoice {
+            name: tool.name().to_owned(),
+            shell: Some(Shell {
+                program: Some(program.clone()),
+                args: args.to_vec(),
+                wsl: Some(distro.clone()),
+                wsl_user: user.clone(),
+            }),
+        }),
+    })
 }
 
 /// The multiplexer action that `action` becomes in a herdr or tmux pane.
@@ -291,27 +313,10 @@ impl Core {
             state.close_menu();
             return;
         }
-        let Some((program, args)) = argv.split_first() else {
+        let Some(launch) = mux_launch(tool, &wanted.target, &argv) else {
             return;
         };
-        let (launch, distro) = match &wanted.target {
-            Target::Local => (Launch::Command(argv.clone()), None),
-            Target::Wsl { distro, user } => (
-                Launch::Shell(ShellChoice {
-                    name: tool.name().to_owned(),
-                    shell: Some(Shell {
-                        program: Some(program.clone()),
-                        args: args.to_vec(),
-                        wsl: Some(distro.clone()),
-                        wsl_user: user.clone(),
-                    }),
-                }),
-                Some(Distro {
-                    name: distro.clone(),
-                    user: user.clone(),
-                }),
-            ),
-        };
+        let distro = launch.distro();
         let dir = match dir {
             Some(dir) if distro.is_some() => Some(StartDir::Wsl(dir)),
             Some(dir) => Some(StartDir::Local(PathBuf::from(dir))),
@@ -324,6 +329,59 @@ impl Core {
         {
             pane.mux = Some(wanted);
         }
+    }
+
+    /// The client the first pane runs instead of the shell (`on_startup`),
+    /// and the session it counts as. `None` when no tool asks for it, or
+    /// with a banner when the program isn't found.
+    pub(super) fn startup_mux(&mut self) -> Option<(Launch, MuxPane)> {
+        let tool = crate::mux::startup_tool(&self.config)?;
+        let target = match self.default_launch().distro() {
+            Some(d) => Target::Wsl {
+                distro: d.name,
+                user: d.user,
+            },
+            None => Target::Local,
+        };
+        let configured = match tool {
+            Tool::Herdr => self.config.herdr.program.as_str(),
+            Tool::Tmux => self.config.tmux.program.as_str(),
+        };
+        let Some(program) = resolve(&target, &[(tool, configured)]).remove(&tool) else {
+            self.notify(Banner::new(
+                Severity::Warning,
+                Topic::Shell,
+                vec![format!(
+                    "{} not found; started the shell instead",
+                    tool.name()
+                )],
+            ));
+            return None;
+        };
+        let (argv, session) = match tool {
+            Tool::Herdr => (vec![program], None),
+            Tool::Tmux => (
+                [
+                    program.as_str(),
+                    "new-session",
+                    "-A",
+                    "-s",
+                    STARTUP_TMUX_SESSION,
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                Some(STARTUP_TMUX_SESSION.to_owned()),
+            ),
+        };
+        let launch = mux_launch(tool, &target, &argv)?;
+        Some((
+            launch,
+            MuxPane {
+                tool,
+                target,
+                session,
+            },
+        ))
     }
 
     /// The agents of a herdr session changed.

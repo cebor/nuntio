@@ -176,12 +176,14 @@ copy_on_select = false
 
 [herdr]
 enabled = false
+on_startup = false
 program = "herdr"
 forward_actions = true
 agent_status = true
 
 [tmux]
 enabled = false
+on_startup = false
 program = "tmux"
 forward_actions = true
 
@@ -325,6 +327,7 @@ In a pane running herdr, new tab, split, close pane, focus, resize and zoom shor
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `false` | Offer herdr sessions in the shell menu and work with herdr running in a pane. |
+| `on_startup` | bool | `false` | Start nuntio in herdr's default session instead of the shell. Needs `enabled`; wins over `tmux.on_startup`. Applies at the next start. |
 | `program` | string | `"herdr"` | The herdr program: a name searched like a shell would, or an absolute path. WSL distributions always use `herdr` found inside them. |
 | `forward_actions` | bool | `true` | In a pane running herdr, new tab, split, close pane, focus, resize and zoom shortcuts act in herdr. |
 | `agent_status` | bool | `true` | Follow herdr's agents: the `agents` status bar item, tab markers and a banner when an agent needs input. |
@@ -336,6 +339,7 @@ With `enabled` on, the [shell menu](#profiles) gets a tmux section: running sess
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | `false` | Offer tmux sessions in the shell menu and work with tmux running in a pane. |
+| `on_startup` | bool | `false` | Start nuntio in the tmux session `main`, created if needed, instead of the shell. Needs `enabled`; `herdr.on_startup` wins. Applies at the next start. |
 | `program` | string | `"tmux"` | The tmux program: a name searched like a shell would, or an absolute path. WSL distributions always use `tmux` found inside them. |
 | `forward_actions` | bool | `true` | In a pane running tmux, new tab, split, close pane, focus, resize and zoom shortcuts act in tmux. |
 

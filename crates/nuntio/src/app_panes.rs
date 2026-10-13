@@ -43,6 +43,7 @@ pub enum CloseTarget {
 }
 
 /// Where a new pane starts.
+#[derive(Clone)]
 pub enum StartDir {
     Local(PathBuf),
     /// For a shell in WSL: `~` or an absolute Linux path.
@@ -152,19 +153,45 @@ impl Core {
         Ok(Pane::new(id, term, name, distro, own_shell))
     }
 
-    /// The first pane, as the command line asks for it.
+    /// The first pane, as the command line asks for it, otherwise the
+    /// multiplexer `on_startup` asks for, otherwise the shell.
     pub(super) fn spawn_first_pane(&mut self) -> Result<Pane> {
         let Startup {
             command,
             working_directory,
         } = std::mem::take(&mut self.startup);
-        let launch = command.map_or_else(|| self.default_launch(), Launch::Command);
+        let (mut launch, mux) = match command {
+            Some(argv) => (Launch::Command(argv), None),
+            None => match self.startup_mux() {
+                Some((launch, mux)) => (launch, Some(mux)),
+                None => (self.default_launch(), None),
+            },
+        };
         let asked = working_directory.is_some() || self.config.working_directory.is_some();
         let dir = match working_directory {
             Some(dir) => self.existing_dir(dir).map(StartDir::Local),
             None => self.configured_dir(launch.distro().as_ref()),
         };
         let dir = first_pane_dir(asked, dir, dirs::home_dir());
+        if let Some(mux) = mux {
+            match self.spawn_pane(dir.clone(), launch, INITIAL_GRID) {
+                Ok(mut pane) => {
+                    pane.mux = Some(mux);
+                    return Ok(pane);
+                }
+                Err(err) => {
+                    self.notify(Banner::new(
+                        Severity::Warning,
+                        Topic::Shell,
+                        vec![format!(
+                            "failed to start {}: {err:#}; started the shell instead",
+                            mux.tool.name()
+                        )],
+                    ));
+                    launch = self.default_launch();
+                }
+            }
+        }
         let may_fall_back = matches!(&launch, Launch::Shell(ShellChoice { shell: Some(_), .. }));
         let err = match self.spawn_pane(dir, launch, INITIAL_GRID) {
             Ok(pane) => return Ok(pane),

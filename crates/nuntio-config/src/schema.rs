@@ -526,6 +526,14 @@ pub static SETTINGS: &[Setting] = &[
         "Offer herdr sessions in the shell menu and work with herdr running in a pane.",
     ),
     setting(
+        "herdr.on_startup",
+        Section::Herdr,
+        "On startup",
+        Kind::Bool,
+        "Start nuntio in herdr's default session instead of the shell. \
+         Needs `enabled`; wins over `tmux.on_startup`. Applies at the next start.",
+    ),
+    setting(
         "herdr.program",
         Section::Herdr,
         "Program",
@@ -553,6 +561,14 @@ pub static SETTINGS: &[Setting] = &[
         "Enabled",
         Kind::Bool,
         "Offer tmux sessions in the shell menu and work with tmux running in a pane.",
+    ),
+    setting(
+        "tmux.on_startup",
+        Section::Tmux,
+        "On startup",
+        Kind::Bool,
+        "Start nuntio in the tmux session `main`, created if needed, instead of the shell. \
+         Needs `enabled`; `herdr.on_startup` wins. Applies at the next start.",
     ),
     setting(
         "tmux.program",

@@ -548,6 +548,8 @@ impl Notes {
 #[serde(default)]
 pub struct Herdr {
     pub enabled: bool,
+    /// The first pane at startup runs herdr's default session.
+    pub on_startup: bool,
     /// A program name searched for, or an absolute path.
     pub program: String,
     /// New tab, split, close, focus, resize and zoom act in herdr.
@@ -560,6 +562,7 @@ impl Default for Herdr {
     fn default() -> Self {
         Self {
             enabled: false,
+            on_startup: false,
             program: "herdr".into(),
             forward_actions: true,
             agent_status: true,
@@ -572,6 +575,8 @@ impl Default for Herdr {
 #[serde(default)]
 pub struct Tmux {
     pub enabled: bool,
+    /// The first pane at startup runs the tmux session `main`.
+    pub on_startup: bool,
     /// A program name searched for, or an absolute path.
     pub program: String,
     /// New tab, split, close, focus, resize and zoom act in tmux.
@@ -582,6 +587,7 @@ impl Default for Tmux {
     fn default() -> Self {
         Self {
             enabled: false,
+            on_startup: false,
             program: "tmux".into(),
             forward_actions: true,
         }
