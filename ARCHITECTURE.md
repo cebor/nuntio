@@ -458,7 +458,7 @@ Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 |Windows (zip, installer)|`nuntio.exe`|`.exe` next to it|`nuntio-wsl` (musl ELF) next to it|
 
 - CI ([`ci.yml`](.github/workflows/ci.yml)): fmt on Linux; clippy and tests on all three OSes, with and without `nuntio/debug-server`; MSRV and packages on all three; docs, cargo-deny and site on Linux.
-- [`release.yml`](.github/workflows/release.yml) on `v*` tags: version check → packages → GitHub release with notes from `cargo xtask changelog` (`Changelog:` trailers) → Pages rebuild.
+- [`release.yml`](.github/workflows/release.yml) on `v*` tags: version check → the whole `ci.yml` on the tagged commit and packages → GitHub release with notes from `cargo xtask changelog` (`Changelog:` trailers) → Pages rebuild.
 
 ## Invariants
 

@@ -16,7 +16,7 @@ cargo xtask changelog <from>..HEAD   # release notes from the Changelog: trailer
 cargo xtask site [serve] # build the website in site/ with Zola (needs `zola` on PATH)
 ```
 
-Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates and `xtask`. CI (`.github/workflows/ci.yml`, on pushes to `main` and on pull requests, with `RUSTFLAGS=-D warnings`) runs fmt on Linux; clippy and tests on Linux, macOS and Windows, with and without `--features nuntio/debug-server`; the MSRV check (`rust-version` in `Cargo.toml`) and `cargo xtask package` on all three; docs, `cargo deny` and the website build on Linux. `release.yml` runs when a `v*` tag is pushed: version check, packages, GitHub release with notes from `cargo xtask changelog`, then the Pages rebuild (`pages.yml`).
+Always pass `--workspace` to clippy and tests: `default-members` contains only `crates/nuntio`, so plain `cargo test` skips the other crates and `xtask`. CI (`.github/workflows/ci.yml`, on pushes to `main` and on pull requests, with `RUSTFLAGS=-D warnings`) runs fmt on Linux; clippy and tests on Linux, macOS and Windows, with and without `--features nuntio/debug-server`; the MSRV check (`rust-version` in `Cargo.toml`) and `cargo xtask package` on all three; docs, `cargo deny` and the website build on Linux. `release.yml` runs when a `v*` tag is pushed: version check, the whole `ci.yml` on the tagged commit and the packages, GitHub release with notes from `cargo xtask changelog` only once all of them passed, then the Pages rebuild (`pages.yml`).
 
 ## Gate
 
