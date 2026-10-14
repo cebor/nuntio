@@ -241,7 +241,7 @@ option_as_meta = "none"
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `hide_when_single` | bool | `true` | Hide the tab bar while only one tab is open. It is always shown when nuntio draws its own header (`decorations = "custom"`, macOS `transparent`/`none` title bar, WSLg). |
-| `title` | string | `"auto"` | What a tab shows. `"auto"`: the directory while the shell waits at its prompt (`~/code`), otherwise the running program (`htop`). `"path"`: always the directory. `"process"`: always the program. `"application"`: the title the shell or program sets, unchanged. Where nuntio can't see the running process (currently Windows and WSL shells), `"auto"` uses the application's title without a leading `user@host:`. |
+| `title` | string | `"auto"` | What a tab shows. `"auto"`: the directory while the shell waits at its prompt (`~/code`), otherwise the title the running program set (without a leading `user@host:`), or its name (`htop`) if it set none. `"path"`: always the directory. `"process"`: always the program. `"application"`: the title the shell or program sets, unchanged. Where nuntio can't see the running process (native Windows shells), `"auto"` uses the application's title without a leading `user@host:`. |
 | `inherit_directory` | bool | `false` | Open a new tab in the working directory of the focused pane. Off, new tabs start in `working_directory` (your home directory by default). Splits always start in the focused pane's directory. For WSL shells, see [Working directory in WSL](#working-directory-in-wsl). |
 
 ### `[panes]`

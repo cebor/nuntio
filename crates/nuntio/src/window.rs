@@ -109,6 +109,9 @@ pub struct Pane {
     pub shell: Option<ShellChoice>,
     /// Title set by the application (OSC 0/2).
     pub title: Option<String>,
+    /// Whether `title` was set while a program ran in the foreground, not
+    /// the shell at its prompt. Cleared when the shell is seen at its prompt.
+    title_from_program: bool,
     /// The multiplexer session nuntio started in this pane from the shell
     /// menu; `None` for any other pane (a multiplexer started by hand is
     /// found by its process name, see `mux::pane_mux`).
@@ -167,6 +170,7 @@ impl Pane {
             shell_name,
             shell,
             title: None,
+            title_from_program: false,
             size: None,
             resized: None,
             title_cache: None,
@@ -179,13 +183,16 @@ impl Pane {
         PathSyntax::of(self.wsl.is_some(), &self.term.process_name())
     }
 
-    /// Set the application's title (OSC 0/2); `None` resets it. Returns
-    /// whether it changed.
+    /// Set the application's title (OSC 0/2); `None` resets it. Records
+    /// whether a program, not the shell at its prompt, set it. Returns
+    /// whether anything changed.
     pub fn set_title(&mut self, title: Option<String>) -> bool {
-        if self.title == title {
+        let from_program = title.is_some() && self.term.foreground_is_shell() == Some(false);
+        if self.title == title && self.title_from_program == from_program {
             return false;
         }
         self.title = title;
+        self.title_from_program = from_program;
         self.title_cache = None;
         true
     }
@@ -207,16 +214,22 @@ impl Pane {
         (title, None)
     }
 
-    fn title(&self, mode: TabTitle) -> String {
+    fn title(&mut self, mode: TabTitle) -> String {
         let wants_directory = matches!(mode, TabTitle::Auto | TabTitle::Path);
         let foreground = self.term.foreground_info(wants_directory);
+        let shell_idle = (mode == TabTitle::Auto)
+            .then(|| self.term.foreground_is_shell())
+            .flatten();
+        if shell_idle == Some(true) {
+            // Back at the prompt: a later program has not set this title.
+            self.title_from_program = false;
+        }
         let info = TitleInfo {
             application: self.title.clone(),
+            program_title: self.title_from_program,
             process: foreground.process_name,
             directory: foreground.working_directory,
-            shell_idle: (mode == TabTitle::Auto)
-                .then(|| self.term.foreground_is_shell())
-                .flatten(),
+            shell_idle,
         };
         tab_title::title(mode, info, dirs::home_dir().as_deref())
     }

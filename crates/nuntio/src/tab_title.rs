@@ -10,6 +10,9 @@ use nuntio_config::TabTitle;
 pub struct TitleInfo {
     /// Title set by the application (OSC 0/2).
     pub application: Option<String>,
+    /// Whether `application` was set while a program, not the shell at its
+    /// prompt, was in the foreground: `auto` shows it instead of the process.
+    pub program_title: bool,
     /// Name of the foreground process.
     pub process: String,
     /// Working directory of the foreground process.
@@ -31,7 +34,7 @@ pub fn title(mode: TabTitle, info: TitleInfo, home: Option<&Path>) -> String {
         TabTitle::Path => directory(),
         TabTitle::Auto => match info.shell_idle {
             Some(true) => directory().or_else(application),
-            Some(false) => None,
+            Some(false) => info.program_title.then(application).flatten(),
             None => application(),
         },
     };
@@ -71,6 +74,7 @@ mod tests {
     fn info(shell_idle: Option<bool>) -> TitleInfo {
         TitleInfo {
             application: Some("felix@box: ~/code".into()),
+            program_title: false,
             process: "htop".into(),
             directory: Some("/home/felix/src".into()),
             shell_idle,
@@ -89,6 +93,34 @@ mod tests {
             ..TitleInfo::default()
         };
         assert_eq!(title(TabTitle::Auto, bare, home), "zsh");
+    }
+
+    #[test]
+    fn auto_shows_the_title_the_running_program_set() {
+        let home = Some(Path::new("/home/felix"));
+        let program = |shell_idle, application: Option<&str>| TitleInfo {
+            application: application.map(Into::into),
+            program_title: true,
+            ..info(shell_idle)
+        };
+        assert_eq!(
+            title(
+                TabTitle::Auto,
+                program(Some(false), Some("felix@box: ~/code")),
+                home
+            ),
+            "~/code"
+        );
+        // A program without a title of its own shows its name.
+        assert_eq!(
+            title(TabTitle::Auto, program(Some(false), None), home),
+            "htop"
+        );
+        // At the prompt the directory wins.
+        assert_eq!(
+            title(TabTitle::Auto, program(Some(true), Some("vim")), home),
+            tilde("src")
+        );
     }
 
     #[test]
