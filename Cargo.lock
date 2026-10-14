@@ -1969,7 +1969,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2006,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-apps"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2021,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-config"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "dirs",
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-config-tui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2053,7 +2053,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-render"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-term"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "alacritty_terminal",
  "base64 0.22.1",
@@ -2088,7 +2088,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-tui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2098,7 +2098,7 @@ dependencies = [
 
 [[package]]
 name = "nuntio-wsl"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "libc",
 ]
