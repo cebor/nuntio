@@ -1165,6 +1165,7 @@ impl Core {
         if state.reveal_holds(Instant::now()) {
             return;
         }
+        state.output_redraw = None;
         let status = self.redraw(state);
         match state.health.on_frame(status) {
             HealthAction::Nothing => {}
@@ -1247,10 +1248,12 @@ impl Core {
         let active = index == state.tabs.active_index();
         match event {
             TermEvent::Wakeup => {
+                let now = Instant::now();
                 if active {
-                    // A held new pane is drawn once its output pauses.
-                    if !state.reveal_output(pane, Instant::now()) {
-                        state.window.request_redraw();
+                    // A held new pane is drawn once its output pauses; other
+                    // output once a line written in pieces is complete.
+                    if !state.reveal_output(pane, now) {
+                        state.output_arrived(now);
                     }
                 } else if let Some(tab) = state.tabs.get_mut(index)
                     && !tab.activity
@@ -1260,7 +1263,7 @@ impl Core {
                     let redraw = tab
                         .content
                         .pane(pane)
-                        .is_some_and(|p| p.ack_resize_redraw(Instant::now()));
+                        .is_some_and(|p| p.ack_resize_redraw(now));
                     if !redraw {
                         tab.activity = true;
                         state.window.request_redraw();

@@ -51,6 +51,10 @@ const TITLE_REFRESH: Duration = Duration::from_millis(250);
 /// A new pane is shown once its output has paused this long, so the shell's
 /// startup output (a greeting, the prompt) appears in one frame.
 const REVEAL_QUIET: Duration = Duration::from_millis(20);
+/// Output is drawn this long after its first wakeup, so a line a program
+/// writes in pieces (curl's progress bar, nearly byte by byte) appears
+/// whole instead of half-written with the cursor inside it.
+const OUTPUT_SETTLE: Duration = Duration::from_millis(4);
 /// Latest time a new pane is shown, however busy or silent its shell is.
 const REVEAL_MAX: Duration = Duration::from_millis(300);
 /// Cells a pane grows or shrinks per resize shortcut, so each press is
@@ -346,6 +350,8 @@ pub struct WindowState {
     /// A frame showed cached tab titles; redraw once they expire so they
     /// catch up with the processes.
     pub title_refresh: Option<Instant>,
+    /// When output of the active tab that is not drawn yet gets its frame.
+    pub output_redraw: Option<Instant>,
     /// A new pane waiting for its shell's first screen; frames are held.
     pub reveal: Option<Reveal>,
     /// Cell the IME candidate window was last anchored to.
@@ -394,6 +400,7 @@ impl WindowState {
             health: RenderHealth::default(),
             attention_requested: false,
             title_refresh: None,
+            output_redraw: None,
             reveal: None,
             ime_cell: None,
             status_drawn: None,
@@ -462,6 +469,12 @@ impl WindowState {
             }
             _ => false,
         }
+    }
+
+    /// Output arrived in the active tab: draw it `OUTPUT_SETTLE` after the
+    /// first wakeup not drawn yet; later wakeups keep that deadline.
+    pub fn output_arrived(&mut self, now: Instant) {
+        self.output_redraw.get_or_insert(now + OUTPUT_SETTLE);
     }
 
     /// Whether frames are still held back. Ends the hold once it is due,
@@ -1104,8 +1117,8 @@ impl WindowState {
     }
 
     /// Run the timers that are due at `now` (cursor blinking, title
-    /// refresh, autoscroll, reveal) and return when the next one is,
-    /// including the GPU probe's wakeup (which the caller runs).
+    /// refresh, autoscroll, reveal, held output) and return when the next
+    /// one is, including the GPU probe's wakeup (which the caller runs).
     pub fn run_timers(&mut self, config: &Config, now: Instant) -> Option<Instant> {
         if self.blink.active && now >= self.blink.next_toggle {
             self.blink.visible = !self.blink.visible;
@@ -1121,10 +1134,15 @@ impl WindowState {
         if self.reveal.is_some() && !self.reveal_holds(now) {
             self.window.request_redraw();
         }
+        if self.output_redraw.is_some_and(|t| now >= t) {
+            self.output_redraw = None;
+            self.window.request_redraw();
+        }
         [
             self.reveal.map(|reveal| reveal.due()),
             self.blink.active.then_some(self.blink.next_toggle),
             self.title_refresh,
+            self.output_redraw,
             self.mouse.autoscroll.map(|scroll| scroll.next),
             self.health.next_wakeup(),
         ]
