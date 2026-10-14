@@ -331,23 +331,46 @@ fn spawn(args: &[OsString], slave: OwnedFd) -> Result<libc::pid_t, (OsString, io
     Ok(child.id() as libc::pid_t)
 }
 
-/// Tells nuntio the foreground process group of the PTY if it differs from the last report.
+/// The foreground process group last reported to nuntio.
+struct Reported {
+    pgid: libc::pid_t,
+    name: Vec<u8>,
+    /// When `pgid` was first reported. Shortly after, its name may still be the shell's: the
+    /// shell's child takes the terminal before it execs the command.
+    since: Instant,
+}
+
+/// Tells nuntio the foreground process group of the PTY if it differs from the last report,
+/// or if a group reported less than `RECHECK_WINDOW` ago has a new name (it exec'd).
 /// Nothing is written when the terminal can't say. A group without a readable `comm` entry is
 /// reported with an empty name.
 fn report_foreground(
     master: RawFd,
     shell: libc::pid_t,
-    reported: &mut libc::pid_t,
+    reported: &mut Option<Reported>,
 ) -> io::Result<()> {
     // SAFETY: `master` is an open descriptor.
     let pgid = unsafe { libc::tcgetpgrp(master) };
-    if pgid <= 0 || pgid == *reported {
+    if pgid <= 0 {
         return Ok(());
     }
-    *reported = pgid;
+    let now = Instant::now();
+    let same = reported.as_ref().filter(|r| r.pgid == pgid);
+    if same.is_some_and(|r| now.duration_since(r.since) >= RECHECK_WINDOW) {
+        return Ok(());
+    }
     let comm = std::fs::read(format!("/proc/{pgid}/comm")).unwrap_or_default();
-    let name = String::from_utf8_lossy(&comm);
-    write_all(1, &foreground_marker(name.trim(), pgid == shell))
+    if same.is_some_and(|r| r.name == comm) {
+        return Ok(());
+    }
+    let since = same.map_or(now, |r| r.since);
+    let marker = foreground_marker(String::from_utf8_lossy(&comm).trim(), pgid == shell);
+    *reported = Some(Reported {
+        pgid,
+        name: comm,
+        since,
+    });
+    write_all(1, &marker)
 }
 
 /// Forwards between stdin/stdout and the master until the session ends. Returns the exit code.
@@ -362,8 +385,8 @@ fn event_loop(
     let mut written = 0;
     let mut reaped = None;
     let mut buf = vec![0u8; CHUNK];
-    // The foreground process group last reported to nuntio, 0 before the first report.
-    let mut reported: libc::pid_t = 0;
+    // The foreground process group last reported to nuntio, `None` before the first report.
+    let mut reported = None;
     if report_foreground(master_fd, pid, &mut reported).is_err() {
         return hang_up(pid, 0);
     }

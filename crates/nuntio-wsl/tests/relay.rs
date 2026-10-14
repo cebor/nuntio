@@ -239,6 +239,19 @@ fn reports_the_foreground_process_group() {
 }
 
 #[test]
+fn reports_a_command_that_execs_after_taking_the_terminal() {
+    // The group leader is `sh` while it holds the terminal, then becomes `sleep`.
+    let mut helper = Helper::start(&["--", "sh", "-i"]);
+    helper.resize(80, 24);
+    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", 0);
+    helper.data(b"sh -c 'sleep 0.3; exec sleep 30'\n");
+    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;0;sh\x07", seen);
+    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;0;sleep\x07", seen);
+    helper.data(b"\x03");
+    helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", seen);
+}
+
+#[test]
 fn the_socket_bridge_copies_both_ways() {
     use std::os::unix::net::UnixListener;
 
