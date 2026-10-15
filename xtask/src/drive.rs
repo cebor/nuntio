@@ -299,6 +299,8 @@ fn start(args: &mut Args) -> Result<()> {
         "nuntio",
         "--bin",
         "nuntio-apps",
+        "--bin",
+        "nuntio-config",
         "--features",
         "debug-server",
     ]);

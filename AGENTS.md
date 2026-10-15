@@ -46,7 +46,7 @@ A change is finished when its gate passed and it is committed and pushed to `ori
 To look at the running terminal or try out a change, use the debug server instead of asking the user for screenshots:
 
 ```sh
-cargo xtask drive start                  # build nuntio + nuntio-apps with --features debug-server, start headless in the background (empty config); also --size WxH, --config <file>, -- <command>
+cargo xtask drive start                  # build nuntio, nuntio-apps and nuntio-config with --features debug-server, start headless in the background (empty config); also --size WxH, --config <file>, -- <command>
 cargo xtask drive wait-idle              # until no pane had output for 300 ms; `wait-text <text>` waits for text on screen
 cargo xtask drive shot                   # target/nuntio-debug/shot.png (%LOCALAPPDATA%\nuntio\debug\shot.png on Windows), look at it with Read; --pane N for one pane
 cargo xtask drive text                   # visible lines of the focused pane (--pane N); `cells --line L` for colors/attributes; `state` for window/tabs/panes/banner as JSON
