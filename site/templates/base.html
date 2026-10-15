@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ config.title }}{% endblock %}</title>
   <meta name="description" content="{% block description %}{{ config.description }}{% endblock %}">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#D9D3C4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A0A09" media="(prefers-color-scheme: dark)">
   <link rel="icon" href="{{ get_url(path='favicon.png') }}" type="image/png">
   <link rel="icon" href="{{ get_url(path='icon.svg') }}" type="image/svg+xml">
+  <link rel="preload" href="{{ get_url(path='fonts/archivo.woff2') }}" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ get_url(path='style.css', cachebust=true) }}">
   <link rel="canonical" href="{{ current_url }}">
   <meta property="og:type" content="website">
@@ -19,31 +22,40 @@
 </head>
 <body>
   <a class="skip" href="#content">Skip to content</a>
-  <header class="topbar">
-    <nav class="wrap nav">
-      <a class="brand" href="{{ get_url(path='@/_index.md') }}">
-        <img src="{{ get_url(path='icon.svg') }}" alt="" width="28" height="28">
-        <span>nuntio</span>
-      </a>
-      <div class="nav-links">
-        <a href="{{ get_url(path='@/_index.md') }}#download">Download</a>
-        <a href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a>
-        <a href="{{ get_url(path='@/docs/config.md') }}">Configuration</a>
-        <a href="{{ config.extra.repo }}">GitHub</a>
-      </div>
-    </nav>
-  </header>
-  <main id="content">
-  {% block content %}{% endblock %}
-  </main>
-  <footer class="footer">
-    <div class="wrap">
-      nuntio is free software, licensed under MIT or Apache-2.0.
-      <a href="{{ config.extra.repo }}">Source</a> ·
-      <a href="{{ config.extra.repo }}/issues">Issues</a> ·
-      <a href="{{ config.extra.repo }}/releases">Releases</a> ·
-      <a href="{{ get_url(path='@/privacy.md') }}">Privacy</a>
+  <div class="desk">
+    <div class="card">
+      <header class="masthead">
+        <a class="brand" href="{{ get_url(path='@/_index.md') }}">
+          <img src="{{ get_url(path='icon.svg') }}" alt="" width="28" height="28">
+          <span>nuntio</span>
+        </a>
+        {% set here = current_path | default(value="") %}
+        <nav class="nav" aria-label="Site">
+          <a href="{{ get_url(path='@/docs/getting-started.md') }}"{% if here is starting_with(pat="/docs/getting-started") %} aria-current="page"{% endif %}>Docs</a>
+          <a href="{{ get_url(path='@/docs/protocols.md') }}"{% if here is starting_with(pat="/docs/protocols") %} aria-current="page"{% endif %}>Protocols</a>
+          <a href="{{ get_url(path='@/docs/wsl.md') }}"{% if here is starting_with(pat="/docs/wsl") %} aria-current="page"{% endif %}>WSL</a>
+          <a class="nav-config" href="{{ get_url(path='@/docs/config.md') }}"{% if here is starting_with(pat="/docs/config") %} aria-current="page"{% endif %}>Config</a>
+          <a href="{{ config.extra.repo }}">GitHub</a>
+        </nav>
+        <a class="btn-primary btn-small" href="{{ get_url(path='@/_index.md') }}#download">Download</a>
+      </header>
+      {% block index %}{% endblock %}
+      <main id="content">
+      {% block content %}{% endblock %}
+      </main>
+      <footer class="backcover">
+        <p>nuntio is free software, licensed under MIT or Apache-2.0.</p>
+        <p class="links">
+          <a href="{{ config.extra.repo }}">Source</a>
+          <a href="{{ config.extra.repo }}/issues">Issues</a>
+          <a href="{{ config.extra.repo }}/releases">Releases</a>
+          <a href="{{ get_url(path='@/privacy.md') }}">Privacy</a>
+        </p>
+        <p class="statement"><span class="lc">nuntio</span> collects no data.</p>
+        <p class="small">Set in Archivo and JetBrains Mono, both under the SIL Open Font License.</p>
+      </footer>
     </div>
-  </footer>
+  </div>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

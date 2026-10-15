@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" width="720" height="400" role="img" aria-labelledby="t">
+  <title id="t">nuntio.exe talks to wsl.exe over pipes; inside WSL, nuntio-wsl owns a Linux PTY that runs the shell. ConPTY is used only as a fallback.</title>
+  <style>
+    :root { --ink: #141414; --ink-2: #4A4740; --rule: #B9B2A2; }
+    @media (prefers-color-scheme: dark) { :root { --ink: #ECE6D8; --ink-2: #A8A194; --rule: #3A362F; } }
+    text { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 15px; fill: var(--ink); }
+    .zone { font-size: 12px; letter-spacing: 0.14em; fill: var(--ink-2); }
+    .note { font-size: 13px; fill: var(--ink-2); }
+    .box { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+    .signal { fill: #EA5F1E; stroke: var(--ink); stroke-width: 1.5; }
+    .on-signal { fill: #141414; font-weight: 700; }
+    .wire { stroke: var(--ink); stroke-width: 1.5; fill: none; }
+    .head { fill: var(--ink); }
+    .split { stroke: var(--rule); stroke-width: 1.5; stroke-dasharray: 6 6; }
+    .fb { fill: none; stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 5 5; }
+    .fbtext { fill: var(--ink-2); }
+    .fbhead { fill: var(--ink-2); }
+  </style>
+
+  <text class="zone" x="20" y="34">WINDOWS</text>
+  <text class="zone" x="350" y="34">WSL · LINUX</text>
+  <line class="split" x1="325" y1="14" x2="325" y2="252"/>
+  <line class="split" x1="0" y1="268" x2="720" y2="268"/>
+
+  <!-- the relay -->
+  <rect class="box" x="20" y="64" width="112" height="44"/>
+  <text x="76" y="91" text-anchor="middle">nuntio.exe</text>
+  <rect class="box" x="186" y="64" width="96" height="44"/>
+  <text x="234" y="91" text-anchor="middle">wsl.exe</text>
+  <rect class="signal" x="350" y="64" width="128" height="44"/>
+  <text class="on-signal" x="414" y="91" text-anchor="middle">nuntio-wsl</text>
+  <rect class="box" x="560" y="64" width="128" height="44"/>
+  <text x="624" y="91" text-anchor="middle">Linux PTY</text>
+  <rect class="box" x="510" y="184" width="196" height="44"/>
+  <text x="608" y="211" text-anchor="middle">zsh · claude · herdr</text>
+
+  <line class="wire" x1="132" y1="86" x2="176" y2="86"/>
+  <path class="head" d="M184 86 l-9 -5 v10 z"/>
+  <line class="wire" x1="282" y1="86" x2="340" y2="86"/>
+  <path class="head" d="M348 86 l-9 -5 v10 z"/>
+  <line class="wire" x1="478" y1="86" x2="550" y2="86"/>
+  <path class="head" d="M558 86 l-9 -5 v10 z"/>
+  <line class="wire" x1="624" y1="108" x2="624" y2="174"/>
+  <path class="head" d="M624 182 l-5 -9 h10 z"/>
+
+  <text class="note" x="20" y="140">pipes: DATA / RESIZE frames</text>
+  <text class="note" x="350" y="140">openpty</text>
+  <text class="note" x="350" y="160">byte for byte</text>
+
+  <!-- fallback -->
+  <text class="zone" x="20" y="298">FALLBACK</text>
+  <rect class="fb" x="20" y="314" width="112" height="44"/>
+  <text class="fbtext" x="76" y="341" text-anchor="middle">nuntio.exe</text>
+  <rect class="fb" x="180" y="314" width="96" height="44"/>
+  <text class="fbtext" x="228" y="341" text-anchor="middle">ConPTY</text>
+  <rect class="fb" x="324" y="314" width="96" height="44"/>
+  <text class="fbtext" x="372" y="341" text-anchor="middle">wsl.exe</text>
+  <line class="fb" x1="132" y1="336" x2="170" y2="336"/>
+  <path class="fbhead" d="M178 336 l-9 -5 v10 z"/>
+  <line class="fb" x1="276" y1="336" x2="314" y2="336"/>
+  <path class="fbhead" d="M322 336 l-9 -5 v10 z"/>
+  <text class="note" x="20" y="386">only if the helper is missing or fails · no inline images</text>
+</svg>

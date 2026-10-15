@@ -5,12 +5,13 @@
 {% block og_description %}{% if page.description %}{{ page.description }}{% else %}{{ config.description }}{% endif %}{% endblock %}
 {% block content %}
 {% set docs = get_section(path="docs/_index.md") %}
-<div class="wrap docs">
-  <aside class="docs-nav">
+<div class="docs">
+  <nav class="docs-nav" aria-label="Manual">
+    <p class="label">Manual</p>
     <ul>
       {% for p in docs.pages %}
-      <li><a href="{{ p.permalink }}"{% if p.path == page.path %} aria-current="page"{% endif %}>{{ p.title }}</a>
-        {% if p.path == page.path %}
+      <li><a href="{{ p.permalink }}"{% if p.path == page.path %} aria-current="page"{% endif %}><span class="n">{% if loop.index < 10 %}0{% endif %}{{ loop.index }}</span><span>{{ p.title }}</span></a>
+        {% if p.path == page.path and page.toc %}
         <ul class="toc">
           {% for h in page.toc %}<li><a href="#{{ h.id }}">{{ h.title }}</a></li>{% endfor %}
         </ul>
@@ -18,7 +19,7 @@
       </li>
       {% endfor %}
     </ul>
-  </aside>
+  </nav>
   <article class="prose">
     <h1>{{ page.title }}</h1>
     {{ page.content | safe }}

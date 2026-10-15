@@ -10,3 +10,9 @@
 
 {# The file name of the release asset whose name ends with `ext`. #}
 {% component asset_name(assets, ext: string) %}{% for asset in assets %}{% if asset.name is ending_with(pat=ext) %}{{ asset.name }}{% endif %}{% endfor %}{% endcomponent asset_name %}
+
+{# The download URL of the release asset whose name ends with `ext`. #}
+{% component asset_url(assets, ext: string) %}{% for asset in assets %}{% if asset.name is ending_with(pat=ext) %}{{ asset.browser_download_url }}{% endif %}{% endfor %}{% endcomponent asset_url %}
+
+{# The size of the release asset whose name ends with `ext`. #}
+{% component asset_size(assets, ext: string) %}{% for asset in assets %}{% if asset.name is ending_with(pat=ext) %}{{ asset.size | filesizeformat }}{% endif %}{% endfor %}{% endcomponent asset_size %}

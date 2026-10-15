@@ -1,6 +1,6 @@
 base_url = "https://cebor.github.io/nuntio"
 title = "nuntio"
-description = "A fast, GPU-rendered terminal emulator for Linux, macOS and Windows."
+description = "The terminal for AI agents: GPU-rendered, with image paste, inline images, notes and settings in a pane, and real Linux PTYs in WSL. Linux, macOS and Windows."
 compile_sass = false
 build_search_index = false
 

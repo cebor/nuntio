@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: 13 October 2026
+Last updated: 15 October 2026
 
 ## nuntio
 
@@ -27,7 +27,9 @@ nuntio uses the clipboard when you copy or paste, and when a program copies text
 
 ## Website and downloads
 
-The website at [cebor.github.io/nuntio](https://cebor.github.io/nuntio/) is a set of static pages. It sets no cookies, uses no analytics or tracking, and loads nothing from third parties.
+The website at [cebor.github.io/nuntio](https://cebor.github.io/nuntio/) is a set of static pages. It sets no cookies, uses no analytics or tracking, and loads nothing from third parties. The fonts are served from the website itself.
+
+The home page lets you paste an image to try out image paste. The image stays in your browser: it is not uploaded or stored.
 
 The website and the downloads are hosted by GitHub (GitHub Pages and GitHub Releases). GitHub processes technical data such as your IP address to serve them; see the [GitHub General Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 

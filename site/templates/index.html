@@ -1,4 +1,23 @@
 {% extends "base.html" %}
+
+{% block index %}
+<nav class="thumb-index" aria-label="Sections">
+  <ul>
+    <li><a href="#images">02 Images</a></li>
+    <li><a href="#agents">03 Agents</a></li>
+    <li><a href="#notes">04 Notes</a></li>
+    <li><a href="#settings">05 Settings</a></li>
+    <li><a href="#wsl">06 WSL</a></li>
+    <li><a href="#protocols">07 Protocols</a></li>
+    <li><a href="#download">08 Download</a></li>
+  </ul>
+</nav>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ get_url(path='site.js', cachebust=true) }}" defer></script>
+{% endblock %}
+
 {% block content %}
 {# CI passes GITHUB_TOKEN so shared runners don't hit the anonymous rate limit, and
    a failed request then fails the build. Locally it falls back to a link. #}
@@ -6,193 +25,349 @@
 {% set headers = ["Authorization=Bearer " ~ token] if token else [] %}
 {% set release = load_data(url="https://api.github.com/repos/cebor/nuntio/releases/latest", format="json", headers=headers, required=token != "") %}
 {% set releases_url = config.extra.repo ~ "/releases/latest" %}
-  <section class="hero">
-    <div class="wrap hero-head">
-      <h1>A fast terminal with tabs, split panes and a config that reloads while you type.</h1>
-      <p class="lead">nuntio is a GPU-rendered terminal emulator for Linux, macOS and Windows. One window, one TOML file, close to 0% CPU when idle.</p>
-      <div class="actions">
-        <a class="button" id="hero-download" href="#download">Download{% if release %} {{ release.tag_name }}{% endif %}</a>
-        <a class="button ghost" href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a>
-      </div>
-      <p class="hint" id="hero-hint">Free and open source · MIT or Apache-2.0</p>
-    </div>
-    <div class="wrap">
-      {# Two real tabs: radio buttons switch them without JS. #}
-      <div class="term hero-term">
-        <input type="radio" name="hero-tab" id="tab-shell" checked>
-        <input type="radio" name="hero-tab" id="tab-config">
-        <div class="term-bar">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <label class="term-tab" for="tab-shell">~/code/nuntio</label><label class="term-tab" for="tab-config">nuntio-config</label>
-        </div>
-        <div class="screens" aria-hidden="true">
-          <pre class="screen shell"><span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ cargo build -r
-    <span class="c-g">Finished</span> `release` profile [optimized] target(s) in 0.21s
-<span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ fastfetch
+{% if release %}{% set released = release.published_at | date(format="%B %-d, %Y") %}{% endif %}
 
-<span class="c-c">╭──────────────────────────╮</span>    <span class="c-b tui-b">you</span>@<span class="c-b tui-b">nuntio</span>
-<span class="c-c">│</span>                          <span class="c-c">│</span>    <span class="c-c">──────────</span>
-<span class="c-c">│</span>  <span class="px" style="background:#7aa2f7">    </span>                    <span class="c-c">│</span>    <span class="c-b">Terminal</span>  nuntio{% if release %} {{ release.tag_name }}{% endif %}
-<span class="c-c">│</span>    <span class="px" style="background:#7aa2f7">    </span>                  <span class="c-c">│</span>    <span class="c-b">Renderer</span>  wgpu · Vulkan
-<span class="c-c">│</span>      <span class="px" style="background:#7aa2f7">    </span>                <span class="c-c">│</span>    <span class="c-b">Font</span>      JetBrains Mono 14
-<span class="c-c">│</span>        <span class="px" style="background:#7aa2f7">    </span>              <span class="c-c">│</span>    <span class="c-b">Theme</span>     Tokyo Night
-<span class="c-c">│</span>      <span class="px" style="background:#7aa2f7">    </span>                <span class="c-c">│</span>    <span class="c-b">Shell</span>     zsh 5.9
-<span class="c-c">│</span>    <span class="px" style="background:#7aa2f7">    </span>                  <span class="c-c">│</span>    <span class="c-b">Idle CPU</span>  0.0 %
-<span class="c-c">│</span>  <span class="px" style="background:#7aa2f7">    </span>      <span class="px" style="background:#c0caf5">          </span>    <span class="c-c">│</span>
-<span class="c-c">│</span>                          <span class="c-c">│</span>    <span class="px" style="background:#15161e">   </span><span class="px" style="background:#f7768e">   </span><span class="px" style="background:#9ece6a">   </span><span class="px" style="background:#e0af68">   </span><span class="px" style="background:#7aa2f7">   </span><span class="px" style="background:#bb9af7">   </span><span class="px" style="background:#7dcfff">   </span><span class="px" style="background:#a9b1d6">   </span>
-<span class="c-c">╰──────────────────────────╯</span>    <span class="px" style="background:#414868">   </span><span class="px" style="background:#f7768e">   </span><span class="px" style="background:#9ece6a">   </span><span class="px" style="background:#e0af68">   </span><span class="px" style="background:#7aa2f7">   </span><span class="px" style="background:#bb9af7">   </span><span class="px" style="background:#7dcfff">   </span><span class="px" style="background:#c0caf5">   </span>
-
-<span class="c-g">~/code/nuntio</span> <span class="c-b">main</span> ❯ <span class="cursor"> </span></pre>
-          <pre class="screen tui"><span class="c-b tui-b"> nuntio-config </span><span class="c-c">~/.config/nuntio/config.toml</span>                      <span class="c-b">  changed · applied live </span>
-<span class="c-c">╭───────────────╮╭ Theme ────────────────────────────────────────────────────────────────╮</span>
-<span class="c-c">│</span> General       <span class="c-c">││</span><span class="c-b">● </span>Follow OS appearance  on                                             <span class="c-c">│</span>
-<span class="c-c">│</span><span class="tui-b"> Theme</span>         <span class="c-c">││</span><span class="c-b">● </span>Light theme           Tokyo Night Day  <span class="px" style="color:#3760bf;background:#e1e2e7"> Aa </span><span class="px" style="background:#b4b5b9"> </span><span class="px" style="background:#f52a65"> </span><span class="px" style="background:#587539"> </span><span class="px" style="background:#8c6c3e"> </span><span class="px" style="background:#2e7de9"> </span><span class="px" style="background:#9854f1"> </span><span class="px" style="background:#007197"> </span><span class="px" style="background:#6172b0"> </span><span class="px" style="background:#a1a6c5"> </span><span class="px" style="background:#ff4774"> </span><span class="px" style="background:#5c8524"> </span><span class="px" style="background:#a27629"> </span><span class="px" style="background:#358aff"> </span><span class="px" style="background:#a463ff"> </span><span class="px" style="background:#007ea8"> </span><span class="px" style="background:#3760bf"> </span>          <span class="c-c">│</span>
-<span class="c-c">│</span> Font          <span class="c-c">││</span><span class="c-b">● </span><span class="tui-b">Dark theme            Tokyo Night</span>  <span class="px" style="color:#c0caf5;background:#1a1b26"> Aa </span><span class="px" style="background:#15161e"> </span><span class="px" style="background:#f7768e"> </span><span class="px" style="background:#9ece6a"> </span><span class="px" style="background:#e0af68"> </span><span class="px" style="background:#7aa2f7"> </span><span class="px" style="background:#bb9af7"> </span><span class="px" style="background:#7dcfff"> </span><span class="px" style="background:#a9b1d6"> </span><span class="px" style="background:#414868"> </span><span class="px" style="background:#ff899d"> </span><span class="px" style="background:#9fe044"> </span><span class="px" style="background:#faba4a"> </span><span class="px" style="background:#8db0ff"> </span><span class="px" style="background:#c7a9ff"> </span><span class="px" style="background:#a4daff"> </span><span class="px" style="background:#c0caf5"> </span>              <span class="c-c">│</span>
-<span class="c-c">│</span> Window        <span class="c-c">││</span>                                                                       <span class="c-c">│</span>
-<span class="c-c">│</span> Tabs          <span class="c-c">││</span>                                                                       <span class="c-c">│</span>
-<span class="c-c">│</span> Panes         <span class="c-c">││</span>                                                                       <span class="c-c">│</span>
-<span class="c-c">│</span> Status bar   <span class="c-b">╭ Dark theme ──────────────────────────────────────────────╮</span>              <span class="c-c">│</span>
-<span class="c-c">│</span> Mouse        <span class="c-b">│</span><span class="px" style="color:#f8f8f2;background:#282a36"> Aa </span><span class="px" style="background:#21222c"> </span><span class="px" style="background:#ff5555"> </span><span class="px" style="background:#50fa7b"> </span><span class="px" style="background:#f1fa8c"> </span><span class="px" style="background:#bd93f9"> </span><span class="px" style="background:#ff79c6"> </span><span class="px" style="background:#8be9fd"> </span><span class="px" style="background:#f8f8f2"> </span> Dracula                                      <span class="c-b">│</span>              <span class="c-c">│</span>
-<span class="c-c">│</span> Shell        <span class="c-b">│</span><span class="px" style="color:#c7c7c7;background:#000000"> Aa </span><span class="px" style="background:#000000"> </span><span class="px" style="background:#c91b00"> </span><span class="px" style="background:#00c200"> </span><span class="px" style="background:#c7c400"> </span><span class="px" style="background:#0225c7"> </span><span class="px" style="background:#c930c7"> </span><span class="px" style="background:#00c5c7"> </span><span class="px" style="background:#c7c7c7"> </span> iTerm2 Default                               <span class="c-b">│</span>              <span class="c-c">│</span>
-<span class="c-c">│</span> Keybindings  <span class="c-b">│</span><span class="px" style="color:#839496;background:#002b36"> Aa </span><span class="px" style="background:#073642"> </span><span class="px" style="background:#dc322f"> </span><span class="px" style="background:#859900"> </span><span class="px" style="background:#b58900"> </span><span class="px" style="background:#268bd2"> </span><span class="px" style="background:#d33682"> </span><span class="px" style="background:#2aa198"> </span><span class="px" style="background:#eee8d5"> </span> Solarized Dark                               <span class="c-b">│</span>              <span class="c-c">│</span>
-<span class="c-c">│</span> macOS        <span class="c-b">│</span><span class="px" style="color:#c0caf5;background:#1a1b26"> Aa </span><span class="px" style="background:#15161e"> </span><span class="px" style="background:#f7768e"> </span><span class="px" style="background:#9ece6a"> </span><span class="px" style="background:#e0af68"> </span><span class="px" style="background:#7aa2f7"> </span><span class="px" style="background:#bb9af7"> </span><span class="px" style="background:#7dcfff"> </span><span class="px" style="background:#a9b1d6"> </span><span class="tui-sel"> Tokyo Night                                  </span><span class="c-b">│</span>              <span class="c-c">│</span>
-<span class="c-c">│</span>              <span class="c-b">│</span><span class="px" style="color:#3760bf;background:#e1e2e7"> Aa </span><span class="px" style="background:#b4b5b9"> </span><span class="px" style="background:#f52a65"> </span><span class="px" style="background:#587539"> </span><span class="px" style="background:#8c6c3e"> </span><span class="px" style="background:#2e7de9"> </span><span class="px" style="background:#9854f1"> </span><span class="px" style="background:#007197"> </span><span class="px" style="background:#6172b0"> </span> Tokyo Night Day                              <span class="c-b">│</span>              <span class="c-c">│</span>
-<span class="c-c">│</span>              <span class="c-b">╰──────────────────────────────────────────────────────────╯</span>              <span class="c-c">│</span>
-<span class="c-c">╰───────────────╯╰───────────────────────────────────────────────────────────────────────╯</span>
-<span class="c-c">╭────────────────────────────────────────────────────────────────────────────────────────╮</span>
-<span class="c-c">│</span>A theme, or a light/dark pair that follows the OS appearance.                           <span class="c-c">│</span>
-<span class="c-c">│</span>Custom themes (.toml or .itermcolors) go in the themes/ directory next to the config    <span class="c-c">│</span>
-<span class="c-c">│</span>file.                                                                                   <span class="c-c">│</span>
-<span class="c-c">│</span>                                                                                        <span class="c-c">│</span>
-<span class="c-c">│</span>                                                                                        <span class="c-c">│</span>
-<span class="c-c">╰────────────────────────────────────────────────────────────────────────────────────────╯</span>
- <span class="c-b">↑↓</span><span class="c-c"> choose  </span><span class="c-b">⏎</span><span class="c-c"> apply  </span><span class="c-b">Esc</span><span class="c-c"> cancel  </span></pre>
+  <section class="panel cover" aria-labelledby="cover-title">
+    <div class="cover-grid">
+      <div class="cover-field">
+        <h1 id="cover-title">
+          <span class="cover-name">nuntio</span>
+          <span class="cover-hook">The terminal for AI agents.</span>
+        </h1>
+        <p class="cover-offer">Paste a screenshot and your agent gets the file. Images it prints show up inline, notes and settings open in a pane, and on Windows every WSL tab gets a real Linux PTY.</p>
+        <div class="cover-actions">
+          {% if release %}
+          <a id="hero-download" class="btn-primary" href="{{ <asset_url assets={release.assets} ext=".AppImage" /> }}">
+            <span data-hero-label>Download for Linux</span>
+            <small data-hero-meta>AppImage · {{ <asset_size assets={release.assets} ext=".AppImage" /> }}</small>
+          </a>
+          {% else %}
+          <a id="hero-download" class="btn-primary" href="{{ releases_url }}">
+            <span data-hero-label>Download from GitHub</span>
+          </a>
+          {% endif %}
+          <p class="cover-links">
+            <a href="#download">Other platforms</a>
+            <a href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a>
+            <a href="{{ config.extra.repo }}">Source on GitHub</a>
+          </p>
+          <p class="cover-meta">{% if release %}{{ release.tag_name }} · {{ released }} · {% endif %}Linux, macOS, Windows · MIT or Apache-2.0</p>
         </div>
       </div>
+
+      <div class="cover-fig">
+        <figure id="paste-demo" class="fig demo" data-state="done">
+          <div class="term" aria-hidden="true">
+            <div class="term-tabs">
+              <span class="term-tab active">~/code/app</span>
+              <span class="term-tab plus">+</span>
+            </div>
+            <div class="term-panes">
+              <div class="term-pane">
+                <div class="lines"><span class="ln t-dim">claude</span><span class="ln">&#10095; <span class="t-path" data-demo-path>/tmp/nuntio-paste-48213-1760531207118/image-1.png</span><span class="marker ln-mark">1</span></span><span class="ln" data-demo-step="attached">  &#9151; <span class="t-blue" data-demo-attach>[Image #1]</span><span class="marker ln-mark">2</span></span><span class="ln" data-demo-step="done">&#10095; why does the sidebar overlap the content? <span class="t-cursor"></span></span></div>
+              </div>
+              <div class="term-pane">
+                <div class="lines"><span class="ln t-dim">omp</span><span class="ln t-green" data-demo-step="done">&#9679; Read <span data-demo-name>image-1.png</span></span></div>
+                <div class="demo-image-wrap" data-demo-step="done">
+                  <img data-demo-image src="{{ get_url(path='icon.svg') }}" alt="" width="176" height="117">
+                  <span class="marker">3</span>
+                </div>
+                <div class="lines"><span class="ln" data-demo-step="done">&#9679; Looking at the layout…</span></div>
+              </div>
+            </div>
+          </div>
+          <ol class="legend">
+            <li><span class="marker inline" aria-hidden="true">1</span><span>nuntio saves the clipboard image as a PNG and types its path, like a dropped file.</span></li>
+            <li><span class="marker inline" aria-hidden="true">2</span><span>Claude Code and omp attach the path to the prompt.</span></li>
+            <li><span class="marker inline" aria-hidden="true">3</span><span>Images an agent prints appear inline through the Kitty graphics protocol.</span></li>
+          </ol>
+          <figcaption><b>Fig. 1</b> Image paste, simulated on this page. <span class="hint-desktop">Copy an image and press <kbd>Ctrl</kbd><kbd>V</kbd> (<kbd>⌘</kbd><kbd>V</kbd>) to try it. The image stays in your browser.</span><span class="hint-touch">On a desktop, paste an image here to try it.</span></figcaption>
+          <p class="sr-only" aria-live="polite" data-demo-live></p>
+        </figure>
+      </div>
+
+      <dl class="spec-band">
+        <div><dt>Rendering</dt><dd>GPU · wgpu</dd></div>
+        <div><dt>Idle</dt><dd>~0 % CPU</dd></div>
+        <div><dt>Layout</dt><dd>Tabs · splits</dd></div>
+        <div><dt>Themes</dt><dd>20 + your own</dd></div>
+        <div><dt>Config</dt><dd>One TOML · hot reload</dd></div>
+        <div><dt>Find</dt><dd>Regex · smart case</dd></div>
+      </dl>
     </div>
   </section>
 
-  <section class="section alt">
-    <div class="wrap">
-      <h2>Features</h2>
-      <div class="features">
-        <div><h3>GPU rendering</h3><p>One wgpu pipeline draws backgrounds, glyphs and UI. Box-drawing characters are drawn procedurally, so TUI borders line up without gaps.</p></div>
-        <div><h3>Tabs and split panes</h3><p>Drag tabs to reorder, split side by side or top and bottom, resize with keyboard or mouse, zoom a pane to fill the tab.</p></div>
-        <div><h3>Hot reload</h3><p>Save the config, or change it in <code>nuntio-config</code>, and it applies right away. Mistakes show up as a banner, and the previous settings stay active.</p></div>
-        <div><h3>Themes</h3><p>Twenty built in, your own as TOML or iTerm2 <code>.itermcolors</code>, and a light/dark pair that follows the OS appearance.</p></div>
-        <div><h3>Text done right</h3><p>Shaped with cosmic-text: font fallback, color emoji, CJK and wide characters.</p></div>
-        <div><h3>Find bar and status bar</h3><p>Incremental search through the scrollback, with a regex mode. An optional status bar graphs CPU, memory, network and battery.</p></div>
-        <div><h3>WSL on Windows</h3><p><code>shell = { wsl = "Ubuntu" }</code> opens every tab straight in a WSL distribution.</p></div>
-        <div><h3>Idle means idle</h3><p>nuntio only redraws when something changed, so an idle window uses close to 0% CPU.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="wrap config-grid">
+  <section class="panel" id="images" data-panel="2" aria-labelledby="images-title">
+    <div class="crease" aria-hidden="true"><span>2/8 · Image paste and inline images</span></div>
+    <header class="panel-head">
       <div>
-        <h2>Everything is a terminal. Even the settings.</h2>
-        <p>Run <code>nuntio-config</code> in any nuntio tab. Settings are grouped by section, choices offer only valid values, and themes and fonts preview as you move through them.</p>
-        <p>Every change is written to the file right away and applied by hot reload, so the window itself is the preview. The command comes with nuntio and exists only inside its panes.</p>
-        <p class="links"><a href="{{ get_url(path='@/docs/config.md') }}#editing-in-the-terminal">Editing in the terminal →</a> <a href="{{ get_url(path='@/docs/config.md') }}">Configuration reference →</a></p>
+        <h2 id="images-title">Screenshots in. Pictures out.</h2>
       </div>
+      <div class="panel-key"><span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>V</kbd></span><span class="or">/</span><span><kbd>⌘</kbd><kbd>V</kbd></span></div>
+    </header>
+    <div class="panel-body">
+      <div class="panel-text">
+        <p>Copy a screenshot and paste it into the agent. nuntio writes the image to a private folder in the temp directory as <code>image-1.png</code>, <code>image-2.png</code>, … and pastes the path, quoted like a dropped file. Claude Code and omp attach it to the prompt. The folder is removed when nuntio exits.</p>
+        <p>Programs show pictures through the Kitty graphics protocol or iTerm2's inline images. They live in the grid, so they scroll, clear and get overwritten like text, in splits, over herdr and in WSL. omp picks the protocol on its own: nuntio sets <code>PI_FORCE_IMAGE_PROTOCOL=kitty</code>.</p>
+        <table class="spec">
+          <thead><tr><th scope="col">Sequence</th><th scope="col">What nuntio does</th></tr></thead>
+          <tbody>
+            <tr><td>OSC 1337 ; File=</td><td>Inline image: PNG, JPEG, GIF (first frame), WebP, BMP; size in cells, px, % or auto.</td></tr>
+            <tr><td>APC G a=T</td><td>Kitty graphics: transmit and place RGB, RGBA or PNG, zlib, chunked; delete and query.</td></tr>
+            <tr><td>CSI 16 t</td><td>Reports the cell size in pixels.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="panel-fig fig">
+        <div class="fig-frame">
+          <img src="{{ get_url(path='screenshots/images.png') }}" width="2432" height="1386" loading="lazy" alt="omp showing nuntio's icon inline on the left, Claude Code with a pasted screenshot attached as [Image #1] on the right">
+          <span class="marker" style="--x:55%;--y:84.5%" aria-hidden="true">1</span>
+          <span class="marker" style="--x:23.6%;--y:22.4%" aria-hidden="true">2</span>
+        </div>
+        <ol class="legend">
+          <li><span class="marker inline" aria-hidden="true">1</span><span>The pasted screenshot, attached as [Image #1].</span></li>
+          <li><span class="marker inline" aria-hidden="true">2</span><span>An image omp shows inline.</span></li>
+        </ol>
+        <figcaption><b>Fig. 2</b> omp (left) and Claude Code (right) side by side in nuntio.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="panel" id="agents" data-panel="3" aria-labelledby="agents-title">
+    <div class="crease" aria-hidden="true"><span>3/8 · herdr agent status</span></div>
+    <header class="panel-head">
       <div>
-        <p class="muted">Prefer a text editor? It's one plain TOML file at <code>~/.config/nuntio/config.toml</code> on every platform, and <code>nuntio-config</code> keeps your comments.</p>
-        <pre class="code"><code><span class="c-m">[font]</span>
-family = <span class="c-y">"JetBrains Mono"</span>
-size = <span class="c-o">14.0</span>
+        <h2 id="agents-title">Know which agent is waiting.</h2>
+      </div>
+      <div class="panel-key"><code class="chip">herdr.enabled = true</code></div>
+    </header>
+    <div class="panel-body">
+      <div class="panel-text">
+        <p>Run your agents in <a href="https://herdr.dev">herdr</a> and nuntio follows them. The status bar counts agents that are blocked, done or working, each tab gets a dot in the colour of its most urgent agent, and a banner tells you when an agent outside your view needs input. Click the count for the list, and an entry to jump there.</p>
+        <p>In a pane running herdr or tmux, nuntio's split, focus, resize and zoom shortcuts send the multiplexer's own keys, so the same keys work inside.</p>
+        <pre class="code"><code><span class="k">[herdr]</span>
+enabled = true
 
-<span class="c-c"># Follow the OS appearance</span>
-<span class="c-m">[theme]</span>
-light = <span class="c-y">"Tokyo Night Day"</span>
-dark = <span class="c-y">"Tokyo Night"</span></code></pre>
+<span class="k">[status_bar]</span>
+enabled = true
+items = <span class="s">[
+  "agents", "&lt;-&gt;",
+  "cpu", "memory", "datetime",
+]</span></code></pre>
+      </div>
+      <figure class="panel-fig fig">
+        <div class="term herdr" aria-hidden="true">
+          <div class="term-tabs">
+            <span class="term-tab active"><span class="dot" style="color:var(--a-working)"></span>app</span>
+            <span class="term-tab"><span class="dot" style="color:var(--a-blocked)"></span>api<span class="marker">1</span></span>
+            <span class="term-tab">notes</span>
+            <span class="term-tab plus">+</span>
+          </div>
+          <div class="term-body"><span class="t-green">~/code/app</span> <span class="t-blue">main</span> &#10095; herdr
+<span class="t-dim">claude  working · refactoring the session store</span>
+<span class="t-dim">codex   working · writing tests for parse_args</span></div>
+          <div class="banner"><span>herdr: claude in api needs input <span class="marker">2</span></span><span>×</span></div>
+          <div class="statusbar"><span class="agents">● 1 blocked · 2 working <span class="marker">3</span></span><span class="right"><span>cpu 4%</span><span>mem 9.8G</span><span>Thu 15 Oct 15:40</span></span></div>
+        </div>
+        <ol class="legend">
+          <li><span class="marker inline" aria-hidden="true">1</span><span>Each tab shows the state of its most urgent agent: red blocked, green done, blue working.</span></li>
+          <li><span class="marker inline" aria-hidden="true">2</span><span>A banner when an agent in another tab needs input.</span></li>
+          <li><span class="marker inline" aria-hidden="true">3</span><span>The <code>agents</code> status item; click it for the list of agents.</span></li>
+        </ol>
+        <figcaption><b>Fig. 3</b> Tab bar, banner and status bar with three herdr agents (illustration).</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="panel panel--mirror" id="notes" data-panel="4" aria-labelledby="notes-title">
+    <div class="crease" aria-hidden="true"><span>4/8 · Notes</span></div>
+    <header class="panel-head">
+      <div>
+        <h2 id="notes-title">Notes next to your agents.</h2>
+      </div>
+      <div class="panel-key"><span><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd></span><span class="or">/</span><span><kbd>⌘</kbd><kbd>Shift</kbd><kbd>N</kbd></span></div>
+    </header>
+    <div class="panel-body">
+      <div class="panel-text">
+        <p>Prompts that worked, todos for the next session: notes open in a tab or a split and are plain Markdown files in one folder (<code>notes.directory</code>), so grep, git and your editor work on them too.</p>
+        <ul>
+          <li>The preview renders headings, emphasis, code, lists, quotes and checkboxes as you type; the line under the cursor shows its Markdown.</li>
+          <li>Todos are <code>- [ ]</code> lines. Each note shows its progress, and <kbd>Ctrl</kbd><kbd>O</kbd> lists open todos across all notes.</li>
+          <li>Saved a second after you stop typing. Deleted notes go to <code>.trash</code>.</li>
+          <li><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd> opens the notes in a split next to the focused pane.</li>
+        </ul>
+      </div>
+      <figure class="panel-fig fig">
+        <div class="fig-frame">
+          <img src="{{ get_url(path='screenshots/notes.webp') }}" width="1440" height="900" loading="lazy" alt="The nuntio notes app: a list of three notes with todo progress such as 2/4, and the note agent-tasks rendered with a heading, checked and open todos, a quote and inline code">
+          <span class="marker" style="--x:17.4%;--y:15.8%" aria-hidden="true">1</span>
+          <span class="marker" style="--x:72%;--y:20.8%" aria-hidden="true">2</span>
+          <span class="marker" style="--x:72%;--y:29.2%" aria-hidden="true">3</span>
+        </div>
+        <ol class="legend">
+          <li><span class="marker inline" aria-hidden="true">1</span><span>Every note with its todo progress.</span></li>
+          <li><span class="marker inline" aria-hidden="true">2</span><span>A done todo, rendered.</span></li>
+          <li><span class="marker inline" aria-hidden="true">3</span><span>The line under the cursor shows its Markdown.</span></li>
+        </ol>
+        <figcaption><b>Fig. 4</b> The notes app in a nuntio tab. Sample notes.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="panel" id="settings" data-panel="5" aria-labelledby="settings-title">
+    <div class="crease" aria-hidden="true"><span>5/8 · Settings</span></div>
+    <header class="panel-head">
+      <div>
+        <h2 id="settings-title">Settings that only offer valid values.</h2>
+      </div>
+      <div class="panel-key"><span><kbd>Ctrl</kbd><kbd>,</kbd></span><span class="or">/</span><span><kbd>⌘</kbd><kbd>,</kbd></span></div>
+    </header>
+    <div class="panel-body">
+      <div class="panel-text">
+        <p><code>nuntio-config</code> opens in a pane and edits <code>~/.config/nuntio/config.toml</code>. Choices offer only valid values, themes and fonts preview as you move through them, and every change is written at once with your comments kept. Hot reload makes the window itself the preview.</p>
+        <p>Rather edit the file? Save it and nuntio applies it. A mistake shows a banner with the line, and the previous settings stay active. 20 themes are built in; add your own as TOML or <code>.itermcolors</code>, or set a light and a dark one that follow the OS.</p>
+        <pre class="code"><code><span class="k">[theme]</span>
+light = <span class="s">"Tokyo Night Day"</span>
+dark = <span class="s">"Tokyo Night"</span></code></pre>
+        <p class="links"><a href="{{ get_url(path='@/docs/config.md#editing-in-the-terminal') }}">Editing in the terminal →</a> <a href="{{ get_url(path='@/docs/config.md') }}">Configuration reference →</a></p>
+      </div>
+      <figure class="panel-fig fig">
+        <div class="fig-frame">
+          <img src="{{ get_url(path='screenshots/settings.webp') }}" width="1440" height="900" loading="lazy" alt="nuntio-config with its section list on the left, including Notes, herdr and tmux, and the theme picker open, showing a colour preview for each of the 20 built-in themes">
+          <span class="marker" style="--x:11.5%;--y:15.8%" aria-hidden="true">1</span>
+          <span class="marker" style="--x:24.6%;--y:36.8%" aria-hidden="true">2</span>
+        </div>
+        <ol class="legend">
+          <li><span class="marker inline" aria-hidden="true">1</span><span>Settings grouped by section.</span></li>
+          <li><span class="marker inline" aria-hidden="true">2</span><span>Each theme with a colour preview; the window previews it as you move.</span></li>
+        </ol>
+        <figcaption><b>Fig. 5</b> nuntio-config choosing a theme.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="panel panel--mirror" id="wsl" data-panel="6" aria-labelledby="wsl-title">
+    <div class="crease" aria-hidden="true"><span>6/8 · WSL</span></div>
+    <header class="panel-head">
+      <div>
+        <h2 id="wsl-title">A real Linux PTY on Windows.</h2>
+      </div>
+      <div class="panel-key"><code class="chip">shell = { wsl = "Ubuntu" }</code></div>
+    </header>
+    <div class="panel-body">
+      <div class="panel-text">
+        <p>WSL tabs don't go through ConPTY. nuntio starts its helper <code>nuntio-wsl</code> inside the distribution; it owns a Linux PTY and sends the output over plain pipes, byte for byte. Inline images land where they should, and tab titles follow the program running in the distribution.</p>
+        <ul>
+          <li>Every distribution in the shell menu</li>
+          <li>herdr and tmux found inside each distribution</li>
+          <li>Working directories carried between <code>C:\</code> and <code>/mnt/c</code></li>
+          <li>Falls back to ConPTY, with a banner, if the helper fails to start</li>
+        </ul>
+        <p class="links"><a href="{{ get_url(path='@/docs/wsl.md') }}">How WSL works in nuntio →</a></p>
+      </div>
+      <figure class="panel-fig fig">
+        <div class="fig-frame">
+          <img class="plain" src="{{ get_url(path='figures/wsl-relay.svg') }}" width="720" height="400" loading="lazy" alt="nuntio.exe talks to wsl.exe over pipes; inside WSL, nuntio-wsl owns a Linux PTY that runs the shell. ConPTY is used only as a fallback.">
+        </div>
+        <figcaption><b>Fig. 6</b> The WSL relay.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="panel" id="protocols" data-panel="7" aria-labelledby="protocols-title">
+    <div class="crease" aria-hidden="true"><span>7/8 · Protocols</span></div>
+    <header class="panel-head">
+      <div>
+        <h2 id="protocols-title">What <span class="lc">nuntio</span> speaks.</h2>
+      </div>
+      <div class="panel-key"><code class="chip">TERM=xterm-256color</code></div>
+    </header>
+    <div class="panel-body">
+      <div class="panel-wide">
+        <div class="matrix-wrap">
+          <table class="matrix">
+            <thead><tr><th scope="col">Protocol</th><th scope="col">Support</th><th scope="col">Notes</th></tr></thead>
+            <tbody>
+              <tr><td>Kitty keyboard protocol</td><td class="mark">● Yes</td><td>All five flags</td></tr>
+              <tr><td>Kitty graphics protocol</td><td class="mark">◐ Partly</td><td>Direct transmission; no Unicode placeholders, relative placements or animation</td></tr>
+              <tr><td>iTerm2 inline images (OSC 1337)</td><td class="mark">● Yes</td><td>PNG, JPEG, GIF, WebP, BMP</td></tr>
+              <tr><td>Sixel</td><td class="mark">○ No</td><td></td></tr>
+              <tr><td>Hyperlinks (OSC 8)</td><td class="mark">● Yes</td><td>Ctrl-click (⌘-click) opens</td></tr>
+              <tr><td>Clipboard (OSC 52)</td><td class="mark">◐ Partly</td><td>Write only; programs can't read the clipboard</td></tr>
+              <tr><td>Working directory (OSC 7, OSC 9;9)</td><td class="mark">● Yes</td><td>Splits start there, and new tabs with <code>tabs.inherit_directory</code></td></tr>
+              <tr><td>Synchronized output (DEC 2026)</td><td class="mark">● Yes</td><td></td></tr>
+              <tr><td>Focus events, bracketed paste</td><td class="mark">● Yes</td><td></td></tr>
+              <tr><td>Mouse (SGR 1006, 1002, 1003)</td><td class="mark">● Yes</td><td></td></tr>
+              <tr><td>Styled underlines (curly, dotted, dashed)</td><td class="mark">● Yes</td><td></td></tr>
+              <tr><td>Desktop notifications (OSC 9, 777, 99)</td><td class="mark">○ No</td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="links protocols-more"><a href="{{ get_url(path='@/docs/protocols.md') }}">Full protocol reference →</a></p>
       </div>
     </div>
   </section>
 
-  <section class="section alt">
-    <div class="wrap">
-      <h2>Images in, images out.</h2>
-      <p class="muted">Programs show PNG, JPEG, GIF, WebP and BMP inline with iTerm2's protocol, and the pictures scroll and clear like text. omp uses it on its own, also in WSL on Windows. Paste a screenshot and nuntio pastes the path of a PNG file, which Claude Code and omp attach to your prompt.</p>
-      <img class="shot" src="{{ get_url(path='screenshots/images.png') }}" width="2432" height="1386" loading="lazy" alt="omp showing nuntio's icon inline next to Claude Code with a pasted screenshot attached as [Image #1]">
-    </div>
-  </section>
-
-  <section id="download" class="section download">
-    <div class="wrap">
-      <h2>Download</h2>
-      {% if release %}
-      <p class="muted">nuntio {{ release.tag_name }}, released {{ release.published_at | date(format="%B %-d, %Y") }} · <a href="{{ release.html_url }}">Release notes</a></p>
-      {# Radio buttons make the tabs work without JS; the script below picks the visitor's OS. #}
-      <div class="term dl">
-        <input type="radio" name="dl-os" id="dl-mac" checked>
-        <input type="radio" name="dl-os" id="dl-linux">
-        <input type="radio" name="dl-os" id="dl-windows">
-        <div class="term-bar">
-          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-          <label class="term-tab" for="dl-mac">macOS</label><label class="term-tab" for="dl-linux">Linux</label><label class="term-tab" for="dl-windows">Windows</label>
-        </div>
-        <div class="dl-panel" data-os="mac">
-          <div class="dl-files">
-            {{ <download assets={release.assets} ext=".dmg" label="Disk image" primary={true} /> }}
-            <p class="dl-hint">Universal: Intel and Apple Silicon, macOS 11 or later</p>
-          </div>
-          <pre class="pane"><span class="c-c"># Not signed yet. Allow the first start in System Settings →</span>
-<span class="c-c"># Privacy &amp; Security → Open Anyway, or clear the quarantine flag:</span>
-<span class="c-g">❯</span> xattr -dr com.apple.quarantine /Applications/nuntio.app</pre>
-        </div>
-        <div class="dl-panel" data-os="linux">
-          <div class="dl-files">
-            {{ <download assets={release.assets} ext=".AppImage" label="AppImage" primary={true} /> }}
-            {{ <download assets={release.assets} ext=".deb" label="Debian / Ubuntu" /> }}
-            {{ <download assets={release.assets} ext=".tar.gz" label="Tarball" /> }}
-            <p class="dl-hint">x86_64</p>
-          </div>
-          <pre class="pane"><span class="c-c"># Any distribution</span>
-<span class="c-g">❯</span> chmod +x {{ <asset_name assets={release.assets} ext=".AppImage" /> }}
-<span class="c-g">❯</span> ./{{ <asset_name assets={release.assets} ext=".AppImage" /> }}
-
-<span class="c-c"># Debian / Ubuntu</span>
-<span class="c-g">❯</span> sudo apt install ./{{ <asset_name assets={release.assets} ext=".deb" /> }}</pre>
-        </div>
-        <div class="dl-panel" data-os="windows">
-          <div class="dl-files">
-            {{ <download assets={release.assets} ext=".exe" label="Installer" primary={true} /> }}
-            {{ <download assets={release.assets} ext=".zip" label="Zip archive" /> }}
-            <p class="dl-hint">x86_64</p>
-          </div>
-          <pre class="pane"><span class="c-c"># Run the installer (no admin rights needed), or</span>
-<span class="c-c"># unpack the archive and run nuntio.exe.</span>
-<span class="c-g">❯</span> Expand-Archive {{ <asset_name assets={release.assets} ext=".zip" /> }}
-
-<span class="c-c"># Not signed yet: SmartScreen may ask you to</span>
-<span class="c-c"># confirm with More info → Run anyway.</span></pre>
-        </div>
+  <section class="panel download" id="download" data-panel="8" aria-labelledby="download-title">
+    <div class="crease" aria-hidden="true"><span>8/8 · Download</span></div>
+    <header class="panel-head">
+      <div>
+        <h2 id="download-title">Install <span class="lc">nuntio{% if release %} {{ release.tag_name }}{% endif %}</span>.</h2>
       </div>
-      <p class="note"><a href="{{ get_url(path='@/docs/getting-started.md') }}#install">Installation details</a> · <a href="{{ get_url(path='@/docs/getting-started.md') }}#build-from-source">Build from source</a></p>
-      {% else %}
-      <p class="muted">Packages for macOS, Linux and Windows are on GitHub.</p>
-      <p><a class="button" href="{{ releases_url }}">Latest release on GitHub</a></p>
-      {% endif %}
+      {% if release %}<div class="panel-key"><span>Released {{ released }}</span><a href="{{ release.html_url }}">Release notes</a></div>{% endif %}
+    </header>
+    {% if release %}
+    {# Radio buttons make the tabs work without JS; site.js picks the visitor's OS. #}
+    <div class="dl-insert">
+      <input type="radio" name="dl-os" id="dl-linux" checked>
+      <input type="radio" name="dl-os" id="dl-mac">
+      <input type="radio" name="dl-os" id="dl-windows">
+      <div class="dl-tabs">
+        <label for="dl-linux">Linux</label><label for="dl-mac">macOS</label><label for="dl-windows">Windows</label>
+      </div>
+      <div class="dl-panel" data-os="linux">
+        <div class="dl-files">
+          {{ <download assets={release.assets} ext=".AppImage" label="AppImage" primary={true} /> }}
+          {{ <download assets={release.assets} ext=".deb" label="Debian / Ubuntu" /> }}
+          {{ <download assets={release.assets} ext=".tar.gz" label="Tarball" /> }}
+          <p class="dl-hint">x86_64</p>
+        </div>
+        <pre class="dl-cmd"><span class="c"># Any distribution</span>
+<span class="p">❯</span> chmod +x {{ <asset_name assets={release.assets} ext=".AppImage" /> }}
+<span class="p">❯</span> ./{{ <asset_name assets={release.assets} ext=".AppImage" /> }}
+
+<span class="c"># Debian / Ubuntu</span>
+<span class="p">❯</span> sudo apt install ./{{ <asset_name assets={release.assets} ext=".deb" /> }}</pre>
+      </div>
+      <div class="dl-panel" data-os="mac">
+        <div class="dl-files">
+          {{ <download assets={release.assets} ext=".dmg" label="Disk image" primary={true} /> }}
+          <p class="dl-hint">Universal: Intel and Apple Silicon, macOS 11 or later</p>
+        </div>
+        <pre class="dl-cmd"><span class="c"># Not signed yet. Allow the first start in System Settings →</span>
+<span class="c"># Privacy &amp; Security → Open Anyway, or clear the quarantine flag:</span>
+<span class="p">❯</span> xattr -dr com.apple.quarantine /Applications/nuntio.app</pre>
+      </div>
+      <div class="dl-panel" data-os="windows">
+        <div class="dl-files">
+          {{ <download assets={release.assets} ext=".exe" label="Installer" primary={true} /> }}
+          {{ <download assets={release.assets} ext=".zip" label="Zip archive" /> }}
+          <p class="dl-hint">x86_64</p>
+        </div>
+        <pre class="dl-cmd"><span class="c"># Run the installer (no admin rights needed), or</span>
+<span class="c"># unpack the archive and run nuntio.exe.</span>
+<span class="p">❯</span> Expand-Archive {{ <asset_name assets={release.assets} ext=".zip" /> }}
+
+<span class="c"># Not signed yet: SmartScreen may ask you to</span>
+<span class="c"># confirm with More info → Run anyway.</span></pre>
+      </div>
     </div>
+    <p class="after"><a href="{{ get_url(path='@/docs/getting-started.md') }}#install">Installation details</a> <a href="{{ get_url(path='@/docs/getting-started.md') }}#build-from-source">Build from source</a></p>
+    {% else %}
+    <div class="fallback">
+      <p>Packages for Linux, macOS and Windows are on GitHub.</p>
+      <a class="btn-primary" href="{{ releases_url }}">Latest release on GitHub</a>
+    </div>
+    {% endif %}
   </section>
-<script>
-  // Point the hero button at the visitor's platform. Without JS it jumps to #download.
-  (function () {
-    var ua = navigator.userAgent;
-    // iPhones and iPads (which claim to be a Mac) get no macOS download.
-    var mobile = /iPhone|iPad|iPod/.test(ua) || navigator.maxTouchPoints > 1;
-    var os = /Mac/.test(ua) && !mobile ? "mac" : /Win/.test(ua) ? "windows" : /Linux|X11/.test(ua) && !/Android/.test(ua) ? "linux" : null;
-    if (!os) return;
-    var tab = document.getElementById("dl-" + os);
-    if (!tab) return;
-    tab.checked = true;
-    var link = document.querySelector('.dl-panel[data-os="' + os + '"] a.primary');
-    if (!link) return;
-    document.getElementById("hero-download").href = link.href;
-    var names = { mac: "macOS", linux: "Linux", windows: "Windows" };
-    document.getElementById("hero-hint").innerHTML =
-      "For " + names[os] + " · <a href=\"#download\">other platforms</a>";
-  })();
-</script>
 {% endblock %}
