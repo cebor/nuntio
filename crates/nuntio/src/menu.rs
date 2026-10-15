@@ -274,7 +274,7 @@ impl Menu {
     /// The menu of shells for a new tab: entry `i` runs
     /// `Action::NewTabWithShell(i)`; the first, the default shell, shows the
     /// `new_tab` shortcut. A "nuntio" section follows with "Open Notes"
-    /// (only with `notes`) and "Settings…", then the multiplexer sections.
+    /// (only with `notes`) and "Settings", then the multiplexer sections.
     pub fn shells(
         anchor: Anchor,
         names: &[String],
@@ -835,7 +835,7 @@ mod tests {
             assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
         }
         let settings = usize::from(bindings.shortcut(Action::OpenSettings).is_some());
-        for expected in ["NUNTIO", "Settings…"] {
+        for expected in ["NUNTIO", "Settings"] {
             assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
         }
         assert!(!strings.contains(&"Open Notes"), "{strings:?}");
@@ -855,7 +855,7 @@ mod tests {
         let (_, texts) = menu.draw(view(1000.0, 800.0), &palette());
         let strings: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
         let notes = bindings.shortcut(Action::OpenNotes).unwrap();
-        for expected in ["NUNTIO", "Open Notes", notes.as_str(), "Settings…"] {
+        for expected in ["NUNTIO", "Open Notes", notes.as_str(), "Settings"] {
             assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
         }
         let shortcuts = texts.iter().filter(|t| t.text.contains('+')).count();

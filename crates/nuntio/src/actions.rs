@@ -164,7 +164,7 @@ impl Action {
             Self::ScrollLineDown => "Scroll Line Down",
             Self::OpenNotes => "Open Notes",
             Self::OpenNotesSplit => "Open Notes in Split",
-            Self::OpenSettings => "Settings…",
+            Self::OpenSettings => "Settings",
             Self::ReloadConfig => "Reload Config",
             Self::CheckForUpdates => "Check for Updates…",
             Self::OpenAgentsMenu => "Agents…",
