@@ -67,9 +67,16 @@ pub fn encode(input: &KeyInput, mode: TermMode) -> Option<Vec<u8>> {
     // character follows as text. Windows reports it with its character as
     // `unmodified`, which would send "CSI 94u" and leave a stray "^" before
     // "ê". With Ctrl or Alt nothing composes, so it is reported as a key.
+    // A dead key pressed twice (or followed by a key it doesn't compose
+    // with) carries the typed text itself, e.g. "^^" on Windows, and is sent
+    // like any other text.
     let altgr_held = cfg!(windows) && input.ctrl && input.meta;
     let composes = (!input.ctrl && !input.meta) || altgr_held;
-    if !all_keys && composes && matches!(input.press.logical, Key::Dead(_)) {
+    if !all_keys
+        && composes
+        && matches!(input.press.logical, Key::Dead(_))
+        && printable(input).is_none()
+    {
         return None;
     }
     let event = match input.press.kind {
@@ -563,6 +570,28 @@ mod tests {
         assert_eq!(dead().sends(ALL_KEYS | TEXT), "\x1b[94u");
         assert_eq!(dead().ctrl().sends(DISAMBIGUATE), "\x1b[94;5u");
         assert_eq!(dead().meta().sends(DISAMBIGUATE), "\x1b[94;3u");
+    }
+
+    #[test]
+    fn a_dead_key_pressed_twice_types_its_character_twice() {
+        // Windows: "^" twice on a German layout, then Shift+"´" twice.
+        let circumflex = || ch("^").logical(Key::Dead(Some('^'))).text(Some("^^"));
+        assert_eq!(circumflex().sends(DISAMBIGUATE), "^^");
+        assert_eq!(circumflex().sends(DISAMBIGUATE | EVENTS | ALTERNATES), "^^");
+        assert_eq!(
+            circumflex()
+                .text(None)
+                .event(KeyEventKind::Release)
+                .encode(DISAMBIGUATE | EVENTS),
+            None
+        );
+        let grave = || {
+            ch("´")
+                .shift_held()
+                .logical(Key::Dead(Some('`')))
+                .text(Some("``"))
+        };
+        assert_eq!(grave().sends(DISAMBIGUATE), "``");
     }
 
     #[cfg(not(windows))]
