@@ -21,7 +21,7 @@ pub enum Launch {
     /// argv, never empty.
     Command(Vec<String>),
     /// A program shipped with nuntio: `nuntio-config` or `nuntio-apps`.
-    /// `name` is what the `shell` status bar item shows.
+    /// `name` is what the `shell` status bar item and the tab title show.
     Helper {
         program: String,
         args: Vec<String>,

@@ -519,6 +519,13 @@ pub static SETTINGS: &[Setting] = &[
         "<data dir>/nuntio/notes",
     ),
     setting(
+        "notes.in_shell_menu",
+        Section::Notes,
+        "In shell menu",
+        Kind::Bool,
+        "Offer \"Open Notes\" in the shell menu (right-click on the tab bar's \"+\").",
+    ),
+    setting(
         "herdr.enabled",
         Section::Herdr,
         "Enabled",

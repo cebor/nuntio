@@ -109,6 +109,9 @@ pub struct Pane {
     pub shell: Option<ShellChoice>,
     /// Title set by the application (OSC 0/2).
     pub title: Option<String>,
+    /// Fixed tab title of a helper pane (`Launch::Helper`'s name: "Notes",
+    /// "Settings"), shown in every `tabs.title` mode.
+    fixed_title: Option<&'static str>,
     /// Whether `title` was set while a program ran in the foreground, not
     /// the shell at its prompt. Cleared when the shell is seen at its prompt.
     title_from_program: bool,
@@ -162,6 +165,7 @@ impl Pane {
         shell_name: String,
         wsl: Option<Distro>,
         shell: Option<ShellChoice>,
+        fixed_title: Option<&'static str>,
     ) -> Self {
         Self {
             id,
@@ -171,6 +175,7 @@ impl Pane {
             shell,
             title: None,
             title_from_program: false,
+            fixed_title,
             size: None,
             resized: None,
             title_cache: None,
@@ -215,6 +220,9 @@ impl Pane {
     }
 
     fn title(&mut self, mode: TabTitle) -> String {
+        if let Some(title) = self.fixed_title {
+            return title.to_owned();
+        }
         let wants_directory = matches!(mode, TabTitle::Auto | TabTitle::Path);
         let foreground = self.term.foreground_info(wants_directory);
         let shell_idle = (mode == TabTitle::Auto)
@@ -650,13 +658,20 @@ impl WindowState {
                 .or_else(|| self.new_tab_anchor(config))
         };
         let anchor = anchor.unwrap_or_else(|| self.centered_anchor(config));
-        self.show_menu(Menu::shells(anchor, names, extra, bindings));
+        self.show_menu(Menu::shells(
+            anchor,
+            names,
+            config.notes.in_shell_menu,
+            extra,
+            bindings,
+        ));
     }
 
     /// Rebuild the open shell menu with new multiplexer sections, keeping
     /// its place and selection. Nothing when another menu, or none, is open.
     pub fn refresh_shell_menu(
         &mut self,
+        config: &Config,
         names: &[String],
         extra: &[MenuSection],
         bindings: &Bindings,
@@ -664,7 +679,13 @@ impl WindowState {
         let Some(old) = self.menu.as_ref().filter(|m| m.kind() == MenuKind::Shells) else {
             return;
         };
-        let mut menu = Menu::shells(old.anchor(), names, extra, bindings);
+        let mut menu = Menu::shells(
+            old.anchor(),
+            names,
+            config.notes.in_shell_menu,
+            extra,
+            bindings,
+        );
         menu.keep_position(old);
         if self.menu.as_ref() != Some(&menu) {
             self.menu = Some(menu);

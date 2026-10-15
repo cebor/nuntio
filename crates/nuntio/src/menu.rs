@@ -273,10 +273,12 @@ impl Menu {
 
     /// The menu of shells for a new tab: entry `i` runs
     /// `Action::NewTabWithShell(i)`; the first, the default shell, shows the
-    /// `new_tab` shortcut. The multiplexer sections follow.
+    /// `new_tab` shortcut; with `notes`, "Open Notes" ends that section. The
+    /// multiplexer sections follow.
     pub fn shells(
         anchor: Anchor,
         names: &[String],
+        notes: bool,
         extra: &[MenuSection],
         bindings: &Bindings,
     ) -> Self {
@@ -291,6 +293,17 @@ impl Menu {
             },
             current: false,
         }));
+        if notes {
+            rows.push(Row::Entry {
+                label: Action::OpenNotes
+                    .label()
+                    .expect("OpenNotes has a label")
+                    .to_owned(),
+                action: Action::OpenNotes,
+                detail: bindings.shortcut(Action::OpenNotes),
+                current: false,
+            });
+        }
         push_sections(&mut rows, extra);
         Self::with_rows(MenuKind::Shells, anchor, rows)
     }
@@ -799,7 +812,7 @@ mod tests {
         };
         let names = ["Ubuntu".to_owned(), "PowerShell 7".to_owned()];
         let bindings = Bindings::platform_defaults();
-        let menu = Menu::shells(anchor, &names, &[], &bindings);
+        let menu = Menu::shells(anchor, &names, false, &[], &bindings);
         assert_eq!(menu.kind(), MenuKind::Shells);
         assert_eq!(
             entries(&menu),
@@ -811,8 +824,27 @@ mod tests {
         for expected in ["NEW TAB WITH", "Ubuntu", "PowerShell 7", new_tab.as_str()] {
             assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
         }
+        assert!(!strings.contains(&"Open Notes"), "{strings:?}");
         let shortcuts = texts.iter().filter(|t| t.text.contains('+')).count();
         assert_eq!(shortcuts, 1, "{strings:?}");
+
+        let menu = Menu::shells(anchor, &names, true, &[], &bindings);
+        assert_eq!(
+            entries(&menu),
+            [
+                Action::NewTabWithShell(0),
+                Action::NewTabWithShell(1),
+                Action::OpenNotes
+            ]
+        );
+        let (_, texts) = menu.draw(view(1000.0, 800.0), &palette());
+        let strings: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
+        let notes = bindings.shortcut(Action::OpenNotes).unwrap();
+        for expected in ["Open Notes", notes.as_str()] {
+            assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
+        }
+        let shortcuts = texts.iter().filter(|t| t.text.contains('+')).count();
+        assert_eq!(shortcuts, 2, "{strings:?}");
     }
 
     #[test]

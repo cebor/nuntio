@@ -109,6 +109,10 @@ impl Core {
             }
             _ => None,
         };
+        let fixed_title = match &launch {
+            Launch::Helper { name, .. } => Some(*name),
+            _ => None,
+        };
         let mut transport = Transport::Pty;
         let program = match launch {
             Launch::Command(mut argv) => Program::Command(Shell {
@@ -150,7 +154,7 @@ impl Core {
         let term = TermHandle::spawn(options, size, move |event| {
             let _ = proxy.send_event(UserEvent::Term(id, event));
         })?;
-        Ok(Pane::new(id, term, name, distro, own_shell))
+        Ok(Pane::new(id, term, name, distro, own_shell, fixed_title))
     }
 
     /// The first pane, as the command line asks for it, otherwise the

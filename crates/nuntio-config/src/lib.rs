@@ -523,12 +523,23 @@ pub struct Mouse {
     pub copy_on_select: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Notes {
     /// Folder of the Markdown notes: an absolute path or `~/…`.
     /// Unset: `<data dir>/nuntio/notes`.
     pub directory: Option<String>,
+    /// The shell menu offers "Open Notes".
+    pub in_shell_menu: bool,
+}
+
+impl Default for Notes {
+    fn default() -> Self {
+        Self {
+            directory: None,
+            in_shell_menu: true,
+        }
+    }
 }
 
 impl Notes {

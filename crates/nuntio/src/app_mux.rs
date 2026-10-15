@@ -193,7 +193,7 @@ impl Core {
         if state.menu_kind() == Some(MenuKind::Shells) {
             let sections = self.mux_sections(state);
             let names: Vec<String> = self.shell_choices.iter().map(|c| c.name.clone()).collect();
-            state.refresh_shell_menu(&names, &sections, &self.bindings);
+            state.refresh_shell_menu(&self.config, &names, &sections, &self.bindings);
         }
     }
 

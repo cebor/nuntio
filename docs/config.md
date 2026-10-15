@@ -58,7 +58,7 @@ If you edit the file in another editor while `nuntio-config` is open, it reloads
 
 ## Notes
 
-<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> (<kbd>Cmd</kbd><kbd>Shift</kbd><kbd>N</kbd> on macOS, the `open_notes` action) opens your notes in a new tab, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd> (<kbd>Cmd</kbd><kbd>Opt</kbd><kbd>Shift</kbd><kbd>N</kbd>, `open_notes_split`) next to the focused pane. You can also run `nuntio-apps notes` in any nuntio shell; `--dir <path>` uses another folder.
+<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> (<kbd>Cmd</kbd><kbd>Shift</kbd><kbd>N</kbd> on macOS, the `open_notes` action) opens your notes in a new tab, <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Shift</kbd><kbd>N</kbd> (<kbd>Cmd</kbd><kbd>Opt</kbd><kbd>Shift</kbd><kbd>N</kbd>, `open_notes_split`) next to the focused pane. You can also run `nuntio-apps notes` in any nuntio shell; `--dir <path>` uses another folder. The shell menu (right-click on the tab bar's "+") has an "Open Notes" entry too, unless `notes.in_shell_menu` is off.
 
 - Each note is a Markdown file in one folder: `notes.directory` (see [Options](#options)), by default `~/.local/share/nuntio/notes` on Linux, `~/Library/Application Support/nuntio/notes` on macOS and `%APPDATA%\nuntio\notes` on Windows. The title is the file name.
 - The editor shows Markdown rendered (headings, bold, italic, code, lists, quotes, checkboxes) except on the line with the cursor, which shows its source.
@@ -173,6 +173,7 @@ copy_on_select = false
 [notes]
 # Folder of the notes. Default: <data dir>/nuntio/notes.
 # directory = "~/notes"
+in_shell_menu = true
 
 [herdr]
 enabled = false
@@ -317,6 +318,7 @@ With `check` on, nuntio asks GitHub once a day whether a newer release exists. N
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `directory` | string | `<data dir>/nuntio/notes` | Folder of the Markdown notes that `nuntio-apps notes` shows: an absolute path, `~` or `~/…`. Created when missing. The default is `~/.local/share/nuntio/notes` on Linux, `~/Library/Application Support/nuntio/notes` on macOS and `%APPDATA%\nuntio\notes` on Windows. |
+| `in_shell_menu` | bool | `true` | Offer "Open Notes" in the shell menu (right-click on the tab bar's "+"). |
 
 ### `[herdr]`
 
