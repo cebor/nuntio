@@ -407,7 +407,7 @@ The same works for PowerShell and cmd on Windows: a directory reported by OSC 7 
 
 The shell menu opens a new tab with a shell other than `shell`. Open it by clicking the `shell` status bar item, right-clicking the tab bar's "+" button, choosing "New Tab With…" in the actions menu (or the macOS Shell menu), or with the `open_shell_menu` action (<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Alt</kbd><kbd>T</kbd>, <kbd>Cmd</kbd><kbd>Opt</kbd><kbd>T</kbd> on macOS). Splits run the shell of the pane they split; new tabs run `shell`.
 
-The menu lists the default shell first, then each `[[profiles]]` entry in order, then the shells found on the system: on Windows `pwsh`, `powershell`, `cmd` and `nu` if they are on `PATH`, and every WSL distribution; elsewhere the shells in `/etc/shells`. A found shell is left out if an earlier entry has the same name or runs the same shell.
+The menu lists the default shell first, then each `[[profiles]]` entry in order, then the shells found on the system: on Windows `pwsh`, `powershell`, `cmd` and `nu` if they are on `PATH`, and every WSL distribution; elsewhere the shells in `/etc/shells`. A found shell is left out if an earlier entry has the same name or runs the same shell. A "nuntio" section below the shells opens the notes (unless `notes.in_shell_menu` is off) or the settings in a new tab.
 
 | Key | Type | Description |
 |---|---|---|
