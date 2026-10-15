@@ -24,6 +24,11 @@ pub struct Modes {
 /// switched on. The modes are switched off again if the program panics: the
 /// panic message goes to a terminal that keeps them on otherwise.
 pub fn init(modes: Modes) -> Result<ratatui::DefaultTerminal> {
+    // crossterm turns colours off under `NO_COLOR` but still writes `ESC[;m`
+    // for them, which resets bold, strikethrough and every other attribute.
+    // These apps are nuntio's own UI and their theme previews need colour,
+    // so colour output is forced.
+    ratatui::crossterm::style::force_color_output(true);
     static HOOK: std::sync::Once = std::sync::Once::new();
     let terminal = ratatui::try_init().context("cannot set up the terminal")?;
     HOOK.call_once(|| {
