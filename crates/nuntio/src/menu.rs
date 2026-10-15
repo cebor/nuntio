@@ -273,8 +273,8 @@ impl Menu {
 
     /// The menu of shells for a new tab: entry `i` runs
     /// `Action::NewTabWithShell(i)`; the first, the default shell, shows the
-    /// `new_tab` shortcut; with `notes`, "Open Notes" ends that section. The
-    /// multiplexer sections follow.
+    /// `new_tab` shortcut. With `notes`, a "Notes" section with "Open Notes"
+    /// follows, then the multiplexer sections.
     pub fn shells(
         anchor: Anchor,
         names: &[String],
@@ -294,6 +294,7 @@ impl Menu {
             current: false,
         }));
         if notes {
+            rows.push(Row::Heading("Notes".into()));
             rows.push(Row::Entry {
                 label: Action::OpenNotes
                     .label()
@@ -840,7 +841,7 @@ mod tests {
         let (_, texts) = menu.draw(view(1000.0, 800.0), &palette());
         let strings: Vec<&str> = texts.iter().map(|t| t.text.as_str()).collect();
         let notes = bindings.shortcut(Action::OpenNotes).unwrap();
-        for expected in ["Open Notes", notes.as_str()] {
+        for expected in ["NOTES", "Open Notes", notes.as_str()] {
             assert!(strings.contains(&expected), "{expected:?} in {strings:?}");
         }
         let shortcuts = texts.iter().filter(|t| t.text.contains('+')).count();
