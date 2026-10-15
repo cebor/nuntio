@@ -1,0 +1,769 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-15T14:01:19Z",
+  "title": "Design System: nuntio website",
+  "extensions": {
+    "colorMeta": {
+      "signal": {
+        "role": "primary",
+        "displayName": "Signal Orange",
+        "canonical": "#EA5F1E",
+        "oklch": "oklch(66% 0.186 42)",
+        "tonalRamp": [
+          "#3b0000",
+          "#620000",
+          "#890000",
+          "#b12600",
+          "#d94f00",
+          "#ff7539",
+          "#ff9a60",
+          "#ffc086"
+        ]
+      },
+      "signal-ink": {
+        "role": "primary",
+        "displayName": "Signal Ink",
+        "canonical": "#B23C0A",
+        "oklch": "oklch(52% 0.162 39)",
+        "tonalRamp": [
+          "#360000",
+          "#5c0000",
+          "#820000",
+          "#a93300",
+          "#d0582e",
+          "#f87c53",
+          "#ffa177",
+          "#ffc69b"
+        ]
+      },
+      "on-signal": {
+        "role": "neutral",
+        "displayName": "Ink On Signal",
+        "canonical": "#141414",
+        "oklch": "oklch(19% 0.000 90)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "desk": {
+        "role": "neutral",
+        "displayName": "Desk",
+        "canonical": "#D9D3C4",
+        "oklch": "oklch(87% 0.021 89)",
+        "tonalRamp": [
+          "#0f0b03",
+          "#292519",
+          "#474235",
+          "#666154",
+          "#878274",
+          "#aaa596",
+          "#cfc9ba",
+          "#f4eedf"
+        ]
+      },
+      "stock": {
+        "role": "neutral",
+        "displayName": "Card Stock",
+        "canonical": "#EDE9DF",
+        "oklch": "oklch(93% 0.014 89)",
+        "tonalRamp": [
+          "#0e0b05",
+          "#28251d",
+          "#45423a",
+          "#646158",
+          "#868279",
+          "#a8a59b",
+          "#cdc9bf",
+          "#f2eee4"
+        ]
+      },
+      "stock-2": {
+        "role": "neutral",
+        "displayName": "Stock Shade",
+        "canonical": "#E3DED1",
+        "oklch": "oklch(90% 0.018 89)",
+        "tonalRamp": [
+          "#0e0b04",
+          "#29251b",
+          "#464237",
+          "#656156",
+          "#878276",
+          "#a9a598",
+          "#cec9bc",
+          "#f3eee1"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#141414",
+        "oklch": "oklch(19% 0.000 90)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink Soft",
+        "canonical": "#4A4740",
+        "oklch": "oklch(40% 0.012 88)",
+        "tonalRamp": [
+          "#0d0b06",
+          "#28251e",
+          "#45423b",
+          "#64615a",
+          "#85827a",
+          "#a8a59d",
+          "#ccc9c0",
+          "#f2eee5"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Crease Rule",
+        "canonical": "#B9B2A2",
+        "oklch": "oklch(76% 0.024 87)",
+        "tonalRamp": [
+          "#0f0a02",
+          "#2a2418",
+          "#474134",
+          "#676152",
+          "#888273",
+          "#aba495",
+          "#d0c9b8",
+          "#f5eedd"
+        ]
+      },
+      "back-cover": {
+        "role": "neutral",
+        "displayName": "Back Cover",
+        "canonical": "#141414",
+        "oklch": "oklch(19% 0.000 90)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "back-cover-ink": {
+        "role": "neutral",
+        "displayName": "Back Cover Ink",
+        "canonical": "#EDE9DF",
+        "oklch": "oklch(93% 0.014 89)",
+        "tonalRamp": [
+          "#0e0b05",
+          "#28251d",
+          "#45423a",
+          "#646158",
+          "#868279",
+          "#a8a59b",
+          "#cdc9bf",
+          "#f2eee4"
+        ]
+      },
+      "signal-night": {
+        "role": "primary",
+        "displayName": "Signal Orange (night)",
+        "canonical": "#F26A2A",
+        "oklch": "oklch(68% 0.183 43)",
+        "tonalRamp": [
+          "#3a0000",
+          "#610000",
+          "#880000",
+          "#af2900",
+          "#d75100",
+          "#ff7639",
+          "#ff9c60",
+          "#ffc286"
+        ]
+      },
+      "signal-ink-night": {
+        "role": "primary",
+        "displayName": "Signal Ink (night)",
+        "canonical": "#F58A4F",
+        "oklch": "oklch(74% 0.150 48)",
+        "tonalRamp": [
+          "#320000",
+          "#570000",
+          "#7c1800",
+          "#a13e00",
+          "#c86121",
+          "#ef8549",
+          "#ffa96e",
+          "#ffce93"
+        ]
+      },
+      "desk-night": {
+        "role": "neutral",
+        "displayName": "Desk (night)",
+        "canonical": "#0A0A09",
+        "oklch": "oklch(14% 0.002 107)",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#252524",
+          "#424241",
+          "#616160",
+          "#828281",
+          "#a5a5a3",
+          "#c9c9c7",
+          "#eeeeed"
+        ]
+      },
+      "stock-night": {
+        "role": "neutral",
+        "displayName": "Card Stock (night)",
+        "canonical": "#121110",
+        "oklch": "oklch(18% 0.003 68)",
+        "tonalRamp": [
+          "#0c0b0a",
+          "#262524",
+          "#434240",
+          "#626160",
+          "#838281",
+          "#a6a5a3",
+          "#cac9c7",
+          "#f0eeed"
+        ]
+      },
+      "stock-2-night": {
+        "role": "neutral",
+        "displayName": "Stock Shade (night)",
+        "canonical": "#1C1A17",
+        "oklch": "oklch(22% 0.007 78)",
+        "tonalRamp": [
+          "#0d0b08",
+          "#272522",
+          "#44423e",
+          "#63615d",
+          "#84827e",
+          "#a7a5a1",
+          "#cbc9c4",
+          "#f1eeea"
+        ]
+      },
+      "ink-night": {
+        "role": "neutral",
+        "displayName": "Ink (night)",
+        "canonical": "#ECE6D8",
+        "oklch": "oklch(93% 0.020 88)",
+        "tonalRamp": [
+          "#0f0b03",
+          "#29251a",
+          "#464236",
+          "#666155",
+          "#878275",
+          "#aaa597",
+          "#cec9bb",
+          "#f4eee0"
+        ]
+      },
+      "ink-2-night": {
+        "role": "neutral",
+        "displayName": "Ink Soft (night)",
+        "canonical": "#A8A194",
+        "oklch": "oklch(71% 0.020 83)",
+        "tonalRamp": [
+          "#0f0a03",
+          "#2a241a",
+          "#474136",
+          "#676054",
+          "#888175",
+          "#aba497",
+          "#d0c8bb",
+          "#f5eee0"
+        ]
+      },
+      "rule-night": {
+        "role": "neutral",
+        "displayName": "Crease Rule (night)",
+        "canonical": "#3A362F",
+        "oklch": "oklch(33% 0.013 82)",
+        "tonalRamp": [
+          "#0e0b06",
+          "#28251e",
+          "#46413a",
+          "#656159",
+          "#86827a",
+          "#a9a49c",
+          "#cdc8c0",
+          "#f3eee5"
+        ]
+      },
+      "term-bg": {
+        "role": "tertiary",
+        "displayName": "Terminal Night",
+        "canonical": "#1a1b26",
+        "oklch": "oklch(23% 0.021 280)",
+        "tonalRamp": [
+          "#090a14",
+          "#23242f",
+          "#40414d",
+          "#5f606e",
+          "#80818f",
+          "#a2a4b3",
+          "#c6c8d7",
+          "#ebedfd"
+        ]
+      },
+      "term-fg": {
+        "role": "tertiary",
+        "displayName": "Terminal Text",
+        "canonical": "#c0caf5",
+        "oklch": "oklch(85% 0.061 275)",
+        "tonalRamp": [
+          "#060624",
+          "#1d2242",
+          "#383f62",
+          "#575f84",
+          "#7780a7",
+          "#99a3cc",
+          "#bdc7f2",
+          "#e2ecff"
+        ]
+      },
+      "term-blue": {
+        "role": "tertiary",
+        "displayName": "Terminal Blue",
+        "canonical": "#7aa2f7",
+        "oklch": "oklch(72% 0.132 264)",
+        "tonalRamp": [
+          "#020041",
+          "#031a64",
+          "#1c3b87",
+          "#3a5dab",
+          "#597fd1",
+          "#7ba3f8",
+          "#9ec8ff",
+          "#c2edff"
+        ]
+      },
+      "term-green": {
+        "role": "tertiary",
+        "displayName": "Terminal Green",
+        "canonical": "#9ece6a",
+        "oklch": "oklch(80% 0.139 130)",
+        "tonalRamp": [
+          "#001200",
+          "#092f00",
+          "#274f00",
+          "#457000",
+          "#66922c",
+          "#87b652",
+          "#abdb77",
+          "#cfff9c"
+        ]
+      },
+      "term-comment": {
+        "role": "tertiary",
+        "displayName": "Terminal Comment",
+        "canonical": "#565f89",
+        "oklch": "oklch(50% 0.068 274)",
+        "tonalRamp": [
+          "#050527",
+          "#1c2146",
+          "#373f66",
+          "#555e88",
+          "#7680ac",
+          "#98a2d0",
+          "#bbc7f6",
+          "#e0ecff"
+        ]
+      },
+      "term-strip": {
+        "role": "tertiary",
+        "displayName": "Terminal Tab Strip",
+        "canonical": "#16161e",
+        "oklch": "oklch(20% 0.016 285)",
+        "tonalRamp": [
+          "#0a0a12",
+          "#24242d",
+          "#41414a",
+          "#60606a",
+          "#81818c",
+          "#a4a4af",
+          "#c8c8d3",
+          "#ededf9"
+        ]
+      },
+      "term-active": {
+        "role": "tertiary",
+        "displayName": "Terminal Active Tab",
+        "canonical": "#24283b",
+        "oklch": "oklch(28% 0.036 275)",
+        "tonalRamp": [
+          "#07091a",
+          "#202436",
+          "#3c4155",
+          "#5b6076",
+          "#7c8198",
+          "#9ea4bc",
+          "#c2c8e1",
+          "#e7edff"
+        ]
+      },
+      "term-divider": {
+        "role": "tertiary",
+        "displayName": "Terminal Divider",
+        "canonical": "#3b4261",
+        "oklch": "oklch(39% 0.054 274)",
+        "tonalRamp": [
+          "#060821",
+          "#1d233f",
+          "#39405f",
+          "#575f80",
+          "#7880a3",
+          "#9aa3c7",
+          "#bec7ed",
+          "#e3edff"
+        ]
+      },
+      "agent-blocked": {
+        "role": "tertiary",
+        "displayName": "Agent Blocked",
+        "canonical": "#e06c75",
+        "oklch": "oklch(67% 0.145 17)",
+        "tonalRamp": [
+          "#320000",
+          "#570008",
+          "#7d0925",
+          "#a33543",
+          "#ca5862",
+          "#f27c84",
+          "#ffa0a7",
+          "#ffc5cb"
+        ]
+      },
+      "agent-done": {
+        "role": "tertiary",
+        "displayName": "Agent Done",
+        "canonical": "#98c379",
+        "oklch": "oklch(77% 0.110 133)",
+        "tonalRamp": [
+          "#001200",
+          "#0b2e00",
+          "#294d00",
+          "#476e26",
+          "#689048",
+          "#8ab46b",
+          "#add98e",
+          "#d2ffb2"
+        ]
+      },
+      "agent-working": {
+        "role": "tertiary",
+        "displayName": "Agent Working",
+        "canonical": "#61afef",
+        "oklch": "oklch(73% 0.121 245)",
+        "tonalRamp": [
+          "#00023a",
+          "#00245b",
+          "#00457d",
+          "#0966a1",
+          "#3988c6",
+          "#5eacec",
+          "#83d1ff",
+          "#a8f7ff"
+        ]
+      },
+      "banner-info": {
+        "role": "tertiary",
+        "displayName": "Banner Info",
+        "canonical": "#1f5fa8",
+        "oklch": "oklch(49% 0.133 255)",
+        "tonalRamp": [
+          "#000041",
+          "#001e63",
+          "#004086",
+          "#2261aa",
+          "#4584d0",
+          "#68a8f7",
+          "#8bcdff",
+          "#b0f3ff"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "cover-name": {
+        "displayName": "Cover name",
+        "purpose": "The one huge lowercase 'nuntio' on the orange field; Archivo wdth 62, 900."
+      },
+      "cover-hook": {
+        "displayName": "Cover hook",
+        "purpose": "'The terminal for AI agents.' under the name; wdth 87.5, 700."
+      },
+      "panel-hook": {
+        "displayName": "Panel hook",
+        "purpose": "One uppercase condensed hook per panel; wdth 75, 800."
+      },
+      "prose-h1": {
+        "displayName": "Docs title",
+        "purpose": "Page title in docs and privacy."
+      },
+      "prose-h2": {
+        "displayName": "Docs section",
+        "purpose": "Section head with a 2px ink rule above."
+      },
+      "prose-h3": {
+        "displayName": "Docs subsection",
+        "purpose": "Subsection head."
+      },
+      "brand": {
+        "displayName": "Brand",
+        "purpose": "Masthead wordmark, always lowercase."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Reading text, 62ch in panels, 72ch in prose."
+      },
+      "button": {
+        "displayName": "Button",
+        "purpose": "Button and primary download label."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "FIG. N captions under figures."
+      },
+      "index-label": {
+        "displayName": "Index label",
+        "purpose": "Condensed caps for nav, thumb-index tabs, download tabs, spec labels, folio."
+      },
+      "table-head": {
+        "displayName": "Table head",
+        "purpose": "Condensed caps column heads."
+      },
+      "key": {
+        "displayName": "Key / chip / marker",
+        "purpose": "Mono for keys, settings and marker digits."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Code cards, terminal figures, inline code."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Release line, file sizes, button sub-line."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "160ms colour and transform transitions on buttons and thumb-index tabs."
+      },
+      {
+        "name": "crease-draw",
+        "value": "clip-path inset(-12px 100% -12px 0) -> inset(-12px 0), animation-range: entry 0% entry 40%",
+        "purpose": "Fold crease draws in on scroll; only under animation-timeline support and no-preference reduced motion."
+      },
+      {
+        "name": "paste-sequence",
+        "value": "path -> attached after 600ms -> done after 1100ms",
+        "purpose": "Fig. 1 paste demo states; set to done at once under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide",
+        "value": "1100px"
+      },
+      {
+        "name": "mid",
+        "value": "900px"
+      },
+      {
+        "name": "narrow",
+        "value": "720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Ink slab for Download; inverts on hover.",
+      "html": "<a class=\"ds-btn-primary\" href=\"#\">Download for Linux<small>AppImage · 38 MB</small></a>",
+      "css": ".ds-btn-primary{display:inline-flex;flex-direction:column;gap:2px;text-decoration:none;font-family:'Archivo',system-ui,sans-serif;font-stretch:87.5%;font-weight:700;font-size:1.125rem;line-height:1.15;background:#141414;color:#EDE9DF;border:1.5px solid #141414;border-radius:0;padding:18px 24px;transition:background-color 160ms cubic-bezier(.16,1,.3,1),color 160ms cubic-bezier(.16,1,.3,1)}.ds-btn-primary small{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.75rem;font-weight:500;letter-spacing:.02em;opacity:.8}.ds-btn-primary:hover{background:#EDE9DF;color:#141414}.ds-btn-primary:focus-visible{outline:3px solid #141414;outline-offset:3px}.ds-btn-primary:active{transform:translateY(1px)}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Ink outline for secondary actions.",
+      "html": "<a class=\"ds-btn\" href=\"#\">Other platforms</a>",
+      "css": ".ds-btn{display:inline-flex;text-decoration:none;font-family:'Archivo',system-ui,sans-serif;font-stretch:87.5%;font-weight:700;font-size:1.125rem;line-height:1.15;background:transparent;color:#141414;border:1.5px solid #141414;border-radius:0;padding:18px 24px;transition:background-color 160ms cubic-bezier(.16,1,.3,1),color 160ms cubic-bezier(.16,1,.3,1)}.ds-btn:hover{background:#141414;color:#EDE9DF}.ds-btn:focus-visible{outline:3px solid #141414;outline-offset:3px}.ds-btn:active{transform:translateY(1px)}"
+    },
+    {
+      "name": "Keycaps",
+      "kind": "chip",
+      "refersTo": "keycap",
+      "description": "Chord written as separate keycaps with a 3px bottom border.",
+      "html": "<span class=\"ds-keys\"><kbd class=\"ds-kbd\">Ctrl</kbd><kbd class=\"ds-kbd\">Shift</kbd><kbd class=\"ds-kbd\">V</kbd></span>",
+      "css": ".ds-kbd{display:inline-block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.8125rem;font-weight:600;line-height:1.3;padding:2px 7px;border:1.5px solid #141414;border-bottom-width:3px;border-radius:2px;background:#EDE9DF;color:#141414;white-space:nowrap}.ds-kbd+.ds-kbd{margin-left:3px}"
+    },
+    {
+      "name": "Setting Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "A mono setting in the panel key slot.",
+      "html": "<code class=\"ds-chip\">herdr.enabled = true</code>",
+      "css": ".ds-chip{display:inline-block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.8125rem;font-weight:600;padding:3px 9px;border:1.5px solid #141414;background:#E3DED1;color:#141414;white-space:nowrap}"
+    },
+    {
+      "name": "Thumb Index Tabs",
+      "kind": "nav",
+      "refersTo": "thumb-index-tab",
+      "description": "Edge tabs; the current section is orange and sits further out.",
+      "html": "<ul class=\"ds-thumb\"><li><a href=\"#\">02 Images</a></li><li><a href=\"#\" aria-current=\"true\">03 Agents</a></li><li><a href=\"#\">04 Notes</a></li></ul>",
+      "css": ".ds-thumb{list-style:none;margin:0;padding:0;display:inline-block}.ds-thumb li+li{margin-top:-1px}.ds-thumb a{display:flex;align-items:center;justify-content:center;width:44px;min-height:88px;padding:12px 0;writing-mode:vertical-rl;white-space:nowrap;text-decoration:none;font-family:'Archivo',system-ui,sans-serif;font-stretch:75%;font-weight:700;font-size:.8125rem;text-transform:uppercase;letter-spacing:.05em;color:#141414;background:#E3DED1;border:1.5px solid #141414;border-right:0;border-radius:8px 0 0 8px;transition:transform 160ms cubic-bezier(.16,1,.3,1),background-color 160ms cubic-bezier(.16,1,.3,1)}.ds-thumb a:hover{transform:translateX(-4px)}.ds-thumb a[aria-current=true]{background:#EA5F1E;color:#141414;transform:translateX(-6px)}.ds-thumb a:focus-visible{outline:3px solid #141414;outline-offset:-3px}"
+    },
+    {
+      "name": "Panel Head with Crease",
+      "kind": "custom",
+      "refersTo": "panel-head",
+      "description": "Fold crease with folio, uppercase hook and key slot.",
+      "html": "<section class=\"ds-panel\"><div class=\"ds-crease\"><span>3/8 · herdr agent status</span></div><header class=\"ds-head\"><h2>Know which agent is waiting.</h2><div class=\"ds-key\"><code class=\"ds-chip\">herdr.enabled = true</code></div></header></section>",
+      "css": ".ds-panel{position:relative;padding:48px 24px 24px;background:#EDE9DF;color:#141414}.ds-crease{position:absolute;inset:0 0 auto 0;height:1px;border-top:1px dashed #B9B2A2}.ds-crease::before,.ds-crease::after{content:'';position:absolute;top:-4px;width:1.5px;height:8px;background:#141414}.ds-crease::before{left:0}.ds-crease::after{right:0}.ds-crease span{position:absolute;left:24px;top:-.7em;padding:0 8px;background:#EDE9DF;font-family:'Archivo',system-ui,sans-serif;font-stretch:75%;font-weight:700;font-size:.8125rem;line-height:1.4;text-transform:uppercase;letter-spacing:.05em}.ds-head{display:grid;grid-template-columns:1fr auto;gap:16px 32px;align-items:start}.ds-head h2{margin:0;font-family:'Archivo',system-ui,sans-serif;font-stretch:75%;font-weight:800;text-transform:uppercase;font-size:clamp(2.25rem,4.5vw,4rem);line-height:.95;letter-spacing:-.005em;max-width:18ch}.ds-key{padding-top:4px;display:flex;gap:8px;align-items:center}.ds-chip{display:inline-block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.8125rem;font-weight:600;padding:3px 9px;border:1.5px solid #141414;background:#E3DED1;white-space:nowrap}"
+    },
+    {
+      "name": "Support Matrix",
+      "kind": "custom",
+      "refersTo": "table-matrix-head",
+      "description": "Orange header row; support is a mark plus a word.",
+      "html": "<table class=\"ds-matrix\"><thead><tr><th>Protocol</th><th>Support</th><th>Notes</th></tr></thead><tbody><tr><td>Kitty keyboard protocol</td><td class=\"m\">● Yes</td><td>All five flags</td></tr><tr><td>Kitty graphics protocol</td><td class=\"m\">◐ Partly</td><td>Direct transmission</td></tr><tr><td>Sixel</td><td class=\"m\">○ No</td><td></td></tr></tbody></table>",
+      "css": ".ds-matrix{width:100%;border-collapse:collapse;font-family:'Archivo',system-ui,sans-serif;font-size:.9375rem;line-height:1.45;color:#141414;border:1.5px solid #141414}.ds-matrix th{text-align:left;padding:10px 12px;background:#EA5F1E;color:#141414;font-stretch:75%;font-weight:800;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}.ds-matrix td{padding:10px 12px;border-top:1px solid #B9B2A2;vertical-align:top}.ds-matrix tbody tr:first-child td{border-top:1.5px solid #141414}.ds-matrix td:first-child{font-weight:600}.ds-matrix td.m{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.8125rem;white-space:nowrap}.ds-matrix td:last-child{color:#4A4740}"
+    },
+    {
+      "name": "Figure with Marker and Legend",
+      "kind": "card",
+      "refersTo": "marker",
+      "description": "Numbered orange marker over a figure, repeated in the legend; caption starts FIG. N.",
+      "html": "<figure class=\"ds-fig\"><div class=\"ds-frame\"><div class=\"ds-shot\"></div><span class=\"ds-marker\" style=\"left:30%;top:40%\">1</span></div><ol class=\"ds-legend\"><li><span class=\"ds-marker ds-inline\">1</span>The pasted screenshot, attached as [Image #1].</li></ol><figcaption><b>Fig. 2</b> omp and Claude Code side by side in nuntio.</figcaption></figure>",
+      "css": ".ds-fig{margin:0;display:grid;gap:16px;font-family:'Archivo',system-ui,sans-serif;color:#141414}.ds-frame{position:relative}.ds-shot{height:140px;background:#1a1b26;border:1.5px solid #141414}.ds-marker{position:absolute;transform:translate(-50%,-50%);width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:#EA5F1E;color:#141414;border:1.5px solid #141414;font-family:'JetBrains Mono',ui-monospace,monospace;font-weight:700;font-size:.8125rem;line-height:1}.ds-marker.ds-inline{position:static;transform:none;width:22px;height:22px;font-size:.75rem;flex:none}.ds-legend{list-style:none;margin:0;padding:0;display:grid;gap:8px;font-size:.9375rem;line-height:1.45}.ds-legend li{display:flex;gap:12px;align-items:flex-start}.ds-fig figcaption{font-stretch:87.5%;font-size:.875rem;line-height:1.45;color:#4A4740;border-top:1px solid #B9B2A2;padding-top:8px}.ds-fig figcaption b{font-stretch:75%;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#141414;margin-right:4px}"
+    },
+    {
+      "name": "Terminal Figure",
+      "kind": "custom",
+      "refersTo": "term",
+      "description": "HTML replica of nuntio: Tokyo Night in an ink frame, tab strip and split panes.",
+      "html": "<div class=\"ds-term\"><div class=\"ds-tabs\"><span class=\"ds-tab on\">~/code/app</span><span class=\"ds-tab\">+</span></div><div class=\"ds-panes\"><div class=\"ds-pane\"><span class=\"g\">❯ </span><span class=\"p\">/tmp/nuntio-paste-1/image-1.png</span></div><div class=\"ds-pane\"><span class=\"gr\">● Read</span> image-1.png</div></div></div>",
+      "css": ".ds-term{background:#1a1b26;color:#c0caf5;border:1.5px solid #141414;font-family:'JetBrains Mono',ui-monospace,monospace;line-height:1.5}.ds-tabs{display:flex;background:#16161e;font-size:.75rem;min-height:30px}.ds-tab{padding:5px 16px;color:#565f89;display:flex;align-items:center}.ds-tab.on{background:#24283b;color:#c0caf5}.ds-panes{display:grid;grid-template-columns:1fr 1fr;font-size:.8125rem;line-height:1.55}.ds-pane{padding:12px;word-break:break-all}.ds-pane+.ds-pane{border-left:1px solid #3b4261}.ds-pane .p{color:#7aa2f7;text-decoration:underline 1px;text-underline-offset:2px}.ds-pane .gr{color:#9ece6a}"
+    },
+    {
+      "name": "Download Insert",
+      "kind": "card",
+      "refersTo": "download-insert",
+      "description": "Stock insert on the orange panel with radio-style OS tabs and file rows.",
+      "html": "<div class=\"ds-dl\"><div class=\"ds-dltabs\"><span class=\"on\">Linux</span><span>macOS</span><span>Windows</span></div><div class=\"ds-files\"><a class=\"ds-file primary\" href=\"#\">AppImage<span>38 MB</span></a><a class=\"ds-file\" href=\"#\">.deb<span>31 MB</span></a></div></div>",
+      "css": ".ds-dl{background:#EDE9DF;color:#141414;border:1.5px solid #141414;font-family:'Archivo',system-ui,sans-serif}.ds-dltabs{display:flex;background:#E3DED1;border-bottom:1.5px solid #141414}.ds-dltabs span{padding:12px 24px;font-stretch:75%;font-weight:700;font-size:.875rem;text-transform:uppercase;letter-spacing:.05em;border-right:1px solid #B9B2A2}.ds-dltabs .on{background:#141414;color:#EDE9DF}.ds-files{display:grid;gap:12px;padding:24px}.ds-file{display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:12px 16px;border:1.5px solid #141414;text-decoration:none;color:#141414;font-weight:600}.ds-file span{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.75rem;font-weight:500}.ds-file:hover{background:#141414;color:#EDE9DF}.ds-file.primary{background:#141414;color:#EDE9DF;padding-block:16px;font-size:1.125rem;font-stretch:87.5%;font-weight:700}.ds-file.primary:hover{background:#EDE9DF;color:#141414}"
+    },
+    {
+      "name": "Docs Sidebar",
+      "kind": "nav",
+      "refersTo": "docs-nav-current",
+      "description": "Numbered manual entries; the current page is an orange tab.",
+      "html": "<nav class=\"ds-docs\"><p class=\"ds-label\">Manual</p><ul><li><a href=\"#\" aria-current=\"page\"><span class=\"n\">01</span><span>Getting started</span></a></li><li><a href=\"#\"><span class=\"n\">02</span><span>Configuration</span></a></li><li><a href=\"#\"><span class=\"n\">03</span><span>Protocols</span></a></li></ul></nav>",
+      "css": ".ds-docs{width:260px;font-family:'Archivo',system-ui,sans-serif;color:#141414}.ds-label{margin:0 0 8px;padding-bottom:8px;border-bottom:1.5px solid #141414;font-stretch:75%;font-weight:700;font-size:.8125rem;text-transform:uppercase;letter-spacing:.05em;color:#4A4740}.ds-docs ul{list-style:none;margin:0;padding:0}.ds-docs a{display:flex;gap:12px;padding:8px 12px;text-decoration:none;color:#141414;font-weight:600;border-bottom:1px solid #B9B2A2}.ds-docs a:hover{background:#E3DED1}.ds-docs a[aria-current=page]{background:#EA5F1E;color:#141414}.ds-docs .n{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.75rem;color:#4A4740;padding-top:.2em}.ds-docs a[aria-current=page] .n{color:#141414}.ds-docs a:focus-visible{outline:3px solid #141414;outline-offset:-3px}"
+    },
+    {
+      "name": "Back Cover",
+      "kind": "custom",
+      "refersTo": "back-cover",
+      "description": "Closing ink panel with licence, links and the privacy statement.",
+      "html": "<footer class=\"ds-back\"><p>nuntio is free software, licensed under MIT or Apache-2.0.</p><p class=\"l\"><a href=\"#\">Source</a><a href=\"#\">Issues</a><a href=\"#\">Releases</a><a href=\"#\">Privacy</a></p><p class=\"s\">nuntio collects no data.</p></footer>",
+      "css": ".ds-back{background:#141414;color:#EDE9DF;padding:48px 32px 32px;display:grid;gap:16px;font-family:'Archivo',system-ui,sans-serif;font-size:.9375rem}.ds-back p{margin:0}.ds-back a{color:#EDE9DF;font-weight:600;text-decoration:underline 2px #EA5F1E;text-underline-offset:3px}.ds-back .l{display:flex;flex-wrap:wrap;gap:8px 24px}.ds-back a:hover{text-decoration-color:#EDE9DF}.ds-back a:focus-visible{outline:3px solid #EDE9DF;outline-offset:3px}.ds-back .s{font-stretch:75%;font-weight:800;text-transform:uppercase;font-size:1.5rem;line-height:1.1}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Pocket Reference",
+    "overview": "The site is a folded programming reference card, in the lineage of the DEC VT pocket references from which nuntio's CSI/OSC/DEC-private-mode vocabulary comes. It is warm card stock printed in black ink and one signal orange, with a rounded die-cut corner on the outside and everything inside it square. In dark mode the same card becomes a night card: near-black stock, cream ink, a slightly brighter orange. The page is a desk; the card is the site.\n\nThe card is read panel by panel. Each panel is a fold: a dashed crease with tick marks and a folio label (`N/8 · Name`) opens it, then a hook in condensed caps, then the exact key or setting on the right, then the body. Reference vocabulary does the work that a marketing site would give to decoration: keycaps, numbered callouts with legends, ruled tables, `FIG. N` captions, thumb-index tabs on the edge. Real screenshots and exact sequences are the evidence; HTML-built terminal figures replicate nuntio itself.\n\nDensity is that of a manual: tight tables and captions, generous panel padding (`clamp(4rem, 8vw, 7.5rem)`), more space above a heading than below. Colour is rationed: orange appears as a field, a fill, a current-state tab or a marker, never as a gradient or a wash. The terminal figures keep Tokyo Night inside their frames and nowhere else.",
+    "keyCharacteristics": [
+      "One card on a desk; the card has the only large radius (20px), everything inside is square.",
+      "Ink-on-stock hairlines and 1.5px ink rules carry structure; no shadows, no gradients, no glass.",
+      "One accent, signal orange, used as fields and fills with ink text on it.",
+      "Condensed Archivo caps for heads and index labels; JetBrains Mono for sequences, keys, code and meta.",
+      "State and support are marks (● ◐ ○, numbered markers), not hues.",
+      "Works without JavaScript; the signature paste demo and the OS tabs degrade to a static, complete state."
+    ],
+    "rules": [
+      {
+        "name": "The Two-Ink Rule",
+        "body": "Surfaces are stock or signal; text is ink or ink-soft. A fill that is neither is a terminal replica and stays inside a `.term` frame or a command block.",
+        "section": "colors"
+      },
+      {
+        "name": "The Ink-On-Orange Rule",
+        "body": "Anything on a signal field is `#141414` text, `#141414` borders and `#141414` outlines, in light and dark alike. Never cream on orange, never orange on orange.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mark-Not-Hue Rule",
+        "body": "State is carried by a glyph or a number: ● Yes, ◐ Partly, ○ No; marker ①②③. A colour may accompany a state only inside a terminal replica, where the app itself uses it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono-Means-Machine Rule",
+        "body": "Mono is for things the reader types or the terminal emits: keys, settings, sequences, code, file names, version and size meta. Never for headings, nav or prose.",
+        "section": "typography"
+      },
+      {
+        "name": "The Lowercase Name Rule",
+        "body": "The brand is \"nuntio\", always lowercase, including at the start of a headline; the `lc` class opts the name out of uppercase heads.",
+        "section": "typography"
+      },
+      {
+        "name": "The Width-Is-Rank Rule",
+        "body": "Rank is set by the width axis before size: name at 62%, heads at 75%, subheads and buttons at 87.5%, reading text at 100%.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Card Rule",
+        "body": "Nothing casts a shadow. If a thing needs to stand out it gets a 1.5px ink border, a stock-shade fill or the orange.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Die-Cut Rule",
+        "body": "The card's corner is the only large radius on the site; nothing inside it may be rounded to echo it.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "**Do** keep every panel on the head grammar: folio crease, hook, key slot at the end of the head row.",
+      "**Do** put the exact key, setting or sequence in mono and the claim in Archivo; cite the real thing (`OSC 1337`, `herdr.enabled = true`).",
+      "**Do** show support as a mark plus a word (● Yes, ◐ Partly, ○ No) and say what is not supported as plainly as what is.",
+      "**Do** put ink (`#141414`) text, borders and focus outlines on every orange field, in both schemes.",
+      "**Do** back screenshots with numbered markers and a legend, and give HTML terminal replicas `aria-hidden` plus a caption.",
+      "**Do** make every enhancement degrade: radio tabs without JS, the paste demo static in `done`, motion off under reduced motion.",
+      "**Do** write the brand as lowercase \"nuntio\"."
+    ],
+    "donts": [
+      "**Don't** use shadows, gradients, blur, glass or glow anywhere; depth is ink lines and stock tone.",
+      "**Don't** round anything except the card (20px), keycaps (2px), thumb-index outer edge (8px) and markers.",
+      "**Don't** introduce a second accent, or carry Tokyo Night colours outside a terminal figure or command block.",
+      "**Don't** encode state in colour alone, or use cream-on-orange or orange-on-orange text.",
+      "**Don't** set headings, nav or running prose in mono, or body text wider than 62ch (panels) / 72ch (prose).",
+      "**Don't** load anything from a third party: fonts, scripts and figures are served from the site.",
+      "**Don't** hide content behind scroll animation; reveals only draw rules."
+    ]
+  }
+}
