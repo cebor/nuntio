@@ -6,7 +6,9 @@ use std::time::Duration;
 use nuntio_term::{Program, Shell, SpawnOptions, TermEvent, TermHandle, TermSize, Transport};
 
 mod common;
-use common::{SIZE, blue_pixel_png, line_text, shell, spawn_handle, start, wait_for_exit};
+use common::{
+    EXIT_TIMEOUT, SIZE, blue_pixel_png, line_text, shell, spawn_handle, start, wait_for_exit,
+};
 
 fn spawn(program: &str, args: &[&str]) -> (TermHandle, mpsc::Receiver<TermEvent>) {
     start(common::options(Program::Command(shell(program, args))))
@@ -111,7 +113,7 @@ fn large_output_is_read_without_input() {
             }
         },
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + EXIT_TIMEOUT;
     while !screen_contains(&handle, "END") {
         assert!(
             std::time::Instant::now() < deadline,

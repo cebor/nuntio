@@ -22,8 +22,9 @@ pub const OPTIONS: TermOptions = TermOptions {
     kitty_keyboard: true,
 };
 
-/// ConPTY and PowerShell start slowly, hence the generous timeout there.
-const EXIT_TIMEOUT: Duration = Duration::from_secs(if cfg!(windows) { 15 } else { 5 });
+/// ConPTY and PowerShell start slowly, hence the generous timeout there: a
+/// busy CI runner took 14 s to start PowerShell. It only bounds a failure.
+pub const EXIT_TIMEOUT: Duration = Duration::from_secs(if cfg!(windows) { 60 } else { 5 });
 
 pub fn shell(program: &str, args: &[&str]) -> Shell {
     Shell {
