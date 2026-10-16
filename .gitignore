@@ -32,4 +32,4 @@
 **/.impeccable/live/*.png
 # impeccable-ignore-end
 # The impeccable launcher downloads its engine binary (checksum-verified) when missing.
-/.agents/skills/impeccable/scripts/bin/
+/.omp/skills/impeccable/scripts/bin/
