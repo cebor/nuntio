@@ -22,27 +22,29 @@ const NARROW: u16 = 60;
 /// Columns the editor keeps at least next to the list.
 const MIN_EDITOR: u16 = 30;
 /// Column of a todo's box in the overview, from the left of the body.
-pub const TODO_BOX_X: u16 = 4;
+pub const TODO_BOX_X: u16 = 5;
 
 /// Where things are on the screen; computed by `App::prepare`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Areas {
     pub header: Rect,
+    /// Below the header, frame included.
     pub body: Rect,
     pub footer: Rect,
     /// The note list, without its border.
     pub list: Option<Rect>,
     pub editor: Option<Rect>,
-    /// The note's text in the editor, below the title.
+    /// The note's text in the editor.
     pub text: Option<Rect>,
     pub too_small: bool,
 }
 
-/// The widest the list can be in a body `body_width` columns wide.
+/// The widest the list can be in a body `body_width` columns wide,
+/// frame included.
 pub fn max_list_width(body_width: u16) -> u16 {
     NOTES_SIDEBAR_WIDTH
         .1
-        .min(body_width.saturating_sub(1 + MIN_EDITOR))
+        .min(body_width.saturating_sub(2 + 1 + MIN_EDITOR))
 }
 
 /// Header, body and footer of a screen of `size`; `None` if it is too small.
@@ -76,28 +78,35 @@ pub fn areas(size: Size, app: &App) -> Areas {
     if app.todos.is_some() {
         return areas;
     }
+    // Inside the frame; the body is at least 40×6.
+    let inner = Rect {
+        x: body.x + 1,
+        y: body.y + 1,
+        width: body.width - 2,
+        height: body.height - 2,
+    };
     if size.width < NARROW {
         match app.focus {
-            Focus::List => areas.list = Some(body),
-            Focus::Editor => areas.editor = Some(body),
+            Focus::List => areas.list = Some(inner),
+            Focus::Editor => areas.editor = Some(inner),
         }
     } else if app.sidebar {
         let width = app.sidebar_width.min(max_list_width(body.width));
-        areas.list = Some(Rect { width, ..body });
+        areas.list = Some(Rect { width, ..inner });
         // The column after the list is the divider.
         areas.editor = Some(Rect {
-            x: body.x + width + 1,
-            width: body.width - width - 1,
-            ..body
+            x: inner.x + width + 1,
+            width: inner.width - width - 1,
+            ..inner
         });
     } else {
-        areas.editor = Some(body);
+        areas.editor = Some(inner);
     }
     areas.text = areas.editor.map(|e| Rect {
-        x: e.x + 2,
-        y: e.y + 2,
-        width: e.width.saturating_sub(3),
-        height: e.height.saturating_sub(2),
+        x: e.x + 1,
+        y: e.y,
+        width: e.width.saturating_sub(2),
+        height: e.height,
     });
     areas
 }
@@ -164,25 +173,54 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.todos.is_some() {
         draw_todos(frame, app);
     } else {
+        let body = areas.body;
+        frame.render_widget(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(dim()),
+            body,
+        );
+        if let (Some(list), Some(_)) = (areas.list, areas.editor) {
+            let mut bar = vec![Line::raw("┬")];
+            bar.extend((list.y..list.bottom()).map(|_| Line::raw("│")));
+            bar.push(Line::raw("┴"));
+            let divider = Rect {
+                x: list.right(),
+                width: 1,
+                ..body
+            };
+            frame.render_widget(
+                Paragraph::new(bar).style(frame_style(app.resizing)),
+                divider,
+            );
+        }
         if let Some(list) = areas.list {
             draw_list(frame, app, list);
-            if areas.editor.is_some() {
-                let border = Rect {
-                    x: list.right(),
-                    width: 1,
-                    ..list
-                };
-                let style = if app.resizing {
-                    Style::new().fg(ACCENT)
-                } else {
-                    dim()
-                };
-                let bar = vec![Line::styled("│", style); border.height as usize];
-                frame.render_widget(Paragraph::new(bar), border);
-            }
+            border_title(
+                frame,
+                list.x,
+                body.y,
+                list.width,
+                vec![Span::styled(
+                    " Notes ",
+                    title_style(app.focus == Focus::List),
+                )],
+            );
         }
         if let Some(editor) = areas.editor {
             draw_editor(frame, app, editor);
+            if let Some(open) = &app.open {
+                // At least one `─` stays before the corner.
+                let max = editor.width.saturating_sub(1);
+                let style = title_style(app.focus == Focus::Editor);
+                let title = truncate(&open.title, usize::from(max.saturating_sub(5)));
+                let mut spans = vec![Span::styled(" ", style), Span::styled(title, style)];
+                if open.dirty() {
+                    spans.push(Span::styled(" ●", Style::new().fg(Color::Yellow)));
+                }
+                spans.push(Span::styled(" ", style));
+                border_title(frame, editor.x, body.y, max, spans);
+            }
         }
     }
     draw_footer(frame, app);
@@ -191,13 +229,49 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
-/// ` Notes ` and the notes folder.
+/// The frame's style: quiet, like the divider.
+fn frame_style(active: bool) -> Style {
+    if active {
+        Style::new().fg(ACCENT)
+    } else {
+        dim()
+    }
+}
+
+/// A panel's title in the frame: in the accent color while it has the focus.
+fn title_style(focused: bool) -> Style {
+    if focused {
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        dim()
+    }
+}
+
+/// A title in the top border at `x`: `spans` cut to `max` cells.
+fn border_title(frame: &mut Frame, x: u16, y: u16, max: u16, spans: Vec<Span<'static>>) {
+    let line = Line::from(spans);
+    let width = max.min(line.width() as u16);
+    frame.render_widget(
+        Paragraph::new(line),
+        Rect {
+            x,
+            y,
+            width,
+            height: 1,
+        },
+    );
+}
+
+/// The ` Notes ` pill and the notes folder.
 fn draw_title(frame: &mut Frame, area: Rect, dir_label: &str) {
     let left = Line::from(vec![
         Span::styled(
             " Notes ",
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::new()
+                .fg(ACCENT)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
         ),
+        Span::raw(" "),
         Span::styled(dir_label.to_owned(), dim()),
     ]);
     frame.render_widget(Paragraph::new(left), area);
@@ -206,18 +280,15 @@ fn draw_title(frame: &mut Frame, area: Rect, dir_label: &str) {
 fn draw_header(frame: &mut Frame, app: &App) {
     let area = app.areas.header;
     draw_title(frame, area, &app.dir_label);
-    if let Some(open) = &app.open {
-        let mut spans = vec![Span::raw(open.title.clone())];
-        if open.dirty() {
-            spans.push(Span::styled(" ●", Style::new().fg(Color::Yellow)));
-        }
-        spans.push(Span::raw(" "));
-        let right = Line::from(spans).right_aligned();
-        let width = right.width() as u16;
-        let left_width = 7 + app.dir_label.width() as u16 + 2;
-        if width + left_width <= area.width {
-            frame.render_widget(Paragraph::new(right), area);
-        }
+    let count = match app.notes.len() {
+        1 => "1 note ".to_owned(),
+        n => format!("{n} notes "),
+    };
+    if 7 + 1 + app.dir_label.width() + 1 + count.width() <= usize::from(area.width) {
+        frame.render_widget(
+            Paragraph::new(Line::styled(count, dim()).right_aligned()),
+            area,
+        );
     }
 }
 
@@ -262,8 +333,22 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         let progress = (entry.total > 0).then(|| format!("{}/{}", entry.done, entry.total));
         let progress_width = progress.as_ref().map_or(0, |p| p.len() + 1);
         let title = truncate(&entry.title, width.saturating_sub(progress_width + 2));
-        let mut spans = vec![Span::raw(format!(" {title}"))];
+        let (marker, name_style) = match (
+            row == app.selected,
+            app.focus == Focus::List && app.todos.is_none(),
+        ) {
+            (false, _) => (Span::raw(" "), Style::new()),
+            (true, true) => (
+                Span::styled("▌", Style::new().fg(ACCENT)),
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            (true, false) => (
+                Span::styled("▌", dim()),
+                Style::new().add_modifier(Modifier::BOLD),
+            ),
+        };
         let used = 1 + title.width();
+        let mut spans = vec![marker, Span::styled(title, name_style)];
         if let Some(progress) = progress {
             let style = if entry.done == entry.total {
                 Style::new().fg(Color::Green)
@@ -277,14 +362,7 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
         }
-        let mut line = Line::from(spans);
-        if row == app.selected {
-            line = line.style(if app.focus == Focus::List && app.todos.is_none() {
-                Style::new().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::new().add_modifier(Modifier::BOLD)
-            });
-        }
+        let line = Line::from(spans);
         let y = area.y + (row - app.list_scroll) as u16;
         frame.render_widget(
             Paragraph::new(line),
@@ -302,21 +380,6 @@ fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
         center_line(frame, area, vec![Line::styled("No note open", dim())]);
         return;
     };
-    let title = Rect {
-        x: area.x + 2,
-        width: area.width.saturating_sub(3),
-        height: 1,
-        ..area
-    };
-    frame.render_widget(
-        Paragraph::new(Line::styled(
-            truncate(&open.title, title.width as usize),
-            Style::new()
-                .fg(ACCENT)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )),
-        title,
-    );
     let Some(text) = app.areas.text else {
         return;
     };
@@ -416,26 +479,34 @@ fn draw_todos(frame: &mut Frame, app: &App) {
         return;
     };
     let body = app.areas.body;
-    let header = Line::from(vec![
+    frame.render_widget(
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(dim()),
+        body,
+    );
+    let mut title = vec![
         Span::styled(
             " Todos ",
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{} open", todos.open_count()), dim()),
-        Span::styled(
-            if todos.show_done {
-                "  (done shown)"
-            } else {
-                ""
-            },
-            dim(),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(header), Rect { height: 1, ..body });
+        Span::styled(format!("{} open ", todos.open_count()), dim()),
+    ];
+    if todos.show_done {
+        title.push(Span::styled("· done shown ", dim()));
+    }
+    border_title(
+        frame,
+        body.x + 1,
+        body.y,
+        body.width.saturating_sub(2),
+        title,
+    );
     let list = Rect {
-        y: body.y + 2,
+        x: body.x + 1,
+        y: body.y + 1,
+        width: body.width.saturating_sub(2),
         height: body.height.saturating_sub(2),
-        ..body
     };
     if todos.items.is_empty() {
         center_line(frame, list, vec![Line::styled("No open todos", dim())]);
@@ -457,12 +528,22 @@ fn draw_todos(frame: &mut Frame, app: &App) {
         let line = match row {
             TodoRow::Note(item) => Line::styled(
                 format!(" {}", todos.items[item].title),
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::new().add_modifier(Modifier::BOLD),
             ),
             TodoRow::Item(item) => {
                 let text = todos.items[item].text.trim_start().to_owned();
                 let views = markdown::render(std::slice::from_ref(&text));
-                let mut spans = vec![Span::raw(" ".repeat(TODO_BOX_X as usize))];
+                let selected = item == todos.selected;
+                // The box lands at `TODO_BOX_X` from the left of the body.
+                let lead = usize::from(TODO_BOX_X - 1);
+                let mut spans = if selected {
+                    vec![
+                        Span::styled("▌", Style::new().fg(ACCENT)),
+                        Span::raw(" ".repeat(lead - 1)),
+                    ]
+                } else {
+                    vec![Span::raw(" ".repeat(lead))]
+                };
                 let mut box_seen = false;
                 for piece in &views[0].rendered {
                     if !box_seen && piece.kind != PieceKind::Checkbox {
@@ -476,8 +557,8 @@ fn draw_todos(frame: &mut Frame, app: &App) {
                     spans.push(Span::styled(shown, piece.style));
                 }
                 let mut line = Line::from(spans);
-                if item == todos.selected {
-                    line = line.style(Style::new().add_modifier(Modifier::REVERSED));
+                if selected {
+                    line = line.style(Style::new().add_modifier(Modifier::BOLD));
                 }
                 line
             }
@@ -490,7 +571,7 @@ fn hints(pairs: &[(&str, &str)]) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
     for (i, (key, what)) in pairs.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" · ", dim()));
+            spans.push(Span::raw("  "));
         }
         spans.push(Span::styled((*key).to_owned(), Style::new().fg(ACCENT)));
         spans.push(Span::styled(format!(" {what}"), dim()));
@@ -550,6 +631,7 @@ fn open_popup(frame: &mut Frame, width: u16, height: u16, title: &str) -> Rect {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(format!(" {title} "))
+        .title_style(Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
         .border_style(Style::new().fg(ACCENT));
     let inner = block.inner(area);
     frame.render_widget(block, area);

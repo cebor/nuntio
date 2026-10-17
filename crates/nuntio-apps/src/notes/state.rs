@@ -1131,11 +1131,11 @@ impl App {
                 true
             }
             MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
-                // The mouse at column `c` puts the divider there.
+                // The mouse at column c puts the divider there; the list starts after the frame.
                 let body = self.areas.body;
                 let (min, _) = NOTES_SIDEBAR_WIDTH;
                 let max = ui::max_list_width(body.width).max(min);
-                self.sidebar_width = at.x.saturating_sub(body.x).clamp(min, max);
+                self.sidebar_width = at.x.saturating_sub(body.x + 1).clamp(min, max);
                 true
             }
             MouseEventKind::Up(MouseButton::Left) if self.resizing => {
@@ -1251,7 +1251,7 @@ impl App {
         };
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let top = body.y + 2;
+                let top = body.y + 1;
                 if at.y < top {
                     return false;
                 }
@@ -1881,23 +1881,23 @@ mod tests {
         let mut app = app(&memory);
         assert_eq!(app.areas.list.unwrap().width, 24);
         let editor = app.areas.editor.unwrap();
-        assert_eq!((editor.x, editor.width), (25, 75));
+        assert_eq!((editor.x, editor.width), (26, 73));
 
         // A resize never moves the editor's cursor, even with the editor focused.
         app.focus = Focus::Editor;
-        left(&mut app, MouseEventKind::Down, 24);
+        left(&mut app, MouseEventKind::Down, 25);
         assert!(app.resizing);
-        left(&mut app, MouseEventKind::Drag, 40);
+        left(&mut app, MouseEventKind::Drag, 41);
         assert_eq!(app.areas.list.unwrap().width, 40);
         assert_eq!(app.open.as_ref().unwrap().buffer.cursor(), Pos::default());
-        left(&mut app, MouseEventKind::Up, 40);
+        left(&mut app, MouseEventKind::Up, 41);
         assert!(!app.resizing);
         assert_eq!(app.take_sidebar_width(), Some(40));
         assert_eq!(app.take_sidebar_width(), None);
 
         // Clicking the divider without moving it saves nothing.
-        left(&mut app, MouseEventKind::Down, 40);
-        left(&mut app, MouseEventKind::Up, 40);
+        left(&mut app, MouseEventKind::Down, 41);
+        left(&mut app, MouseEventKind::Up, 41);
         assert_eq!(app.take_sidebar_width(), None);
     }
 
@@ -1905,11 +1905,11 @@ mod tests {
     fn the_dragged_width_stays_between_the_minimum_and_the_editor() {
         let memory = Memory::with(&[("A", "a\n")]);
         let mut app = app(&memory);
-        left(&mut app, MouseEventKind::Down, 24);
+        left(&mut app, MouseEventKind::Down, 25);
         left(&mut app, MouseEventKind::Drag, 3);
         assert_eq!(app.areas.list.unwrap().width, 12);
         left(&mut app, MouseEventKind::Drag, 99);
-        assert_eq!(app.areas.list.unwrap().width, 100 - 1 - 30);
+        assert_eq!(app.areas.list.unwrap().width, 100 - 2 - 1 - 30);
     }
 
     #[test]
@@ -1917,7 +1917,7 @@ mod tests {
         let memory = Memory::with(&[("A", "a\n")]);
         let mut app = App::new(Box::new(memory.clone()), "~/notes".into(), 80);
         app.prepare(Size::new(70, 30));
-        assert_eq!(app.areas.list.unwrap().width, 70 - 31);
+        assert_eq!(app.areas.list.unwrap().width, 70 - 33);
     }
 
     #[test]
@@ -1925,7 +1925,7 @@ mod tests {
         let memory = Memory::with(&[("A", "a\n")]);
         let mut app = app(&memory);
         ctrl_key(&mut app, 'b', Instant::now());
-        left(&mut app, MouseEventKind::Down, 24);
+        left(&mut app, MouseEventKind::Down, 25);
         assert!(!app.resizing);
     }
 }
