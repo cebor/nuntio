@@ -194,18 +194,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 divider,
             );
         }
+        // The list has no title of its own: the ` Notes ` pill is right above it.
         if let Some(list) = areas.list {
             draw_list(frame, app, list);
-            border_title(
-                frame,
-                list.x,
-                body.y,
-                list.width,
-                vec![Span::styled(
-                    " Notes ",
-                    title_style(app.focus == Focus::List),
-                )],
-            );
         }
         if let Some(editor) = areas.editor {
             draw_editor(frame, app, editor);
