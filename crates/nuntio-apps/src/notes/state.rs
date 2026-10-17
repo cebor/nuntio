@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io;
 use std::time::{Duration, Instant, SystemTime};
 
+use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
 use nuntio_tui::style::Tone;
 use nuntio_tui::text_input::TextInput;
 use ratatui::crossterm::event::{
@@ -156,6 +157,14 @@ pub struct App {
     pub todos: Option<Todos>,
     pub prompt: Option<Prompt>,
     pub sidebar: bool,
+    /// Columns of the note list; `ui::areas` narrows it to fit.
+    pub sidebar_width: u16,
+    /// The divider is being dragged.
+    pub resizing: bool,
+    /// The width the config holds, so only changes are saved.
+    saved_width: u16,
+    /// A dragged width to save in the config, once.
+    width_out: Option<u16>,
     /// First visible row of `rows`.
     pub scroll: usize,
     follow: bool,
@@ -193,8 +202,9 @@ fn ctrl(key: &KeyEvent) -> Option<char> {
 }
 
 impl App {
-    /// The app on `store` with its newest note open.
-    pub fn new(store: Box<dyn Store>, dir_label: String) -> Self {
+    /// The app on `store` with its newest note open and a list
+    /// `sidebar_width` columns wide.
+    pub fn new(store: Box<dyn Store>, dir_label: String, sidebar_width: u16) -> Self {
         let mut app = Self {
             store,
             dir_label,
@@ -209,6 +219,10 @@ impl App {
             todos: None,
             prompt: None,
             sidebar: true,
+            sidebar_width,
+            resizing: false,
+            saved_width: sidebar_width,
+            width_out: None,
             scroll: 0,
             follow: false,
             goal: None,
@@ -267,6 +281,11 @@ impl App {
     /// Text to put on the clipboard (OSC 52), once.
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.clipboard_out.take()
+    }
+
+    /// A width dragged to that the config should save, once.
+    pub fn take_sidebar_width(&mut self) -> Option<u16> {
+        self.width_out.take()
     }
 
     // ----- Loading -----------------------------------------------------------
@@ -1096,9 +1115,37 @@ impl App {
         if self.todos.is_some() {
             return self.todos_mouse(event, at, now);
         }
+        // A drag whose release was missed ends with the next press.
+        if matches!(event.kind, MouseEventKind::Down(_)) {
+            self.resizing = false;
+        }
+        let on_divider = matches!(
+            (self.areas.list, self.areas.editor),
+            (Some(l), Some(_)) if at.x == l.right() && at.y >= l.y && at.y < l.bottom()
+        );
         let in_list = self.areas.list.is_some_and(|r| r.contains(at));
         let in_editor = self.areas.editor.is_some_and(|r| r.contains(at));
         match event.kind {
+            MouseEventKind::Down(MouseButton::Left) if on_divider => {
+                self.resizing = true;
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
+                // The mouse at column `c` puts the divider there.
+                let body = self.areas.body;
+                let (min, _) = NOTES_SIDEBAR_WIDTH;
+                let max = ui::max_list_width(body.width).max(min);
+                self.sidebar_width = at.x.saturating_sub(body.x).clamp(min, max);
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.resizing => {
+                self.resizing = false;
+                if self.sidebar_width != self.saved_width {
+                    self.saved_width = self.sidebar_width;
+                    self.width_out = Some(self.sidebar_width);
+                }
+                true
+            }
             MouseEventKind::Down(MouseButton::Left) if in_list => {
                 let list = self.areas.list.unwrap_or_default();
                 let top = list.y + u16::from(self.filter.is_some());
@@ -1641,7 +1688,8 @@ mod tests {
     }
 
     fn app(memory: &Memory) -> App {
-        let mut app = App::new(Box::new(memory.clone()), "~/notes".into());
+        let width = nuntio_config::Notes::default().sidebar_width;
+        let mut app = App::new(Box::new(memory.clone()), "~/notes".into(), width);
         app.prepare(Size::new(100, 30));
         app
     }
@@ -1814,5 +1862,70 @@ mod tests {
         let open = app.open.as_ref().unwrap();
         assert_eq!(open.buffer.lines()[1], "- [x] milk");
         assert_eq!(open.buffer.cursor(), Pos::default());
+    }
+
+    fn left(app: &mut App, kind: fn(MouseButton) -> MouseEventKind, column: u16) {
+        let event = MouseEvent {
+            kind: kind(MouseButton::Left),
+            column,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse(event, Instant::now());
+        app.prepare(Size::new(100, 30));
+    }
+
+    #[test]
+    fn dragging_the_divider_resizes_the_list_and_reports_the_width_once() {
+        let memory = Memory::with(&[("A", "a\n")]);
+        let mut app = app(&memory);
+        assert_eq!(app.areas.list.unwrap().width, 24);
+        let editor = app.areas.editor.unwrap();
+        assert_eq!((editor.x, editor.width), (25, 75));
+
+        // A resize never moves the editor's cursor, even with the editor focused.
+        app.focus = Focus::Editor;
+        left(&mut app, MouseEventKind::Down, 24);
+        assert!(app.resizing);
+        left(&mut app, MouseEventKind::Drag, 40);
+        assert_eq!(app.areas.list.unwrap().width, 40);
+        assert_eq!(app.open.as_ref().unwrap().buffer.cursor(), Pos::default());
+        left(&mut app, MouseEventKind::Up, 40);
+        assert!(!app.resizing);
+        assert_eq!(app.take_sidebar_width(), Some(40));
+        assert_eq!(app.take_sidebar_width(), None);
+
+        // Clicking the divider without moving it saves nothing.
+        left(&mut app, MouseEventKind::Down, 40);
+        left(&mut app, MouseEventKind::Up, 40);
+        assert_eq!(app.take_sidebar_width(), None);
+    }
+
+    #[test]
+    fn the_dragged_width_stays_between_the_minimum_and_the_editor() {
+        let memory = Memory::with(&[("A", "a\n")]);
+        let mut app = app(&memory);
+        left(&mut app, MouseEventKind::Down, 24);
+        left(&mut app, MouseEventKind::Drag, 3);
+        assert_eq!(app.areas.list.unwrap().width, 12);
+        left(&mut app, MouseEventKind::Drag, 99);
+        assert_eq!(app.areas.list.unwrap().width, 100 - 1 - 30);
+    }
+
+    #[test]
+    fn a_configured_width_that_does_not_fit_leaves_the_editor_room() {
+        let memory = Memory::with(&[("A", "a\n")]);
+        let mut app = App::new(Box::new(memory.clone()), "~/notes".into(), 80);
+        app.prepare(Size::new(70, 30));
+        assert_eq!(app.areas.list.unwrap().width, 70 - 31);
+    }
+
+    #[test]
+    fn a_hidden_list_has_no_divider_to_drag() {
+        let memory = Memory::with(&[("A", "a\n")]);
+        let mut app = app(&memory);
+        ctrl_key(&mut app, 'b', Instant::now());
+        left(&mut app, MouseEventKind::Down, 24);
+        assert!(!app.resizing);
     }
 }

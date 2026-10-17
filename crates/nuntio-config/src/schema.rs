@@ -12,6 +12,8 @@ pub const MAX_PADDING: u16 = 200;
 /// Allowed `window.columns` and `window.lines`.
 pub const WINDOW_COLUMNS: (u16, u16) = (10, 1000);
 pub const WINDOW_LINES: (u16, u16) = (4, 500);
+/// Allowed `notes.sidebar_width`, in columns.
+pub const NOTES_SIDEBAR_WIDTH: (u16, u16) = (12, 80);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
@@ -524,6 +526,17 @@ pub static SETTINGS: &[Setting] = &[
         "In shell menu",
         Kind::Bool,
         "Offer \"Open Notes\" in the shell menu (right-click on the tab bar's \"+\").",
+    ),
+    setting(
+        "notes.sidebar_width",
+        Section::Notes,
+        "List width",
+        Kind::Int {
+            min: NOTES_SIDEBAR_WIDTH.0 as i64,
+            max: NOTES_SIDEBAR_WIDTH.1 as i64,
+            step: 2,
+        },
+        "Width of the list of notes, in columns. Dragging the line between the list and the note changes it too. Applies when the notes open next.",
     ),
     setting(
         "herdr.enabled",

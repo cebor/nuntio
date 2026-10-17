@@ -2,6 +2,7 @@
 //! out the areas and draws what `App` reports. Only ANSI colors and
 //! modifiers, so the app follows the terminal's theme.
 
+use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
 use nuntio_tui::style::{ACCENT, Tone};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
@@ -18,6 +19,8 @@ use super::state::{App, Focus, Prompt, TodoRow};
 
 /// Width below which only the list or only the editor is shown.
 const NARROW: u16 = 60;
+/// Columns the editor keeps at least next to the list.
+const MIN_EDITOR: u16 = 30;
 /// Column of a todo's box in the overview, from the left of the body.
 pub const TODO_BOX_X: u16 = 4;
 
@@ -33,6 +36,13 @@ pub struct Areas {
     /// The note's text in the editor, below the title.
     pub text: Option<Rect>,
     pub too_small: bool,
+}
+
+/// The widest the list can be in a body `body_width` columns wide.
+pub fn max_list_width(body_width: u16) -> u16 {
+    NOTES_SIDEBAR_WIDTH
+        .1
+        .min(body_width.saturating_sub(1 + MIN_EDITOR))
 }
 
 /// Header, body and footer of a screen of `size`; `None` if it is too small.
@@ -72,15 +82,14 @@ pub fn areas(size: Size, app: &App) -> Areas {
             Focus::Editor => areas.editor = Some(body),
         }
     } else if app.sidebar {
-        let width = (size.width * 3 / 10).clamp(22, 34);
-        let [list, editor] =
-            Layout::horizontal([Constraint::Length(width), Constraint::Min(1)]).areas(body);
-        // The last column is the border.
-        areas.list = Some(Rect {
-            width: list.width - 1,
-            ..list
+        let width = app.sidebar_width.min(max_list_width(body.width));
+        areas.list = Some(Rect { width, ..body });
+        // The column after the list is the divider.
+        areas.editor = Some(Rect {
+            x: body.x + width + 1,
+            width: body.width - width - 1,
+            ..body
         });
-        areas.editor = Some(editor);
     } else {
         areas.editor = Some(body);
     }
@@ -163,7 +172,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     width: 1,
                     ..list
                 };
-                let bar = vec![Line::styled("│", dim()); border.height as usize];
+                let style = if app.resizing {
+                    Style::new().fg(ACCENT)
+                } else {
+                    dim()
+                };
+                let bar = vec![Line::styled("│", style); border.height as usize];
                 frame.render_widget(Paragraph::new(bar), border);
             }
         }

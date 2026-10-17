@@ -65,6 +65,7 @@ If you edit the file in another editor while `nuntio-config` is open, it reloads
 - Notes are saved a second after you stop typing, and when you switch notes or quit. If another program changes the open note while it has unsaved changes, you choose whether to overwrite or reload it.
 - Todos are list items with a box: `- [ ] milk`. The list shows each note's progress, like `2/5`, and <kbd>Ctrl</kbd><kbd>O</kbd> lists the open todos of all notes.
 - Deleted notes are moved to a `.trash` folder inside the notes folder.
+- Drag the line between the list and the note to make the list wider or narrower; the width is saved as `notes.sidebar_width`.
 
 | Key | Action |
 |---|---|
@@ -174,6 +175,7 @@ copy_on_select = false
 # Folder of the notes. Default: <data dir>/nuntio/notes.
 # directory = "~/notes"
 in_shell_menu = true
+sidebar_width = 24
 
 [herdr]
 enabled = false
@@ -319,6 +321,7 @@ With `check` on, nuntio asks GitHub once a day whether a newer release exists. N
 |---|---|---|---|
 | `directory` | string | `<data dir>/nuntio/notes` | Folder of the Markdown notes that `nuntio-apps notes` shows: an absolute path, `~` or `~/…`. Created when missing. The default is `~/.local/share/nuntio/notes` on Linux, `~/Library/Application Support/nuntio/notes` on macOS and `%APPDATA%\nuntio\notes` on Windows. |
 | `in_shell_menu` | bool | `true` | Offer "Open Notes" in the shell menu (right-click on the tab bar's "+"). |
+| `sidebar_width` | integer | `24` | Width of the list of notes in columns, `12` to `80`, without the line between list and note. Drag that line with the mouse to change it; the notes save the new width here. Read when the notes open. |
 
 ### `[herdr]`
 

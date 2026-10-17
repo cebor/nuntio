@@ -4,7 +4,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crate::schema::{
-    DIM_INACTIVE, FONT_SIZE, MAX_PADDING, MAX_SCROLLBACK, OPACITY, WINDOW_COLUMNS, WINDOW_LINES,
+    DIM_INACTIVE, FONT_SIZE, MAX_PADDING, MAX_SCROLLBACK, NOTES_SIDEBAR_WIDTH, OPACITY,
+    WINDOW_COLUMNS, WINDOW_LINES,
 };
 use crate::{Config, Shell, StatusBar, StatusItem};
 
@@ -202,6 +203,13 @@ impl Config {
                 ));
             }
         }
+        let (min, max) = NOTES_SIDEBAR_WIDTH;
+        if !(min..=max).contains(&self.notes.sidebar_width) {
+            return Err(format!(
+                "`notes.sidebar_width` must be between {min} and {max}, got {}",
+                self.notes.sidebar_width
+            ));
+        }
         let padding = self.window.padding;
         for (name, value) in [("x", padding.x), ("y", padding.y)] {
             if value > MAX_PADDING {
@@ -378,6 +386,9 @@ mod tests {
         assert!(err.contains("window.padding.y"), "{err}");
         let err = parse("[font]\nfamily = \" \"").unwrap_err();
         assert!(err.contains("font.family"), "{err}");
+        let err = parse("[notes]\nsidebar_width = 5").unwrap_err();
+        assert!(err.contains("notes.sidebar_width"), "{err}");
+        assert!(parse("[notes]\nsidebar_width = 80").is_ok());
     }
 
     #[test]

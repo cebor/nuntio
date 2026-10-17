@@ -11,7 +11,7 @@ mod store;
 mod ui;
 mod widgets;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -28,7 +28,7 @@ const MODES: Modes = Modes {
     mouse: true,
     focus: true,
 };
-const HELP: &str = "Usage: nuntio-apps notes [--dir <path>] [--config <path>]\n\nMarkdown notes, saved as .md files in one folder.\n\nOptions:\n  --dir <path>     Use this folder instead of notes.directory\n  --config <path>  Read notes.directory from this config file\n  -h, --help       Print this help\n";
+const HELP: &str = "Usage: nuntio-apps notes [--dir <path>] [--config <path>]\n\nMarkdown notes, saved as .md files in one folder.\n\nOptions:\n  --dir <path>     Use this folder instead of notes.directory\n  --config <path>  Read the [notes] settings from this config file\n  -h, --help       Print this help\n";
 
 struct Args {
     dir: Option<PathBuf>,
@@ -56,36 +56,38 @@ fn parse_args(mut parser: lexopt::Parser) -> Result<Option<Args>, lexopt::Error>
     Ok(Some(args))
 }
 
-/// The notes folder and a warning to show at startup. `Err`: no folder.
-fn notes_dir(args: &Args) -> Result<(PathBuf, Option<String>), String> {
-    if let Some(dir) = &args.dir {
-        return std::path::absolute(dir)
-            .map(|dir| (dir, None))
-            .map_err(|err| format!("Cannot open the notes folder {}: {err}", dir.display()));
-    }
-    let path = nuntio_config::config_path(args.config.clone());
-    let (notes, warning) = match path.map(|p| nuntio_config::load(&p)) {
+/// The `[notes]` settings at `config` and a warning to show at startup.
+fn notes_settings(config: Option<&Path>) -> (nuntio_config::Notes, Option<String>) {
+    match config.map(nuntio_config::load) {
         Some(Ok(loaded)) => (loaded.config.notes, None),
         Some(Err(err)) => (
             nuntio_config::Notes::default(),
             Some(format!("config: {}", err.message)),
         ),
         None => (nuntio_config::Notes::default(), None),
-    };
+    }
+}
+
+/// The notes folder. `Err`: no folder.
+fn notes_dir(args: &Args, notes: &nuntio_config::Notes) -> Result<PathBuf, String> {
+    if let Some(dir) = &args.dir {
+        return std::path::absolute(dir)
+            .map_err(|err| format!("Cannot open the notes folder {}: {err}", dir.display()));
+    }
     notes
         .resolved_directory()
-        .map(|dir| (dir, warning))
         .ok_or_else(|| "No home directory for the notes folder".to_owned())
 }
 
 /// The app, or the reason the notes folder can't be used.
-fn open(args: &Args) -> Result<App, Failed> {
-    match notes_dir(args) {
-        Ok((dir, warning)) => {
+fn open(args: &Args, config: Option<&Path>) -> Result<App, Failed> {
+    let (notes, warning) = notes_settings(config);
+    match notes_dir(args, &notes) {
+        Ok(dir) => {
             let label = nuntio_config::tilde_path(&dir, dirs::home_dir().as_deref());
             match std::fs::create_dir_all(&dir) {
                 Ok(()) => {
-                    let mut app = App::new(Box::new(DirStore(dir)), label);
+                    let mut app = App::new(Box::new(DirStore(dir)), label, notes.sidebar_width);
                     if let Some(warning) = warning {
                         app.message = Some((Tone::Warn, warning));
                     }
@@ -105,11 +107,28 @@ fn open(args: &Args) -> Result<App, Failed> {
     }
 }
 
+/// Write `width` as `notes.sidebar_width` into the config at `path`,
+/// keeping the rest of the file. A missing file is created.
+fn save_sidebar_width(path: &Path, width: u16) -> Result<(), String> {
+    let source = match std::fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.to_string()),
+    };
+    let mut doc = nuntio_config::ConfigDoc::parse(&source)?;
+    doc.set("notes.sidebar_width", i64::from(width));
+    let text = doc.to_string();
+    // Never write a config nuntio would reject.
+    nuntio_config::parse(&text)?;
+    nuntio_config::write_atomically(path, &text).map_err(|err| err.to_string())
+}
+
 pub fn run(parser: lexopt::Parser) -> Result<()> {
     let Some(args) = parse_args(parser)? else {
         return Ok(());
     };
-    let opened = open(&args);
+    let config = nuntio_config::config_path(args.config.clone());
+    let opened = open(&args, config.as_deref());
 
     let mut terminal = nuntio_tui::terminal::init(MODES)?;
     let result = (|| -> Result<()> {
@@ -117,7 +136,7 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
         // resizes: nuntio resizes a new split's pane right after starting it.
         event::poll(std::time::Duration::ZERO)?;
         match opened {
-            Ok(app) => run_notes(&mut terminal, app),
+            Ok(app) => run_notes(&mut terminal, app, config.as_deref()),
             Err(failed) => run_failed(&mut terminal, &failed),
         }
     })();
@@ -137,7 +156,11 @@ fn run_failed(terminal: &mut ratatui::DefaultTerminal, failed: &Failed) -> Resul
     }
 }
 
-fn run_notes(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
+fn run_notes(
+    terminal: &mut ratatui::DefaultTerminal,
+    mut app: App,
+    config: Option<&Path>,
+) -> Result<()> {
     let mut redraw = true;
     while !app.quit {
         if redraw {
@@ -181,6 +204,13 @@ fn run_notes(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()
             Some(Event::Resize(..)) => true,
             _ => false,
         };
+        if let Some(width) = app.take_sidebar_width()
+            && let Some(path) = config
+            && let Err(err) = save_sidebar_width(path, width)
+        {
+            app.message = Some((Tone::Warn, format!("Cannot save the list width: {err}")));
+            redraw = true;
+        }
     }
     Ok(())
 }

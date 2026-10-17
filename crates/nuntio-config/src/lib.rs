@@ -531,6 +531,8 @@ pub struct Notes {
     pub directory: Option<String>,
     /// The shell menu offers "Open Notes".
     pub in_shell_menu: bool,
+    /// Columns of the note list in the notes app, without the divider.
+    pub sidebar_width: u16,
 }
 
 impl Default for Notes {
@@ -538,6 +540,7 @@ impl Default for Notes {
         Self {
             directory: None,
             in_shell_menu: true,
+            sidebar_width: 24,
         }
     }
 }
