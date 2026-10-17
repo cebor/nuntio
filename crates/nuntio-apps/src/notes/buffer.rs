@@ -305,6 +305,37 @@ impl Buffer {
         self.revision += 1;
     }
 
+    /// Delete the cursor line, or every line the selection touches; a
+    /// selection ending at the start of a line leaves that line. The cursor
+    /// keeps its column on the line that moves into place (the new last line
+    /// when the last lines went). Deleting every line leaves one empty line.
+    pub fn delete_lines(&mut self) {
+        let (first, last) = match self.selection() {
+            Some((start, end)) if end.line > start.line && end.col == 0 => {
+                (start.line, end.line - 1)
+            }
+            Some((start, end)) => (start.line, end.line),
+            None => (self.cursor.line, self.cursor.line),
+        };
+        self.anchor = None;
+        if first == 0 && last + 1 == self.lines.len() {
+            if self.lines.len() == 1 && self.lines[0].is_empty() {
+                return;
+            }
+            self.lines = vec![String::new()];
+            self.cursor = Pos::default();
+        } else {
+            let col = self.cursor.col;
+            self.lines.drain(first..=last);
+            let line = first.min(self.lines.len() - 1);
+            self.cursor = Pos {
+                line,
+                col: snap(&self.lines[line], col),
+            };
+        }
+        self.revision += 1;
+    }
+
     /// Replace `range` of `line` with `text` (no line breaks). Cursor and
     /// anchor on the line move with the text; text before them is
     /// untouched.
@@ -552,6 +583,40 @@ mod tests {
         assert_eq!(buf.cursor(), pos(0, 2));
         assert_eq!(buf.anchor(), None);
         assert!(buf.revision() > revision);
+    }
+
+    #[test]
+    fn delete_lines_removes_the_cursor_line_or_the_selected_lines() {
+        let mut buf = Buffer::new("a\nbb\nc");
+        buf.move_to(pos(1, 2), false);
+        buf.delete_lines();
+        assert_eq!(buf.lines(), ["a", "c"]);
+        assert_eq!(buf.cursor(), pos(1, 1));
+
+        let mut buf = Buffer::new("a\nb");
+        buf.move_to(pos(1, 0), false);
+        buf.delete_lines();
+        assert_eq!(buf.lines(), ["a"]);
+        assert_eq!(buf.cursor(), pos(0, 0));
+
+        let mut buf = Buffer::new("a\nb\nc\nd");
+        buf.move_to(pos(0, 1), false);
+        buf.move_to(pos(2, 0), true);
+        buf.delete_lines();
+        assert_eq!(buf.lines(), ["c", "d"]);
+        assert_eq!(buf.cursor(), pos(0, 0));
+        assert_eq!(buf.anchor(), None);
+
+        let mut buf = Buffer::new("abc");
+        buf.begin(EditKind::Other);
+        buf.delete_lines();
+        assert_eq!(buf.lines(), [""]);
+        assert_eq!(buf.cursor(), pos(0, 0));
+        let revision = buf.revision();
+        buf.delete_lines();
+        assert_eq!(buf.revision(), revision);
+        assert!(buf.undo());
+        assert_eq!(buf.lines(), ["abc"]);
     }
 
     #[test]

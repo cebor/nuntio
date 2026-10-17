@@ -785,6 +785,7 @@ impl App {
                 'z' => self.undo_redo(true, now),
                 'y' => self.undo_redo(false, now),
                 't' => self.edit_with(now, edit::toggle_todo),
+                'd' => self.edit_simple(now, Buffer::delete_lines),
                 _ => {}
             }
             return;

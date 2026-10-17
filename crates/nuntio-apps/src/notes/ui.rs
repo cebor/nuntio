@@ -587,6 +587,7 @@ const HELP: &[(&str, &str)] = &[
     ("", ""),
     ("Editor", ""),
     ("Ctrl+T", "Toggle a todo"),
+    ("Ctrl+D", "Delete the line"),
     ("Tab  Shift+Tab", "Indent, outdent"),
     ("Shift+arrows", "Select"),
     ("Ctrl+A", "Select all"),
