@@ -110,6 +110,7 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |`sysmon`|`sysmon.rs` `SystemMonitor::start`|samples for the status bar|`SystemMonitor` dropped|
 |`update-check`|`update.rs` `Checker::start`|the periodic release check|`Checker` dropped|
 |`update-check-now`|`update::check_now`|one manual check|after one check|
+|`update-install`|`update::install::start`|downloads, checks and installs a release package update, reports `UserEvent::UpdateInstalled`|after one install|
 |`clipboard-read`|`Core::request_paste`|reads the clipboard off the main thread|after one read|
 |`link-open`|`Core::open_url`|runs `link::check` and opens the link|after one link|
 |`multiplexers`|`mux/service.rs` `MuxService::start`|finds herdr/tmux (also in WSL), lists sessions, machines, key bindings and the project every 60 s and when the shell menu opens; owns the agent monitors|`MuxService` dropped|
@@ -431,10 +432,14 @@ Build: [`crates/nuntio/build.rs`](crates/nuntio/build.rs) cross-builds `nuntio-w
 - Status bar `sysmon`: started only if a placed `StatusItem` needs sampling (`sysmon::is_sampled`); synced on every reload.
 - Update check ([`update.rs`](crates/nuntio/src/update.rs)):
   - opt-in: `[updates] check = true` plus at least one indicator;
-  - GET `https://api.github.com/repos/cebor/nuntio/releases/latest`, using only `tag_name`, with conditional ETag requests;
+  - GET `https://api.github.com/repos/cebor/nuntio/releases/latest`, using only `tag_name` and the asset names, with conditional ETag requests;
   - state in the cache dir (`nuntio/update.toml`);
-  - informs only (banner, tab-bar badge, status item); nothing is downloaded;
-  - the wording depends on `NUNTIO_BUILD=release`, which `cargo xtask package` sets.
+  - source builds only inform (banner, tab-bar badge, status item); the wording depends on `NUNTIO_BUILD=release`, which `cargo xtask package` sets.
+- Self-update of release packages (`update_install.rs`, child module `update::install`):
+  - `install::detect` at startup classifies the canonical exe path: tarball (`<prefix>/bin` + `<prefix>/lib/nuntio`), AppImage (`$APPIMAGE` with the exe inside `$APPDIR`), .deb (`/usr/bin/nuntio` + dpkg list), macOS bundle, Windows directory; anything else falls back to informing;
+  - offer (banner, badge and status item open the update menu) or install right away (`updates.install`); `Core::update_progress` tracks Installing/Installed;
+  - the thread takes `nuntio/update.lock` in the cache dir, downloads `SHA256SUMS` and the asset from `releases/download/<tag>/`, checks the SHA-256 (`ring`) and swaps it in: renames within the install's filesystem (staged as `.nuntio-update-<pid>*`, leftovers removed at the next start), `pkexec apt-get install` for the .deb, `hdiutil` + `ditto` for the .dmg, system `tar` for .tar.gz and .zip;
+  - restart: `CloseTarget::Restart` (confirmed like quitting) or `updates.restart` polling every 5 s in `about_to_wait` until every pane's foreground is its shell; `App::finish` returns the `Install` and `main` starts it detached after the panes are gone, passing only `--config` and `--log-level`.
 - Pasted images: a private temp dir per process; stale dirs from earlier runs are swept, the current one is removed in `exiting`.
 
 ## Debug server and drive

@@ -558,6 +558,7 @@ impl Core {
                     MenuKind::Shells => "shells",
                     MenuKind::Tabs => "tabs",
                     MenuKind::Agents => "agents",
+                    MenuKind::Update => "update",
                 },
                 "selected": menu.selected_label(),
                 "entries": menu.labels(),

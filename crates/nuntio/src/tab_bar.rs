@@ -272,7 +272,7 @@ impl TabBar {
 
     /// Left edge of the update badge's area: before the window controls,
     /// or the margin at the right edge.
-    fn badge_x(&self) -> f32 {
+    pub fn badge_x(&self) -> f32 {
         let right = if self.control_width > 0.0 {
             self.controls_x()
         } else {

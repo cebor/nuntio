@@ -167,6 +167,9 @@ check = false
 banner = true
 tab_bar = true
 status_bar = false
+# Release packages: download and install updates, restart into them.
+install = false
+restart = false
 
 [mouse]
 copy_on_select = false
@@ -276,7 +279,7 @@ Each item starts with an icon:
 - `datetime`: the local date and time.
 - `actions`: a button that opens a menu of actions (all but `select_tab_1` … `select_tab_9`), grouped by category and with their shortcuts. Click an entry to run it, or use <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>Enter</kbd>; <kbd>Esc</kbd> closes the menu. It is not in the default list; add it to `items`, or bind the `open_actions_menu` action to open the menu from the keyboard.
 - `shell`: the name of the focused pane's shell. Click it for the [shell menu](#profiles), which opens a new tab with another shell. It is not in the default list.
-- `update`: the version of a newer nuntio release; click it to open the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one and `updates.status_bar` is on.
+- `update`: the version of a newer nuntio release; click it for the update menu (download and install, restart, release notes) or, in nuntio built from source, the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one and `updates.status_bar` is on.
 - `agents`: herdr agents that are blocked, working or done, such as `● 1 blocked · 2 working`, colored by the most urgent one; click it for the list of agents, and an entry to jump to that agent. Hidden while there is none. Needs `herdr.enabled`.
 
 #### Springs
@@ -300,14 +303,16 @@ While the bar is shown, nuntio samples the system and redraws once per second. W
 
 ### `[updates]`
 
-With `check` on, nuntio asks GitHub once a day whether a newer release exists. Nothing is downloaded or installed. Three indicators announce a newer release: `banner`, `tab_bar` and `status_bar`. The check needs at least one of them: with all three off (or only `status_bar` on while the bar is off or `update` isn't in `status_bar.items`) it doesn't run, and in `nuntio-config`, turning off the last one turns `check` off too. Indicators can stay on while `check` is off. nuntio built from source compares the version of your checkout and suggests `git pull` instead. The `check_for_updates` action checks right away and always answers with a banner, even with `check` off.
+With `check` on, nuntio asks GitHub once a day whether a newer release exists. Release packages offer to download and install it (click the banner, badge or status item) and do it on their own with `install`. Three indicators announce a newer release: `banner`, `tab_bar` and `status_bar`. The check needs at least one of them: with all three off (or only `status_bar` on while the bar is off or `update` isn't in `status_bar.items`) it doesn't run, and in `nuntio-config`, turning off the last one turns `check` off too. Indicators can stay on while `check` is off. nuntio built from source compares the version of your checkout and suggests `git pull` instead. The `check_for_updates` action checks right away and always answers with a banner, even with `check` off.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `check` | bool | `false` | Ask GitHub once a day whether a newer release exists. Off by default. |
-| `banner` | bool | `true` | Announce a newer release with a banner at the bottom of the window. Click it for the release notes, or × to not show it again for that version. |
-| `tab_bar` | bool | `true` | Show an arrow in the tab bar while a newer release exists; click it for the release page. |
-| `status_bar` | bool | `false` | Show the version of a newer release in the status bar; click it for the release page. Its place is the `update` item in `status_bar.items`, so it also needs that item and the bar on. In `nuntio-config`, turning it on adds `update` to the items (before the last one) if it's missing; turning it off leaves the items alone. |
+| `banner` | bool | `true` | Announce a newer release with a banner at the bottom of the window. Click it to download and install the update (release packages) or for the release notes, or × to not show it again for that version. |
+| `tab_bar` | bool | `true` | Show an arrow in the tab bar while a newer release exists; click it for the update menu. |
+| `status_bar` | bool | `false` | Show the version of a newer release in the status bar; click it for the update menu. Its place is the `update` item in `status_bar.items`, so it also needs that item and the bar on. In `nuntio-config`, turning it on adds `update` to the items (before the last one) if it's missing; turning it off leaves the items alone. |
+| `install` | bool | `false` | Download and install a newer release from GitHub when a check finds it. Release packages only; source builds ignore it. A .deb install asks for the password through pkexec. |
+| `restart` | bool | `false` | After an update is installed, restart once no program other than the shell runs in any pane (restarting closes all tabs). Release packages only. |
 
 ### `[mouse]`
 

@@ -32,6 +32,7 @@ mod update;
 mod window;
 mod wsl;
 
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -408,6 +409,10 @@ fn run() -> Result<()> {
         ));
     }
     let (config, banner) = load_config(config_path.as_deref(), warnings);
+    let relaunch = relaunch_args(
+        config_path.as_deref().filter(|_| explicit),
+        args.log_level.as_deref(),
+    );
     // Started from the Finder or Dock, nuntio runs in `/`. Start the first
     // shell at home instead, like Terminal.app (`login`, which runs the
     // shell, stays in the current directory).
@@ -454,7 +459,30 @@ fn run() -> Result<()> {
         None => {}
     }
     event_loop.run_app(&mut app).context("event loop failed")?;
-    app.into_result()
+    // Dropping the app ends the panes before the update starts.
+    let (result, restart) = app.finish();
+    if let Some(install) = restart {
+        tracing::info!(program = %install.program().display(), "starting the installed update");
+        install
+            .relaunch(&relaunch)
+            .context("cannot start the installed update")?;
+    }
+    result
+}
+
+/// What a restart into an installed update passes on: `--config` and
+/// `--log-level` if they were given (no command, directory or debug flags).
+fn relaunch_args(config: Option<&Path>, log_level: Option<&str>) -> Vec<OsString> {
+    let mut args = Vec::new();
+    if let Some(config) = config {
+        args.push("--config".into());
+        args.push(config.as_os_str().to_owned());
+    }
+    if let Some(level) = log_level {
+        args.push("--log-level".into());
+        args.push(level.into());
+    }
+    args
 }
 
 #[cfg(test)]

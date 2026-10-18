@@ -47,6 +47,8 @@ pub enum UserEvent {
     SystemStats(Sample),
     /// The answer of an update check.
     Update(Checked),
+    /// A download and install finished.
+    UpdateInstalled(crate::update::install::Installed),
     /// A command from the macOS menu bar.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Menu(MenuCommand),

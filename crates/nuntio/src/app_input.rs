@@ -20,7 +20,7 @@ use crate::actions::Action;
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
-use crate::menu::{MenuKind, Step};
+use crate::menu::{MenuKind, Step, UpdateStage};
 use crate::mouse::{Button, MouseAction};
 use crate::pane_tree::Axis;
 use crate::shell_words::path_word;
@@ -232,6 +232,10 @@ impl Core {
             Action::OpenMuxEntry(index) => self.open_mux_entry(state, index),
             Action::OpenAgentsMenu => self.open_agents_menu(state),
             Action::FocusAgent(index) => self.focus_agent(state, index),
+            Action::OpenUpdateMenu => self.open_update_menu(state, false),
+            Action::InstallUpdate => self.start_install(Some(state), true),
+            Action::RestartForUpdate => self.restart_for_update(state),
+            Action::OpenReleaseNotes => self.open_update(),
         }
         state.window.request_redraw();
     }
@@ -261,6 +265,31 @@ impl Core {
             at_new_tab,
         );
         self.refresh_mux(state);
+    }
+
+    /// Open, or close if it is open, the update menu, at the tab bar's
+    /// badge with `at_badge`, otherwise at the `update` status bar item.
+    /// nuntio that can't update itself opens the release page instead.
+    pub(super) fn open_update_menu(&mut self, state: &mut WindowState, at_badge: bool) {
+        if self.install.is_none() {
+            self.open_update();
+            return;
+        }
+        let Some(update) = &self.update else {
+            return;
+        };
+        if state.menu_kind() == Some(MenuKind::Update) {
+            state.close_menu();
+            return;
+        }
+        let stage = match &self.update_progress {
+            Some(update::Progress::Installing { .. }) => UpdateStage::Installing,
+            Some(update::Progress::Installed { version, .. }) if *version == update.version => {
+                UpdateStage::Installed
+            }
+            _ => UpdateStage::Available,
+        };
+        state.open_update_menu(&self.config, &self.stats, &update.version, stage, at_badge);
     }
 
     /// A launch for the helper `program` with `args`, whose tab is named
@@ -591,7 +620,7 @@ impl Core {
         let left = button == Button::Left;
         match state.status_item_at(&self.config, &self.stats, pos) {
             Some(StatusItem::Update) if left => {
-                self.open_update();
+                self.open_update_menu(state, false);
                 return;
             }
             Some(StatusItem::Actions) if left => {
@@ -691,7 +720,7 @@ impl Core {
 
     /// A click on the banner pages through its messages, opens its link or
     /// closes it. Returns whether the click was on the banner.
-    fn press_banner(&mut self, state: &WindowState, pos: PhysicalPosition<f64>) -> bool {
+    fn press_banner(&mut self, state: &mut WindowState, pos: PhysicalPosition<f64>) -> bool {
         let Some(banner) = &self.banner else {
             return false;
         };
@@ -701,11 +730,11 @@ impl Core {
         let width = state.window.inner_size().width as f32;
         let metrics = state.ui_metrics();
         let x = pos.x as f32;
-        let url = banner
-            .url
-            .clone()
-            .filter(|_| !banner.on_close(x, width, metrics));
+        let on_close = banner.on_close(x, width, metrics);
+        let url = banner.url.clone().filter(|_| !on_close);
+        let action = banner.action.filter(|_| !on_close);
         let stays = url.is_none()
+            && action.is_none()
             && self
                 .banner
                 .as_mut()
@@ -714,6 +743,7 @@ impl Core {
         if !stays && let Some(closed) = self.banner.take() {
             // Closing the update banner means: not for this release.
             if closed.topic == Topic::Update
+                && action.is_none()
                 && let Some(update) = &self.update
             {
                 update::dismiss(&update.version);
@@ -721,6 +751,9 @@ impl Core {
         }
         if let Some(url) = url {
             self.open_url(&url);
+        }
+        if let Some(action) = action {
+            self.run_action(state, action);
         }
         true
     }
@@ -802,7 +835,7 @@ impl Core {
             BarHit::Minimize => state.window.set_minimized(true),
             BarHit::Maximize => state.toggle_maximized(),
             BarHit::CloseWindow => self.request_close(state, CloseTarget::Window),
-            BarHit::Update => self.open_update(),
+            BarHit::Update => self.open_update_menu(state, true),
         }
     }
 

@@ -1,9 +1,10 @@
 //! The menus that open from the status bar: the menu of all actions that
 //! the `actions` item opens, a list with a heading per category, each entry
 //! with its shortcut, the menu of shells for a new tab (with herdr and tmux
-//! sessions) and the list of herdr agents. Also the list of all tabs that
-//! the tab bar's ⌄ button opens. They are laid out in the cells of the
-//! small UI font (`UiMetrics::small`).
+//! sessions), the list of herdr agents and the update menu (also opened by
+//! the tab bar's update badge). Also the list of all tabs that the tab
+//! bar's ⌄ button opens. They are laid out in the cells of the small UI
+//! font (`UiMetrics::small`).
 
 use std::borrow::Cow;
 
@@ -99,6 +100,7 @@ pub enum MenuKind {
     Shells,
     Tabs,
     Agents,
+    Update,
 }
 
 impl MenuKind {
@@ -109,6 +111,7 @@ impl MenuKind {
             Self::Actions => Some(Action::OpenActionsMenu),
             Self::Shells => Some(Action::OpenShellMenu),
             Self::Agents => Some(Action::OpenAgentsMenu),
+            Self::Update => Some(Action::OpenUpdateMenu),
             Self::Tabs => None,
         }
     }
@@ -119,9 +122,18 @@ impl MenuKind {
             Self::Actions => Some(StatusItem::Actions),
             Self::Shells => Some(StatusItem::Shell),
             Self::Agents => Some(StatusItem::Agents),
+            Self::Update => Some(StatusItem::Update),
             Self::Tabs => None,
         }
     }
+}
+
+/// What the update menu offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateStage {
+    Available,
+    Installing,
+    Installed,
 }
 
 /// Where the menu grows from: the left edge of the status bar item and the
@@ -333,6 +345,27 @@ impl Menu {
             });
         }
         Self::with_rows(MenuKind::Agents, anchor, rows)
+    }
+
+    /// The menu of the update badge and the `update` status bar item.
+    pub fn update(anchor: Anchor, version: &str, stage: UpdateStage) -> Self {
+        let entry = |label: &'static str, action| Row::Entry {
+            label: label.into(),
+            action,
+            detail: None,
+            current: false,
+        };
+        let rows = vec![
+            Row::Heading(format!("nuntio {version}").into()),
+            match stage {
+                UpdateStage::Available => entry("Download & Install", Action::InstallUpdate),
+                // Already running: a click just closes the menu.
+                UpdateStage::Installing => entry("Installing…", Action::InstallUpdate),
+                UpdateStage::Installed => entry("Restart to Update", Action::RestartForUpdate),
+            },
+            entry("Release Notes", Action::OpenReleaseNotes),
+        ];
+        Self::with_rows(MenuKind::Update, anchor, rows)
     }
 
     /// The list of all tabs: entry `i` runs `Action::SelectTab(i)`. The
@@ -806,6 +839,29 @@ mod tests {
         }
         // Everything fits: no scroll arrows.
         assert!(!strings.contains(&"▲") && !strings.contains(&"▼"));
+    }
+
+    #[test]
+    fn the_update_menu_offers_what_the_install_allows() {
+        let anchor = Anchor {
+            x: 10.0,
+            y: 28.0,
+            opens_up: false,
+            centered: false,
+        };
+        for (stage, first) in [
+            (UpdateStage::Available, Action::InstallUpdate),
+            (UpdateStage::Installing, Action::InstallUpdate),
+            (UpdateStage::Installed, Action::RestartForUpdate),
+        ] {
+            let menu = Menu::update(anchor, "0.3.2", stage);
+            assert_eq!(menu.kind(), MenuKind::Update);
+            assert_eq!(
+                entries(&menu),
+                [first, Action::OpenReleaseNotes],
+                "{stage:?}"
+            );
+        }
     }
 
     #[test]

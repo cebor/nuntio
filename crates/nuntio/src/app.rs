@@ -18,14 +18,16 @@ use winit::event::{ElementState, Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::window::{Theme as WindowTheme, Window, WindowAttributes, WindowId};
 
-use crate::actions::Bindings;
+use crate::actions::{Action, Bindings};
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, MenuCommand, PaneId, PasteSource, Pasted, UserEvent};
 use crate::input::KeyPress;
+use crate::menu::MenuKind;
 use crate::render_health::{GpuProbe, HealthAction};
 use crate::status_bar::Stats;
 use crate::sysmon::{SystemMonitor, is_sampled};
-use crate::update::{self, Build, Checker, Update};
+use crate::update::install::{InstallResult, Installed};
+use crate::update::{self, Build, Checker, Progress, Reaction, Update};
 use crate::window::{self, Chrome, DEFAULT_TITLE, WindowState};
 
 // Child modules, so that their handlers can reach the app's state.
@@ -52,6 +54,15 @@ const NO_SOFTWARE_RENDERER: &str = "no software renderer available, nuntio keeps
 const TRAFFIC_LIGHTS_WIDTH: f64 = 78.0;
 /// How long an action that asked for confirmation waits to be repeated.
 const CONFIRM_REPEAT: Duration = Duration::from_secs(5);
+/// How often `updates.restart` looks whether nothing runs any more.
+const RESTART_POLL: Duration = Duration::from_secs(5);
+
+/// Close the update menu if it is open: what it offers has changed.
+fn close_update_menu(state: &mut WindowState) {
+    if state.menu_kind() == Some(MenuKind::Update) {
+        state.close_menu();
+    }
+}
 
 /// A request (`key`) that waits to be repeated within `CONFIRM_REPEAT`.
 #[derive(Debug, Clone)]
@@ -350,6 +361,14 @@ struct Core {
     update_checker: Option<Checker>,
     /// A newer release, once a check found one.
     update: Option<Update>,
+    /// How this release package is installed, if it can update itself.
+    install: Option<update::install::Install>,
+    /// A download and install of `update`, running or done.
+    update_progress: Option<Progress>,
+    /// When `updates.restart` next looks whether nothing runs.
+    restart_check: Option<Instant>,
+    /// Quit and start the installed update.
+    restart: bool,
     clipboard: Option<arboard::Clipboard>,
     /// Clipboard images pasted as files; removed at exit.
     pasted_images: crate::pasted_images::PastedImages,
@@ -407,8 +426,12 @@ impl App {
         self.core.debug.headless = headless;
     }
 
-    pub fn into_result(self) -> Result<()> {
-        self.core.error.map_or(Ok(()), Err)
+    /// The error that ended the event loop, if any, and the installation
+    /// to start if nuntio quit to restart into an update.
+    pub fn finish(self) -> (Result<()>, Option<update::install::Install>) {
+        let core = self.core;
+        let restart = core.install.filter(|_| core.restart);
+        (core.error.map_or(Ok(()), Err), restart)
     }
 }
 
@@ -440,6 +463,10 @@ impl Core {
         });
         let (themes, theme_warnings) = ThemeSet::load(themes_dir.as_deref());
         let (bindings, binding_warnings) = Bindings::from_config(&config.keybindings);
+        let install = (Build::current() == Build::Release)
+            .then(update::install::detect)
+            .flatten();
+        tracing::debug!(?install, "update installation");
 
         let mut core = Self {
             font_size: config.font.size,
@@ -461,6 +488,10 @@ impl Core {
             stats: Stats::default(),
             update_checker: None,
             update: None,
+            install,
+            update_progress: None,
+            restart_check: None,
+            restart: false,
             clipboard,
             pasted_images: crate::pasted_images::PastedImages::new(),
             next_pane_id: 0,
@@ -715,12 +746,18 @@ impl Core {
     }
 
     /// Show what an update check found.
-    fn update_checked(&mut self, state: Option<&mut WindowState>, checked: update::Checked) {
+    fn update_checked(&mut self, mut state: Option<&mut WindowState>, checked: update::Checked) {
+        let reaction = match &self.install {
+            Some(_) if self.config.updates.install => Reaction::Install,
+            Some(_) => Reaction::Offer,
+            None => Reaction::Tell,
+        };
         let outcome = update::decide(
             checked,
             self.update_checker.is_some(),
             self.config.updates.banner,
             Build::current(),
+            reaction,
         );
         match outcome {
             update::Outcome::Ignore => {}
@@ -733,20 +770,170 @@ impl Core {
                 update,
                 notice,
                 manual,
+                install,
             } => {
-                // A repeated answer replaces the banner instead of adding to it.
-                self.dismiss_banner(Topic::Update);
-                if let Some(update::Notice { message, url }) = notice {
-                    let banner = Banner::new(Severity::Info, Topic::Update, vec![message]);
-                    let banner = banner.map(|b| match url {
-                        Some(url) => b.with_url(url),
-                        None => b,
-                    });
-                    self.show_update_banner(banner, manual);
+                let found = update.as_ref().map(|u| u.version.as_str());
+                // Installing or installed already: its own banner speaks.
+                let underway = matches!(
+                    &self.update_progress,
+                    Some(Progress::Installing { version, .. } | Progress::Installed { version, .. })
+                        if Some(version.as_str()) == found
+                );
+                if underway {
+                    if manual {
+                        self.show_progress_banner(true);
+                    }
+                } else {
+                    // A repeated answer replaces the banner instead of adding to it.
+                    self.dismiss_banner(Topic::Update);
+                    if let Some(update::Notice { message, click }) = notice {
+                        let banner = Banner::new(Severity::Info, Topic::Update, vec![message]);
+                        let banner = banner.map(|b| match click {
+                            update::Click::Open(url) => b.with_url(url),
+                            update::Click::Install => b.with_action(Action::InstallUpdate),
+                            update::Click::None => b,
+                        });
+                        self.show_update_banner(banner, manual);
+                    }
                 }
-                self.set_update(state, update);
+                self.set_update(state.as_deref_mut(), update);
+                if install && !underway {
+                    self.start_install(state, manual);
+                }
             }
         }
+    }
+
+    /// Download and install the newer release, unless that runs or is
+    /// done. `manual`: asked for by the user, so it reports with banners
+    /// even without `updates.banner`.
+    fn start_install(&mut self, state: Option<&mut WindowState>, manual: bool) {
+        let (Some(install), Some(update)) = (&self.install, &self.update) else {
+            return;
+        };
+        match &self.update_progress {
+            Some(Progress::Installing { .. }) => return,
+            Some(Progress::Installed { version, .. }) if *version == update.version => return,
+            _ => {}
+        }
+        let (install, release) = (install.clone(), update.release.clone());
+        self.update_progress = Some(Progress::Installing {
+            version: update.version.clone(),
+            manual,
+        });
+        if let Some(state) = state {
+            close_update_menu(state);
+        }
+        self.show_progress_banner(manual);
+        update::install::start(self.proxy.clone(), install, release);
+        self.request_redraw();
+    }
+
+    /// The banner for a running or finished install, if the user asked for
+    /// it or `updates.banner` is on.
+    fn show_progress_banner(&mut self, manual: bool) {
+        if !manual && !self.config.updates.banner {
+            return;
+        }
+        let (message, restart) = match &self.update_progress {
+            Some(Progress::Installing { version, .. }) => (
+                format!("Downloading and installing nuntio {version}…"),
+                false,
+            ),
+            Some(Progress::Installed { version, .. }) if self.config.updates.restart => (
+                format!(
+                    "nuntio {version} is installed and restarts when no program is running. Click to restart now"
+                ),
+                true,
+            ),
+            Some(Progress::Installed { version, .. }) => (
+                format!("nuntio {version} is installed. Click to restart"),
+                true,
+            ),
+            None => return,
+        };
+        self.dismiss_banner(Topic::Update);
+        let banner = Banner::new(Severity::Info, Topic::Update, vec![message]);
+        let banner = banner.map(|b| {
+            if restart {
+                b.with_action(Action::RestartForUpdate)
+            } else {
+                b
+            }
+        });
+        self.show_update_banner(banner, manual);
+    }
+
+    /// An install thread finished.
+    fn update_installed(&mut self, state: Option<&mut WindowState>, installed: Installed) {
+        let manual = match &self.update_progress {
+            Some(Progress::Installing { version, manual }) if *version == installed.version => {
+                *manual
+            }
+            _ => return,
+        };
+        let version = installed.version;
+        match installed.result {
+            InstallResult::Installed => {
+                self.update_progress = Some(Progress::Installed { version, manual });
+                if let Some(state) = state {
+                    close_update_menu(state);
+                }
+                self.show_progress_banner(manual);
+                if self.config.updates.restart {
+                    self.restart_check = Some(Instant::now());
+                }
+            }
+            InstallResult::Busy => {
+                self.update_progress = None;
+                self.dismiss_banner(Topic::Update);
+                if manual {
+                    let message = "another nuntio window is installing an update".to_owned();
+                    let banner =
+                        Banner::new(Severity::Warning, Topic::UpdateInstall, vec![message]);
+                    self.show_update_banner(banner, true);
+                } else {
+                    tracing::info!("another nuntio process is installing the update");
+                }
+            }
+            InstallResult::Failed(err) => {
+                tracing::warn!("installing nuntio {version} failed: {err}");
+                self.update_progress = None;
+                self.dismiss_banner(Topic::Update);
+                let url = self.update.as_ref().map(|u| u.url.clone());
+                let message = match url {
+                    Some(_) => format!("nuntio {version}: {err}. Click for the release page"),
+                    None => format!("nuntio {version}: {err}"),
+                };
+                let banner = Banner::new(Severity::Warning, Topic::UpdateInstall, vec![message]);
+                let banner = banner.map(|b| match url {
+                    Some(url) => b.with_url(url),
+                    None => b,
+                });
+                self.show_update_banner(banner, manual);
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// `updates.restart`: restart into the installed update once every pane
+    /// runs only its shell. A pane whose process can't be seen (Windows)
+    /// counts as busy.
+    fn restart_due(&mut self, state: &WindowState, now: Instant) -> bool {
+        if self.restart_check.is_none_or(|at| now < at) {
+            return false;
+        }
+        if state
+            .panes()
+            .all(|p| p.term.foreground_is_shell() == Some(true))
+        {
+            tracing::info!("restarting into the installed update");
+            self.restart = true;
+            self.exit_requested = true;
+            return true;
+        }
+        self.restart_check = Some(now + RESTART_POLL);
+        false
     }
 
     /// A manual check's banner replaces the current one; a daily one is queued.
@@ -806,6 +993,27 @@ impl Core {
         warnings.extend(self.update_palette(state.as_deref_mut()));
         self.sync_system_monitor();
         self.sync_update_checker(state.as_deref_mut());
+        if !old.updates.install && self.config.updates.install {
+            self.start_install(state.as_deref_mut(), false);
+        }
+        if old.updates.restart != self.config.updates.restart {
+            let installed = match &self.update_progress {
+                Some(Progress::Installed { manual, .. }) => Some(*manual),
+                _ => None,
+            };
+            self.restart_check = installed
+                .filter(|_| self.config.updates.restart)
+                .map(|_| Instant::now());
+            // The banner on screen says whether nuntio restarts by itself.
+            if let Some(manual) = installed
+                && self
+                    .banner
+                    .as_ref()
+                    .is_some_and(|b| b.topic == Topic::Update)
+            {
+                self.show_progress_banner(manual);
+            }
+        }
         self.sync_mux(state.as_deref_mut());
         if old.updates.banner && !self.config.updates.banner {
             self.dismiss_banner(Topic::Update);
@@ -1506,9 +1714,20 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         };
         let now = Instant::now();
+        if self.core.restart_due(state, now) {
+            event_loop.exit();
+            return;
+        }
         self.core.probe_gpu(state, event_loop, now);
-        // Sleep until the next timer, or until an event if there is none.
-        let deadline = state.run_timers(&self.core.config, now);
+        // Sleep until the next timer (or restart check), or until an event
+        // if there is none.
+        let deadline = match (
+            state.run_timers(&self.core.config, now),
+            self.core.restart_check,
+        ) {
+            (Some(timer), Some(restart)) => Some(timer.min(restart)),
+            (timer, restart) => timer.or(restart),
+        };
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
@@ -1537,6 +1756,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::ConfigChanged => core.reload_config(state),
             UserEvent::Update(checked) => core.update_checked(state, checked),
+            UserEvent::UpdateInstalled(installed) => core.update_installed(state, installed),
             UserEvent::SystemStats(sample) => {
                 // Late samples from a monitor that was just stopped.
                 if core.system_monitor.is_none() {

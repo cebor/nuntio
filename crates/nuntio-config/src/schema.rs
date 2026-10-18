@@ -299,7 +299,7 @@ pub static SETTINGS: &[Setting] = &[
         Section::Updates,
         "Check for updates",
         Kind::Bool,
-        "Ask GitHub once a day whether a newer nuntio release exists. Nothing is downloaded or installed. \
+        "Ask GitHub once a day whether a newer nuntio release exists. It downloads nothing unless Download and install is on. \
          Needs at least one indicator below; turning off the last one turns this off too.",
     ),
     setting(
@@ -314,15 +314,31 @@ pub static SETTINGS: &[Setting] = &[
         Section::Updates,
         "Tab bar badge",
         Kind::Bool,
-        "Show an arrow in the tab bar while a newer nuntio release exists; click it for the release page.",
+        "Show an arrow in the tab bar while a newer nuntio release exists; click it to install the update or read the release notes.",
     ),
     setting(
         "updates.status_bar",
         Section::Updates,
         "Status bar item",
         Kind::Bool,
-        "Show the version of a newer nuntio release in the status bar; click it for the release page. \
+        "Show the version of a newer nuntio release in the status bar; click it to install the update or read the release notes. \
          Where it goes is set by the `update` item under Status bar → Items; turning this on puts it there if it's missing.",
+    ),
+    setting(
+        "updates.install",
+        Section::Updates,
+        "Download and install",
+        Kind::Bool,
+        "Download and install a newer release from GitHub as soon as a check finds it; a banner says when it is installed. \
+         Only packages from the GitHub releases do this; nuntio built from source ignores it. A .deb install asks for your password (pkexec).",
+    ),
+    setting(
+        "updates.restart",
+        Section::Updates,
+        "Restart automatically",
+        Kind::Bool,
+        "Once an update is installed, restart nuntio as soon as no program other than the shell runs in any pane. \
+         Restarting closes all tabs. Only packages from the GitHub releases; nuntio built from source ignores it.",
     ),
     setting(
         "theme",

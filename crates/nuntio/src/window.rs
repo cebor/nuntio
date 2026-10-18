@@ -18,7 +18,7 @@ use crate::actions::Bindings;
 use crate::banner::Banner;
 use crate::event::PaneId;
 use crate::input;
-use crate::menu::{Anchor, Menu, MenuEntry, MenuKind, MenuSection, View};
+use crate::menu::{Anchor, Menu, MenuEntry, MenuKind, MenuSection, UpdateStage, View};
 use crate::mux::MuxPane;
 use crate::mux::agents::SessionKey;
 use crate::mux::herdr::AgentStatus;
@@ -700,6 +700,39 @@ impl WindowState {
             .status_item_anchor(config, stats, StatusItem::Agents)
             .unwrap_or_else(|| self.centered_anchor(config));
         self.show_menu(Menu::agents(anchor, entries));
+    }
+
+    /// Open the update menu at the tab bar's badge (`at_badge`) or the
+    /// `update` status bar item, whichever is shown, preferring the one
+    /// clicked; else at the top of the terminal area.
+    pub fn open_update_menu(
+        &mut self,
+        config: &Config,
+        stats: &Stats,
+        version: &str,
+        stage: UpdateStage,
+        at_badge: bool,
+    ) {
+        let badge = || self.update_badge_anchor(config);
+        let item = || self.status_item_anchor(config, stats, StatusItem::Update);
+        let anchor = if at_badge {
+            badge().or_else(item)
+        } else {
+            item().or_else(badge)
+        }
+        .unwrap_or_else(|| self.centered_anchor(config));
+        self.show_menu(Menu::update(anchor, version, stage));
+    }
+
+    /// Below the tab bar's update badge, while it is shown.
+    fn update_badge_anchor(&self, config: &Config) -> Option<Anchor> {
+        let bar = self.tab_bar(config).filter(|_| self.update_badge)?;
+        Some(Anchor {
+            x: bar.badge_x(),
+            y: bar.height,
+            opens_up: false,
+            centered: false,
+        })
     }
 
     /// Below or above the status bar `item`, if it is shown.

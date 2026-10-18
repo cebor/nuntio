@@ -13,6 +13,7 @@ use crate::event::{PaneId, UserEvent};
 use crate::pane_tree::Axis;
 use crate::shells::{self, Launch, ShellChoice};
 use crate::tabs::Placement;
+use crate::update;
 use crate::window::{Pane, TabContent, WindowState};
 use crate::wsl::Distro;
 
@@ -37,6 +38,8 @@ fn wsl_helper(_shell: &nuntio_config::Shell) -> Option<String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseTarget {
     Window,
+    /// The window, to start the installed update.
+    Restart,
     /// The tab holding this pane.
     Tab(PaneId),
     Pane(PaneId),
@@ -78,6 +81,7 @@ fn close_message(running: &[String], target: CloseTarget) -> String {
     };
     let again = match target {
         CloseTarget::Window => "quit",
+        CloseTarget::Restart => "restart",
         CloseTarget::Tab(_) => "close the tab",
         CloseTarget::Pane(_) => "close the pane",
     };
@@ -484,6 +488,10 @@ impl Core {
         }
         match target {
             CloseTarget::Window => self.exit_requested = true,
+            CloseTarget::Restart => {
+                self.restart = true;
+                self.exit_requested = true;
+            }
             CloseTarget::Tab(id) => {
                 if let Some(index) = state.tabs.position(|c| c.contains(id)) {
                     self.close_tab(state, index);
@@ -511,7 +519,7 @@ impl Core {
         }
         let tabs = state.tabs.iter().map(|t| &t.content);
         let panes: Vec<&Pane> = match target {
-            CloseTarget::Window => state.panes().collect(),
+            CloseTarget::Window | CloseTarget::Restart => state.panes().collect(),
             CloseTarget::Tab(id) => tabs
                 .filter(|c| c.contains(id))
                 .flat_map(|c| &c.panes)
@@ -534,6 +542,18 @@ impl Core {
         }
         self.ask_to_repeat(Topic::Close, close_message(&running, target));
         false
+    }
+
+    /// Quit and start the installed update, once confirmed like quitting.
+    pub(super) fn restart_for_update(&mut self, state: &mut WindowState) {
+        if !matches!(
+            self.update_progress,
+            Some(update::Progress::Installed { .. })
+        ) {
+            tracing::debug!("no installed update to restart into");
+            return;
+        }
+        self.request_close(state, CloseTarget::Restart);
     }
 }
 
@@ -569,6 +589,10 @@ mod tests {
         assert_eq!(
             close_message(&names(&["htop", "top"]), CloseTarget::Tab(PaneId(1))),
             "htop, top are still running; close the tab again to end them"
+        );
+        assert_eq!(
+            close_message(&names(&["vim"]), CloseTarget::Restart),
+            "vim is still running; restart again to end it"
         );
     }
 }

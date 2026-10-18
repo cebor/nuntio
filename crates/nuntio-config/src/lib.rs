@@ -504,6 +504,12 @@ pub struct Updates {
     pub tab_bar: bool,
     /// The `update` status bar item, where `status_bar.items` places it.
     pub status_bar: bool,
+    /// Download and install a newer release when a check finds it
+    /// (packages from the GitHub releases only).
+    pub install: bool,
+    /// Restart into an installed update once no program runs in a pane
+    /// (packages from the GitHub releases only).
+    pub restart: bool,
 }
 
 impl Default for Updates {
@@ -513,6 +519,8 @@ impl Default for Updates {
             banner: true,
             tab_bar: true,
             status_bar: false,
+            install: false,
+            restart: false,
         }
     }
 }

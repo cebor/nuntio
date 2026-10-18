@@ -5,6 +5,7 @@
 use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::rgb;
 
+use crate::actions::Action;
 use crate::style::{INFO_COLOR, UiMetrics};
 use unicode_width::UnicodeWidthStr;
 
@@ -25,6 +26,8 @@ pub enum Topic {
     Config,
     Update,
     UpdateCheck,
+    /// A download and install of an update failed.
+    UpdateInstall,
     Link,
     Shell,
     Settings,
@@ -49,6 +52,7 @@ impl Topic {
             },
             Self::Update => "Update",
             Self::UpdateCheck => "Update check",
+            Self::UpdateInstall => "Update failed",
             Self::Link => "Link",
             Self::Shell => "Shell",
             Self::Settings => "Settings",
@@ -71,6 +75,8 @@ pub struct Banner {
     pub messages: Vec<String>,
     /// Opened by a click outside the ×.
     pub url: Option<String>,
+    /// Run by a click outside the ×, instead of opening `url`.
+    pub action: Option<Action>,
     /// Index of the message shown.
     shown: usize,
 }
@@ -82,6 +88,7 @@ impl Banner {
             topic,
             messages,
             url: None,
+            action: None,
             shown: 0,
         })
     }
@@ -89,6 +96,13 @@ impl Banner {
     pub fn with_url(self, url: String) -> Self {
         Self {
             url: Some(url),
+            ..self
+        }
+    }
+
+    pub fn with_action(self, action: Action) -> Self {
+        Self {
+            action: Some(action),
             ..self
         }
     }

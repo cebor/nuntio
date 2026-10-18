@@ -58,6 +58,14 @@ pub enum Action {
     OpenAgentsMenu,
     /// Switch to agent N of the open agents menu.
     FocusAgent(usize),
+    /// Open the update menu (tab bar badge, `update` status bar item).
+    OpenUpdateMenu,
+    /// Download and install the newer release.
+    InstallUpdate,
+    /// Quit and start the installed update.
+    RestartForUpdate,
+    /// Open the newer release's page.
+    OpenReleaseNotes,
 }
 
 /// Every action by its name in the config (`nuntio_config::ACTIONS`
@@ -172,7 +180,11 @@ impl Action {
             | Self::OpenActionsMenu
             | Self::NewTabWithShell(_)
             | Self::OpenMuxEntry(_)
-            | Self::FocusAgent(_) => return None,
+            | Self::FocusAgent(_)
+            | Self::OpenUpdateMenu
+            | Self::InstallUpdate
+            | Self::RestartForUpdate
+            | Self::OpenReleaseNotes => return None,
         })
     }
 }

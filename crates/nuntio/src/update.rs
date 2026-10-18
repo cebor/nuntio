@@ -1,6 +1,7 @@
-//! Looks for a newer nuntio release on GitHub. It only tells: nothing is
-//! downloaded or installed. The last answer is cached, so the check runs
-//! at most once a day, even across restarts.
+//! Looks for a newer nuntio release on GitHub. Release packages can also
+//! download and install it (`install`); nuntio built from source only
+//! tells. The last answer is cached, so the check runs at most once a day,
+//! even across restarts.
 
 use std::cmp::Ordering;
 use std::fs;
@@ -15,6 +16,9 @@ use serde::{Deserialize, Serialize};
 use winit::event_loop::EventLoopProxy;
 
 use crate::event::UserEvent;
+
+#[path = "update_install.rs"]
+pub(crate) mod install;
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 /// Tag characters kept as they are in a URL path.
@@ -70,6 +74,9 @@ impl Version {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Release {
     pub tag: String,
+    /// The file names of its assets.
+    #[serde(default)]
+    pub assets: Vec<String>,
 }
 
 impl Release {
@@ -80,16 +87,35 @@ impl Release {
     }
 }
 
-/// The field of GitHub's answer we need.
+/// `<repository>/releases/download/<tag>/<name>`, built here like
+/// [`Release::page_url`].
+fn download_url(tag: &str, name: &str) -> String {
+    format!(
+        "{}/releases/download/{}/{}",
+        REPOSITORY.trim_end_matches('/'),
+        utf8_percent_encode(tag, TAG),
+        utf8_percent_encode(name, TAG)
+    )
+}
+
+/// The fields of GitHub's answer we need.
 #[derive(Deserialize)]
 struct GitHubRelease {
     tag_name: String,
+    #[serde(default)]
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Deserialize)]
+struct GitHubAsset {
+    name: String,
 }
 
 impl From<GitHubRelease> for Release {
     fn from(release: GitHubRelease) -> Self {
         Self {
             tag: release.tag_name,
+            assets: release.assets.into_iter().map(|a| a.name).collect(),
         }
     }
 }
@@ -101,6 +127,7 @@ pub struct Update {
     pub version: String,
     pub url: String,
     pub build: Build,
+    pub release: Release,
 }
 
 impl Update {
@@ -111,6 +138,7 @@ impl Update {
             version: release.tag.trim_start_matches('v').to_owned(),
             url: release.page_url(),
             build,
+            release: release.clone(),
         })
     }
 
@@ -152,18 +180,53 @@ pub enum Outcome {
     Failed { error: String, manual: bool },
     /// A release was found: show `notice` (if any) and remember `update`
     /// (badge, status bar item). `manual` banners replace the current one.
+    /// `install`: start downloading and installing it now.
     Found {
         update: Option<Update>,
         notice: Option<Notice>,
         manual: bool,
+        install: bool,
     },
+}
+
+/// What this binary does with a newer release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reaction {
+    /// Point to the release page (`git pull` for source builds).
+    Tell,
+    /// Offer to download and install it.
+    Offer,
+    /// Download and install it right away (`updates.install`).
+    Install,
+}
+
+/// What a click on the update banner does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Click {
+    None,
+    Open(String),
+    Install,
 }
 
 /// The text of an update banner.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Notice {
     pub message: String,
-    pub url: Option<String>,
+    pub click: Click,
+}
+
+/// A download and install that is running or done.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Progress {
+    /// `manual`: the user asked for it, so it reports with banners.
+    Installing {
+        version: String,
+        manual: bool,
+    },
+    Installed {
+        version: String,
+        manual: bool,
+    },
 }
 
 pub fn decide(
@@ -171,8 +234,16 @@ pub fn decide(
     checker_running: bool,
     banner_enabled: bool,
     build: Build,
+    reaction: Reaction,
 ) -> Outcome {
-    decide_against(checked, checker_running, banner_enabled, build, CURRENT)
+    decide_against(
+        checked,
+        checker_running,
+        banner_enabled,
+        build,
+        reaction,
+        CURRENT,
+    )
 }
 
 fn decide_against(
@@ -180,6 +251,7 @@ fn decide_against(
     checker_running: bool,
     banner_enabled: bool,
     build: Build,
+    reaction: Reaction,
     current: &str,
 ) -> Outcome {
     if !checked.manual && !checker_running {
@@ -198,14 +270,26 @@ fn decide_against(
         Err(error) => return Outcome::Silent { error },
     };
     let update = Update::against(&release, current, build);
+    let install = update.is_some() && reaction == Reaction::Install;
     let notice = match &update {
-        Some(u) if checked.manual || (show_banner && !checked.dismissed) => Some(Notice {
-            message: Update::message_for(&u.version, current, u.build),
-            url: Some(u.url.clone()),
+        // The install reports with its own banners.
+        Some(_) if install => None,
+        Some(u) if checked.manual || (show_banner && !checked.dismissed) => Some(match reaction {
+            Reaction::Tell => Notice {
+                message: Update::message_for(&u.version, current, u.build),
+                click: Click::Open(u.url.clone()),
+            },
+            Reaction::Offer | Reaction::Install => Notice {
+                message: format!(
+                    "nuntio {} is available (you have {current}). Click to download and install",
+                    u.version
+                ),
+                click: Click::Install,
+            },
         }),
         None if checked.manual => Some(Notice {
             message: up_to_date(),
-            url: None,
+            click: Click::None,
         }),
         _ => None,
     };
@@ -213,6 +297,7 @@ fn decide_against(
         update,
         notice,
         manual: checked.manual,
+        install,
     }
 }
 
@@ -305,8 +390,13 @@ impl State {
 
     /// Ask GitHub, and remember the answer.
     fn refresh(&mut self, now: u64) -> Result<Release> {
-        // An ETag without the release it belongs to is useless.
-        let etag = self.latest.as_ref().and(self.etag.as_deref());
+        // An ETag without the release it belongs to is useless, and a cache
+        // from before assets were recorded is fetched again.
+        let etag = self
+            .latest
+            .as_ref()
+            .filter(|r| !r.assets.is_empty())
+            .and(self.etag.as_deref());
         let release = match fetch(etag)? {
             Fetched::NotModified => self.latest.clone().context("no cached release")?,
             Fetched::Release(release, etag) => {
@@ -494,7 +584,10 @@ mod tests {
     use super::*;
 
     fn release(tag: &str) -> Release {
-        Release { tag: tag.into() }
+        Release {
+            tag: tag.into(),
+            assets: Vec::new(),
+        }
     }
 
     #[test]
@@ -536,6 +629,14 @@ mod tests {
             release("v0.1.6-../../x?y").page_url(),
             "https://github.com/cebor/nuntio/releases/tag/v0.1.6-..%2F..%2Fx%3Fy"
         );
+        assert_eq!(
+            download_url("v0.3.2", "nuntio-0.3.2-x86_64-linux.tar.gz"),
+            "https://github.com/cebor/nuntio/releases/download/v0.3.2/nuntio-0.3.2-x86_64-linux.tar.gz"
+        );
+        assert_eq!(
+            download_url("v1/..", "../x"),
+            "https://github.com/cebor/nuntio/releases/download/v1%2F../..%2Fx"
+        );
     }
 
     #[test]
@@ -560,10 +661,13 @@ mod tests {
             "url": "https://api.github.com/repos/cebor/nuntio/releases/1",
             "html_url": "https://github.com/cebor/nuntio/releases/tag/v0.1.6",
             "tag_name": "v0.1.6",
-            "draft": false
+            "draft": false,
+            "assets": [{"name": "SHA256SUMS", "size": 10}, {"name": "nuntio_0.1.6-1_amd64.deb"}]
         }"#;
         let parsed: GitHubRelease = serde_json::from_str(json).unwrap();
-        assert_eq!(Release::from(parsed), release("v0.1.6"));
+        let mut expected = release("v0.1.6");
+        expected.assets = vec!["SHA256SUMS".into(), "nuntio_0.1.6-1_amd64.deb".into()];
+        assert_eq!(Release::from(parsed), expected);
     }
 
     #[test]
@@ -696,19 +800,37 @@ mod tests {
     fn late_daily_answers_are_ignored_but_manual_ones_answer() {
         let found = || answer(Ok(release("v0.1.6")), false, false);
         assert_eq!(
-            decide_against(found(), !RUNNING, true, Build::Release, "0.1.5"),
+            decide_against(
+                found(),
+                !RUNNING,
+                true,
+                Build::Release,
+                Reaction::Tell,
+                "0.1.5"
+            ),
             Outcome::Ignore
         );
         let manual = answer(Ok(release("v0.1.5")), true, false);
-        let outcome = decide_against(manual, !RUNNING, false, Build::Release, "0.1.5");
-        assert!(matches!(
+        let outcome = decide_against(
+            manual,
+            !RUNNING,
+            false,
+            Build::Release,
+            Reaction::Offer,
+            "0.1.5",
+        );
+        assert_eq!(
             outcome,
             Outcome::Found {
-                notice: Some(Notice { url: None, .. }),
+                notice: Some(Notice {
+                    message: up_to_date(),
+                    click: Click::None
+                }),
                 update: None,
-                manual: true
+                manual: true,
+                install: false,
             }
-        ));
+        );
     }
 
     #[test]
@@ -718,6 +840,7 @@ mod tests {
             RUNNING,
             true,
             Build::Release,
+            Reaction::Tell,
             "0.1.5",
         );
         // Still known (badge, status item), but no banner.
@@ -726,7 +849,8 @@ mod tests {
             Outcome::Found {
                 update: Some(_),
                 notice: None,
-                manual: false
+                manual: false,
+                install: false,
             }
         ));
         // A manual check shows it anyway.
@@ -735,12 +859,16 @@ mod tests {
             RUNNING,
             false,
             Build::Release,
+            Reaction::Tell,
             "0.1.5",
         );
         assert!(matches!(
             manual,
             Outcome::Found {
-                notice: Some(Notice { url: Some(_), .. }),
+                notice: Some(Notice {
+                    click: Click::Open(_),
+                    ..
+                }),
                 manual: true,
                 ..
             }
@@ -755,6 +883,7 @@ mod tests {
                 RUNNING,
                 banner,
                 Build::Release,
+                Reaction::Tell,
                 "0.1.5",
             )
         };
@@ -792,6 +921,7 @@ mod tests {
                 RUNNING,
                 banner,
                 Build::Release,
+                Reaction::Tell,
                 "0.1.5",
             )
         };
@@ -815,5 +945,62 @@ mod tests {
                 manual: true
             }
         );
+    }
+
+    #[test]
+    fn release_packages_offer_or_install_the_update() {
+        let found = |reaction, dismissed| {
+            decide_against(
+                answer(Ok(release("v0.1.6")), false, dismissed),
+                RUNNING,
+                true,
+                Build::Release,
+                reaction,
+                "0.1.5",
+            )
+        };
+        let Outcome::Found {
+            notice: Some(notice),
+            install: false,
+            ..
+        } = found(Reaction::Offer, false)
+        else {
+            panic!("an offer");
+        };
+        assert_eq!(notice.click, Click::Install);
+        assert!(
+            notice.message.ends_with("Click to download and install"),
+            "{}",
+            notice.message
+        );
+        // Installing right away has its own banners, even for a dismissed release.
+        for dismissed in [false, true] {
+            assert!(matches!(
+                found(Reaction::Install, dismissed),
+                Outcome::Found {
+                    update: Some(_),
+                    notice: None,
+                    install: true,
+                    ..
+                }
+            ));
+        }
+        // Nothing newer: nothing to install.
+        let current = decide_against(
+            answer(Ok(release("v0.1.5")), false, false),
+            RUNNING,
+            true,
+            Build::Release,
+            Reaction::Install,
+            "0.1.5",
+        );
+        assert!(matches!(
+            current,
+            Outcome::Found {
+                update: None,
+                install: false,
+                ..
+            }
+        ));
     }
 }
