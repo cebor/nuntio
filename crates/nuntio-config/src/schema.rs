@@ -569,11 +569,11 @@ pub static SETTINGS: &[Setting] = &[
         "In a pane running herdr, new tab, split, close pane, focus, resize and zoom shortcuts act in herdr.",
     ),
     setting(
-        "herdr.agent_status",
+        "herdr.agent_banner",
         Section::Herdr,
-        "Agent status",
+        "Agent banner",
         Kind::Bool,
-        "Follow herdr's agents: the `agents` status bar item, tab markers and a banner when an agent needs input.",
+        "Show a banner at the bottom of the window when a herdr agent needs input while its tab is not in view or the window has no focus.",
     ),
     setting(
         "tmux.enabled",

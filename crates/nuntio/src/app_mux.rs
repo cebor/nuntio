@@ -401,7 +401,7 @@ impl Core {
         }
         .unwrap_or_default();
         if let Some(state) = state.as_deref_mut()
-            && self.config.herdr.agent_status
+            && self.config.herdr.agent_banner
         {
             let newly_blocked: Vec<&Agent> = agents
                 .iter()
@@ -438,9 +438,7 @@ impl Core {
 
     /// Show the agents in the status bar item and the tab markers.
     fn show_agents(&mut self, state: Option<&mut WindowState>) {
-        let on = self.mux.service.is_some()
-            && self.config.herdr.enabled
-            && self.config.herdr.agent_status;
+        let on = self.mux.service.is_some() && self.config.herdr.enabled;
         let all: Vec<Agent> = if on {
             self.mux.agents.values().flatten().cloned().collect()
         } else {

@@ -33,7 +33,6 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct MuxSettings {
     pub herdr: Option<String>,
     pub tmux: Option<String>,
-    pub agent_status: bool,
 }
 
 impl MuxSettings {
@@ -48,7 +47,6 @@ impl MuxSettings {
                 .tmux
                 .enabled
                 .then(|| config.tmux.program.trim().to_owned()),
-            agent_status: config.herdr.enabled && config.herdr.agent_status,
         };
         (settings.herdr.is_some() || settings.tmux.is_some()).then_some(settings)
     }
@@ -391,9 +389,9 @@ impl Worker {
         }));
     }
 
-    /// One monitor per running herdr session, while agent status is on.
+    /// One monitor per running herdr session, while herdr is on.
     fn sync_monitors(&mut self) {
-        if !self.settings.agent_status {
+        if self.settings.herdr.is_none() {
             self.monitors.clear();
             return;
         }

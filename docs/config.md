@@ -182,7 +182,7 @@ enabled = false
 on_startup = false
 program = "herdr"
 forward_actions = true
-agent_status = true
+agent_banner = false
 
 [tmux]
 enabled = false
@@ -277,7 +277,7 @@ Each item starts with an icon:
 - `actions`: a button that opens a menu of actions (all but `select_tab_1` … `select_tab_9`), grouped by category and with their shortcuts. Click an entry to run it, or use <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>Enter</kbd>; <kbd>Esc</kbd> closes the menu. It is not in the default list; add it to `items`, or bind the `open_actions_menu` action to open the menu from the keyboard.
 - `shell`: the name of the focused pane's shell. Click it for the [shell menu](#profiles), which opens a new tab with another shell. It is not in the default list.
 - `update`: the version of a newer nuntio release; click it to open the release page. Shown only while the [update check](#updates) (or the `check_for_updates` action) has found one and `updates.status_bar` is on.
-- `agents`: herdr agents that are blocked, working or done, such as `● 1 blocked · 2 working`, colored by the most urgent one; click it for the list of agents, and an entry to jump to that agent. Hidden while there is none. Needs `herdr.enabled` and `herdr.agent_status`.
+- `agents`: herdr agents that are blocked, working or done, such as `● 1 blocked · 2 working`, colored by the most urgent one; click it for the list of agents, and an entry to jump to that agent. Hidden while there is none. Needs `herdr.enabled`.
 
 #### Springs
 
@@ -337,7 +337,7 @@ herdr sets the title of the terminal it runs in from its own `ui.window_title`, 
 | `on_startup` | bool | `false` | Start nuntio in herdr's default session instead of the shell. Needs `enabled`; wins over `tmux.on_startup`. Applies at the next start. |
 | `program` | string | `"herdr"` | The herdr program: a name searched like a shell would, or an absolute path. WSL distributions always use `herdr` found inside them. |
 | `forward_actions` | bool | `true` | In a pane running herdr, new tab, split, close pane, focus, resize and zoom shortcuts act in herdr. |
-| `agent_status` | bool | `true` | Follow herdr's agents: the `agents` status bar item, tab markers and a banner when an agent needs input. |
+| `agent_banner` | bool | `false` | Show a banner at the bottom of the window when a herdr agent needs input while its tab is not in view or the window has no focus. |
 
 ### `[tmux]`
 

@@ -568,8 +568,8 @@ pub struct Herdr {
     pub program: String,
     /// New tab, split, close, focus, resize and zoom act in herdr.
     pub forward_actions: bool,
-    /// The `agents` status bar item, tab markers and banners.
-    pub agent_status: bool,
+    /// A banner when an agent needs input out of view.
+    pub agent_banner: bool,
 }
 
 impl Default for Herdr {
@@ -579,7 +579,7 @@ impl Default for Herdr {
             on_startup: false,
             program: "herdr".into(),
             forward_actions: true,
-            agent_status: true,
+            agent_banner: false,
         }
     }
 }
