@@ -1,6 +1,6 @@
 //! Finding URLs in terminal text: OSC 8 hyperlinks and plain URLs.
 
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
@@ -44,7 +44,7 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     let cell: &Cell = &grid[point];
     if let Some(link) = cell.hyperlink().filter(|l| has_known_scheme(l.uri())) {
         let uri = link.uri();
-        let points = logical_line(term, point.line, |l| link_wraps(term, l, uri));
+        let points = logical_line(term, point, |l, cols| link_wraps(term, l, cols, uri));
         let index = points.iter().position(|p| *p == point)?;
         let same = |p: &Point| grid[*p].hyperlink().is_some_and(|l| l.uri() == uri);
         let start = points[..index]
@@ -62,7 +62,7 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
         });
     }
 
-    let points = logical_line(term, point.line, |l| hard_wraps(term, l));
+    let points = logical_line(term, point, |l, cols| hard_wraps(term, l, cols));
     let index = points.iter().position(|p| *p == point)?;
 
     // Text per cell: the base character and its combining marks; an image
@@ -92,12 +92,19 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     })
 }
 
-/// Most cells a program may leave after the text of a row it broke
-/// itself: its right padding and a frame border.
+/// Most cells a program may leave between the text of a row it broke
+/// itself and the right edge of its panel: its right padding and a frame
+/// border.
 const MAX_WRAP_MARGIN: usize = 4;
 
+/// Frame borders, pane dividers and scrollbars: box-drawing characters
+/// and block elements (U+2500..=U+259F).
+fn is_separator(c: char) -> bool {
+    ('\u{2500}'..='\u{259f}').contains(&c)
+}
+
 /// Padding, indentation and frame borders around the text of a row:
-/// blanks, wide-character spacers and box-drawing lines (U+2500..=U+257F).
+/// blanks, wide-character spacers and separators ([`is_separator`]).
 fn is_gutter(cell: &Cell) -> bool {
     if image_cell_ref(cell).is_some() {
         return false;
@@ -105,23 +112,47 @@ fn is_gutter(cell: &Cell) -> bool {
     cell.flags
         .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
         || cell.c == ' '
-        || ('\u{2500}'..='\u{257f}').contains(&cell.c)
+        || is_separator(cell.c)
 }
 
-/// Columns of the first and last non-gutter cell of `line`; `None` for a
-/// row of only gutter.
-fn text_span<T>(term: &Term<T>, line: Line) -> Option<(usize, usize)> {
+/// Columns of the panel around `point`: the cells between the nearest
+/// separators left and right of it on its row (a frame, a multiplexer's
+/// sidebar or pane border, a scrollbar), or the row's edges.
+fn panel<T>(term: &Term<T>, point: Point) -> RangeInclusive<usize> {
+    let row = &term.grid()[point.line];
+    let last = term.last_column().0;
+    let col = point.column.0;
+    let lo = (0..col)
+        .rev()
+        .find(|&c| is_separator(row[Column(c)].c))
+        .map_or(0, |c| c + 1);
+    let hi = (col + 1..=last)
+        .find(|&c| is_separator(row[Column(c)].c))
+        .map_or(last, |c| c - 1);
+    lo..=hi
+}
+
+/// Columns of the first and last non-gutter cell of `line` within `cols`;
+/// `None` if there is only gutter.
+fn text_span<T>(
+    term: &Term<T>,
+    line: Line,
+    cols: &RangeInclusive<usize>,
+) -> Option<(usize, usize)> {
     let row = &term.grid()[line];
-    let columns = 0..=term.last_column().0;
-    let first = columns.clone().find(|&c| !is_gutter(&row[Column(c)]))?;
-    let last = columns.rev().find(|&c| !is_gutter(&row[Column(c)]))?;
+    let first = cols.clone().find(|&c| !is_gutter(&row[Column(c)]))?;
+    let last = cols.clone().rev().find(|&c| !is_gutter(&row[Column(c)]))?;
     Some((first, last))
 }
 
 /// Text spans of `line` and the row below it, if `line` may go on there
 /// through a hard wrap: it is not the last row, does not soft-wrap, and
 /// both rows hold text.
-fn hard_wrap_spans<T>(term: &Term<T>, line: Line) -> Option<((usize, usize), (usize, usize))> {
+fn hard_wrap_spans<T>(
+    term: &Term<T>,
+    line: Line,
+    cols: &RangeInclusive<usize>,
+) -> Option<((usize, usize), (usize, usize))> {
     let grid = term.grid();
     if line >= grid.bottommost_line()
         || grid[line][term.last_column()]
@@ -130,20 +161,23 @@ fn hard_wrap_spans<T>(term: &Term<T>, line: Line) -> Option<((usize, usize), (us
     {
         return None;
     }
-    Some((text_span(term, line)?, text_span(term, Line(line.0 + 1))?))
+    Some((
+        text_span(term, line, cols)?,
+        text_span(term, Line(line.0 + 1), cols)?,
+    ))
 }
 
 /// Whether a program broke a word at the end of `line` and continued it
 /// on the next row itself (no soft wrap): the row holds a single word
-/// that reaches its right margin, and the next row's text starts at the
-/// same column.
-fn hard_wraps<T>(term: &Term<T>, line: Line) -> bool {
-    let Some(((first, end), (next_first, _))) = hard_wrap_spans(term, line) else {
+/// that reaches the right margin of its panel `cols`, and the next row's
+/// text in `cols` starts at the same column.
+fn hard_wraps<T>(term: &Term<T>, line: Line, cols: &RangeInclusive<usize>) -> bool {
+    let Some(((first, end), (next_first, _))) = hard_wrap_spans(term, line, cols) else {
         return false;
     };
     let grid = term.grid();
     let is_word = |cell: &Cell| image_cell_ref(cell).is_none() && !is_delimiter(cell.c);
-    term.last_column().0 - end <= MAX_WRAP_MARGIN
+    *cols.end() - end <= MAX_WRAP_MARGIN
         && next_first == first
         && (first..=end).all(|c| {
             let cell = &grid[line][Column(c)];
@@ -156,8 +190,8 @@ fn hard_wraps<T>(term: &Term<T>, line: Line) -> bool {
 
 /// Whether the OSC 8 link to `uri` goes on from the end of `line` to the
 /// start of the next row (programs reopen the link on each row they write).
-fn link_wraps<T>(term: &Term<T>, line: Line, uri: &str) -> bool {
-    let Some(((_, end), (next_first, _))) = hard_wrap_spans(term, line) else {
+fn link_wraps<T>(term: &Term<T>, line: Line, cols: &RangeInclusive<usize>, uri: &str) -> bool {
+    let Some(((_, end), (next_first, _))) = hard_wrap_spans(term, line, cols) else {
         return false;
     };
     let grid = term.grid();
@@ -166,15 +200,22 @@ fn link_wraps<T>(term: &Term<T>, line: Line, uri: &str) -> bool {
         && links_to(Point::new(Line(line.0 + 1), Column(next_first)))
 }
 
-/// The cells of the line through `line`: rows joined by soft wraps, and by
-/// hard wraps where `hard` says a row goes on. At a hard wrap the gutter
-/// between the rows (right margin, next row's indent) is left out.
-/// Wide-character spacers are left out everywhere.
-fn logical_line<T>(term: &Term<T>, line: Line, hard: impl Fn(Line) -> bool) -> Vec<Point> {
+/// The cells of the line through `point`: rows joined by soft wraps, and by
+/// hard wraps where `hard` says a row goes on. Hard wraps are judged inside
+/// the [`panel`] around `point`. At a hard wrap the gutter between the rows
+/// (right margin, next row's indent) is left out. Wide-character spacers
+/// are left out everywhere.
+fn logical_line<T>(
+    term: &Term<T>,
+    point: Point,
+    hard: impl Fn(Line, &RangeInclusive<usize>) -> bool,
+) -> Vec<Point> {
+    let cols = panel(term, point);
+    let line = point.line;
     let grid = term.grid();
     let last = term.last_column();
     let soft = |l: Line| grid[l][last].flags.contains(Flags::WRAPLINE);
-    let joined = |l: Line| soft(l) || hard(l);
+    let joined = |l: Line| soft(l) || hard(l, &cols);
     let limit = MAX_WRAPPED_ROWS as i32;
 
     let (mut top, mut bottom) = (line, line);
@@ -185,7 +226,7 @@ fn logical_line<T>(term: &Term<T>, line: Line, hard: impl Fn(Line) -> bool) -> V
         bottom = Line(bottom.0 + 1);
     }
 
-    let span = |l: Line| text_span(term, l).expect("a hard-wrapped row holds text");
+    let span = |l: Line| text_span(term, l, &cols).expect("a hard-wrapped row holds text");
     let mut points = Vec::new();
     for l in (top.0..=bottom.0).map(Line) {
         let from = if l > top && !soft(Line(l.0 - 1)) {
@@ -226,6 +267,7 @@ fn is_delimiter(c: char) -> bool {
             c,
             '<' | '>' | '"' | '\'' | '`' | '{' | '}' | '|' | '\\' | '^'
         )
+        || is_separator(c)
 }
 
 /// Ranges (in chars) of the URLs in `text`.
@@ -317,6 +359,7 @@ mod tests {
             ["https://a"]
         );
         assert_eq!(urls("https://a/b_(c)))"), ["https://a/b_(c)"]);
+        assert_eq!(urls("│https://example.com▕"), ["https://example.com"]);
     }
 
     #[test]
@@ -400,6 +443,26 @@ mod tests {
         let link = click(&term, 3, 1).unwrap();
         assert_eq!(link.url, url);
         assert_eq!((link.start, link.end), ((2, 0), (15, 1)));
+    }
+
+    #[test]
+    fn url_wrapped_in_a_herdr_pane_is_one_link() {
+        // herdr's sidebar with its border on the left, a scrollbar in the
+        // pane's last column, and omp's padding of one cell inside the pane.
+        let url = long_url();
+        let row = |sidebar: &str, text: &str| format!("{sidebar:<9}│{text:<49}▕");
+        let rows = format!(
+            "{}\r\n{}",
+            row("ws nuntio", &format!(" {} ", &url[..47])),
+            row(" 2 agents", &format!(" {} ok", &url[47..])),
+        );
+        let term = sized_term(60, rows.as_bytes());
+        for (column, line) in [(30, 0), (12, 1)] {
+            let link = click(&term, column, line).unwrap();
+            assert_eq!(link.url, url);
+            assert_eq!((link.start, link.end), ((11, 0), (13, 1)));
+        }
+        assert_eq!(click(&term, 16, 1), None);
     }
 
     #[test]
