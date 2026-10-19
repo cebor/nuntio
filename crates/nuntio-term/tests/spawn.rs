@@ -424,6 +424,21 @@ fn links_across_wrapped_lines() {
 }
 
 #[test]
+fn links_across_hard_wrapped_rows() {
+    // The program breaks the URL itself: padding, then a line break.
+    let url = format!("https://example.com/{}", "a".repeat(30));
+    let (handle, rx) = spawn(&format!("printf ' {} \\n {} ok'", &url[..38], &url[38..]));
+    wait_for_exit(&rx);
+
+    for point in [at(3, 1), at(5, 0)] {
+        let link = handle.link_at(point).unwrap();
+        assert_eq!(link.url, url);
+        assert_eq!((link.start, link.end), ((1, 0), (12, 1)));
+    }
+    assert_eq!(handle.link_at(at(15, 1)), None);
+}
+
+#[test]
 fn links_include_combining_marks() {
     let (handle, rx) = spawn("printf 'https://example.com/cafe\\314\\201 x'");
     wait_for_exit(&rx);
