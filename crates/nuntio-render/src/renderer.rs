@@ -858,30 +858,19 @@ impl Renderer {
             if width == 0 {
                 continue;
             }
-            let mut marks = std::mem::take(&mut self.cluster_text);
-            marks.clear();
-            marks.push(c);
-            let mut mark_count = 0;
-            while let Some(&mark) = chars.peek() {
-                if mark.width() != Some(0) {
-                    break;
-                }
-                // Consume every mark, but keep only as many as a cell may have.
-                if mark_count < MAX_ZEROWIDTH {
-                    marks.push(mark);
-                    mark_count += 1;
-                }
-                chars.next();
-            }
-            let has_marks = marks.len() > c.len_utf8();
-            let sprites = if has_marks {
-                Some(self.cluster_sprites(&marks, style, size))
+            let is_mark = |c: &char| c.width() == Some(0);
+            let sprites = if chars.peek().is_some_and(is_mark) {
+                // A cell keeps only as many marks as it may have.
+                let marks = std::iter::from_fn(|| chars.next_if(is_mark)).take(MAX_ZEROWIDTH);
+                let sprites = self.cluster_of(c, marks, style, size);
+                // Consume the rest.
+                while chars.next_if(is_mark).is_some() {}
+                Some(sprites)
             } else if c != ' ' {
                 Some(self.glyph_sprites(GlyphKey::Char(c, style, size)))
             } else {
                 None
             };
-            self.cluster_text = marks;
             if let Some(sprites) = sprites {
                 self.push_sprites(&sprites?, x, text.y, text.color);
             }
@@ -1062,15 +1051,27 @@ impl Renderer {
         match &cell.zerowidth {
             None => self.glyph_sprites(GlyphKey::Char(cell.c, style, TextSize::Terminal)),
             Some(marks) => {
-                let mut text = std::mem::take(&mut self.cluster_text);
-                text.clear();
-                text.push(cell.c);
-                text.extend(marks.iter().copied());
-                let result = self.cluster_sprites(&text, style, TextSize::Terminal);
-                self.cluster_text = text;
-                result
+                self.cluster_of(cell.c, marks.iter().copied(), style, TextSize::Terminal)
             }
         }
+    }
+
+    /// Look up or rasterize the glyphs of `base` with combining `marks`,
+    /// assembling the text in a reused buffer.
+    fn cluster_of(
+        &mut self,
+        base: char,
+        marks: impl Iterator<Item = char>,
+        style: FaceStyle,
+        size: TextSize,
+    ) -> Result<Rc<[Sprite]>, AtlasFull> {
+        let mut text = std::mem::take(&mut self.cluster_text);
+        text.clear();
+        text.push(base);
+        text.extend(marks);
+        let result = self.cluster_sprites(&text, style, size);
+        self.cluster_text = text;
+        result
     }
 
     /// Look up or rasterize the glyphs of a base character with combining
@@ -1091,9 +1092,7 @@ impl Renderer {
         }
         let sprites: Rc<[Sprite]> = match self.font_sprites(text, style, size) {
             Ok(sprites) => sprites.into(),
-            // Blank for this frame; not cached, so it is tried again later.
-            Err(_) if self.skip_missing => return Ok(Rc::from(Vec::new())),
-            Err(full) => return Err(full),
+            Err(full) => return self.or_blank(full),
         };
         // Only the map is cleared, never the atlas: regions already used by
         // this frame's instances must stay valid.
@@ -1102,6 +1101,17 @@ impl Renderer {
         }
         self.clusters.entry(text.into()).or_default()[slot] = Some(sprites.clone());
         Ok(sprites)
+    }
+
+    /// What a lookup answers when the atlas `full` ran out of room: no
+    /// glyphs for this frame while missing ones are skipped, else the error.
+    /// Callers don't cache it, so the glyphs are tried again later.
+    fn or_blank(&self, full: AtlasFull) -> Result<Rc<[Sprite]>, AtlasFull> {
+        if self.skip_missing {
+            Ok(Rc::from(Vec::new()))
+        } else {
+            Err(full)
+        }
     }
 
     /// Look up or rasterize the glyphs for a key.
@@ -1115,9 +1125,7 @@ impl Renderer {
         };
         let sprites: Rc<[Sprite]> = match built {
             Ok(sprites) => sprites.into(),
-            // Blank for this frame; not cached, so it is tried again later.
-            Err(_) if self.skip_missing => return Ok(Rc::from(Vec::new())),
-            Err(full) => return Err(full),
+            Err(full) => return self.or_blank(full),
         };
         self.glyphs.insert(key, sprites.clone());
         Ok(sprites)
