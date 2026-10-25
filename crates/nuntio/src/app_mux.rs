@@ -276,6 +276,16 @@ impl Core {
         self.open_mux(state, open);
     }
 
+    /// The tab with a pane that runs the multiplexer session `wanted`.
+    fn mux_tab(&self, state: &WindowState, wanted: &MuxPane) -> Option<usize> {
+        state.tabs.position(|content| {
+            content
+                .panes
+                .iter()
+                .any(|p| pane_mux(p, &self.config).as_ref() == Some(wanted))
+        })
+    }
+
     /// Switch to the tab that shows `open`'s session, or open a tab with
     /// its client.
     pub(super) fn open_mux(&mut self, state: &mut WindowState, open: MuxOpen) {
@@ -291,13 +301,7 @@ impl Core {
             target,
             session,
         };
-        let config = &self.config;
-        if let Some(index) = state.tabs.position(|content| {
-            content
-                .panes
-                .iter()
-                .any(|p| pane_mux(p, config).as_ref() == Some(&wanted))
-        }) {
+        if let Some(index) = self.mux_tab(state, &wanted) {
             state.select_tab(index);
             state.close_menu();
             return;
@@ -393,16 +397,7 @@ impl Core {
                 })
                 .collect();
             if !newly_blocked.is_empty() {
-                let config = &self.config;
-                let tab = state.tabs.position(|content| {
-                    content.panes.iter().any(|p| {
-                        pane_mux(p, config).is_some_and(|m| {
-                            m.tool == Tool::Herdr
-                                && m.target == key.target
-                                && m.session == key.session
-                        })
-                    })
-                });
+                let tab = self.mux_tab(state, &key.pane());
                 let tab_active = tab == Some(state.tabs.active_index());
                 if window::wants_attention(tab_active, state.focused, false) {
                     let messages = newly_blocked

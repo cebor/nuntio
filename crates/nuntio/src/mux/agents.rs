@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use winit::event_loop::EventLoopProxy;
 
-use super::Target;
 use super::herdr::{Agent, parse_agents};
+use super::{MuxPane, Target, Tool};
 use crate::event::UserEvent;
 use crate::wsl::Distro;
 
@@ -19,6 +19,17 @@ use crate::wsl::Distro;
 pub struct SessionKey {
     pub target: Target,
     pub session: Option<String>,
+}
+
+impl SessionKey {
+    /// The pane of a herdr client that shows this session.
+    pub fn pane(&self) -> MuxPane {
+        MuxPane {
+            tool: Tool::Herdr,
+            target: self.target.clone(),
+            session: self.session.clone(),
+        }
+    }
 }
 
 /// The agents of a session, sent after every change; empty once the

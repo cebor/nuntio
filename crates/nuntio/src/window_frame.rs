@@ -13,7 +13,6 @@ use crate::banner::Banner;
 use crate::ime;
 use crate::link;
 use crate::mux::agent_color;
-use crate::mux::agents::SessionKey;
 use crate::pane_tree::Layout;
 use crate::status_bar::Stats;
 use crate::style::Palette;
@@ -253,12 +252,8 @@ impl WindowState {
                     .iter()
                     .filter(|_| !self.agent_status.is_empty())
                     .filter_map(|pane| {
-                        let mux = crate::mux::pane_mux(pane, config)?;
-                        (mux.tool == crate::mux::Tool::Herdr).then_some(())?;
-                        self.agent_status.get(&SessionKey {
-                            target: mux.target,
-                            session: mux.session,
-                        })
+                        self.agent_status
+                            .get(&crate::mux::pane_mux(pane, config)?.agent_key()?)
                     })
                     .max()
                     .and_then(|&status| agent_color(status));

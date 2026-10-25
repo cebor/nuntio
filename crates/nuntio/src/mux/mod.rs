@@ -14,6 +14,7 @@ pub mod tmux;
 use nuntio_config::Config;
 use nuntio_term::Rgb;
 
+use self::agents::SessionKey;
 use self::herdr::AgentStatus;
 use crate::style::{AGENT_BLOCKED, AGENT_DONE, AGENT_WORKING};
 use crate::window::Pane;
@@ -111,6 +112,16 @@ pub struct MuxPane {
     /// `None`: herdr's default session, or a tmux session nuntio doesn't
     /// know.
     pub session: Option<String>,
+}
+
+impl MuxPane {
+    /// The herdr session this pane shows; `None` for other tools.
+    pub fn agent_key(&self) -> Option<SessionKey> {
+        (self.tool == Tool::Herdr).then(|| SessionKey {
+            target: self.target.clone(),
+            session: self.session.clone(),
+        })
+    }
 }
 
 /// The multiplexer the first pane starts in: herdr before tmux, each only
