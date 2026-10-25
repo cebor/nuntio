@@ -20,13 +20,12 @@ use alacritty_terminal::thread::spawn_named;
 use nuntio_wsl::proto::{self, Marker, MarkerFilter, Size};
 use polling::Poller;
 use polling::os::iocp::{CompletionPacket, PollerIocpExt};
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use crate::backend::BackendEvent;
 use crate::pane::RemoteForeground;
 use crate::sync::{lock, unpoisoned};
 
-/// No console window for `wsl.exe`.
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const READ_SIZE: usize = 0x1_0000;
 /// Output buffered for the IO loop before the reader threads wait: the 1 MiB
 /// that alacritty puts behind ConPTY.
