@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: 18 October 2026
+Last updated: 25 October 2026
 
 ## nuntio
 
@@ -19,6 +19,7 @@ nuntio keeps these files on your computer, and they never leave it:
 
 - your configuration file
 - when the update check is used, the answer it got (`update.toml` in the same cache directory as the log file): the latest release, the time of the last check, GitHub's ETag for it and the version whose banner you closed, so it doesn't ask again for a day after a successful check and doesn't show a closed banner again; while an update installs, `update.lock` next to it
+- while an update installs, the files it stages: `.nuntio-update-<process id>…` next to the installation, or for a `.deb` or `.dmg` a folder `nuntio-update-<process id>` in the system's temp directory. nuntio removes them when the install ends; leftovers next to the installation, if older than an hour, are removed by a later start
 - your notes, if you use the notes app (`nuntio-apps notes`): one Markdown file per note in the notes folder (`notes.directory`), deleted notes in its `.trash` folder
 - images you paste from the clipboard, as temporary PNG files in a folder in the system's temp directory, so a program can read them; nuntio removes the folder when it exits (leftovers of a crashed run are removed by a later run)
 - a log file, only when nuntio is started without a terminal (for example `~/.cache/nuntio/nuntio.log` on Linux or `~/Library/Caches/nuntio/nuntio.log` on macOS)
