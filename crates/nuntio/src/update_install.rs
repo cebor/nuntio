@@ -359,12 +359,49 @@ fn staged(parent: &Path, suffix: &str) -> PathBuf {
     parent.join(format!("{STAGING}{}{suffix}", std::process::id()))
 }
 
-/// A fresh private directory in the temporary directory.
-fn temp_staging() -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("nuntio-update-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    Ok(dir)
+/// A staging file or directory, removed when dropped: after the install
+/// and on every way out of it.
+struct Staging(PathBuf);
+
+impl Staging {
+    /// A fresh directory `.nuntio-update-<pid>` in `parent`, next to the
+    /// installation so that its files can be renamed into place.
+    fn beside(parent: &Path) -> Result<Self> {
+        let dir = staged(parent, "");
+        fs::create_dir(&dir).with_context(|| format!("cannot write to {}", parent.display()))?;
+        Ok(Self(dir))
+    }
+
+    /// A fresh private directory in the temporary directory.
+    fn temp() -> Result<Self> {
+        let dir = std::env::temp_dir().join(format!("nuntio-update-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+        Ok(Self(dir))
+    }
+
+    /// Guard `path`, a file or directory the caller makes: it is removed
+    /// if it still exists when the guard drops, e.g. when it wasn't renamed
+    /// into place.
+    fn guard(path: PathBuf) -> Self {
+        Self(path)
+    }
+}
+
+impl std::ops::Deref for Staging {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        if fs::remove_dir_all(&self.0).is_err() {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
 }
 
 fn apply(install: &Install, release: &Release) -> Result<()> {
@@ -380,44 +417,29 @@ fn apply(install: &Install, release: &Release) -> Result<()> {
     };
     match install {
         Install::Tarball { prefix } => {
-            let staging = staged(prefix, "");
-            fs::create_dir(&staging)
-                .with_context(|| format!("cannot write to {}", prefix.display()))?;
-            let result = install_tarball(&asset, prefix, &staging);
-            let _ = fs::remove_dir_all(&staging);
-            result
+            let staging = Staging::beside(prefix)?;
+            install_tarball(&asset, prefix, &staging)
         }
         Install::AppImage { file } => {
             let dir = file.parent().context("the AppImage has no directory")?;
-            let new = staged(dir, ".AppImage");
-            let result = asset.download_to(&new).and_then(|()| {
+            let new = Staging::guard(staged(dir, ".AppImage"));
+            asset.download_to(&new).and_then(|()| {
                 set_mode(&new, 0o755)?;
-                fs::rename(&new, file).with_context(|| format!("cannot replace {}", file.display()))
-            });
-            if result.is_err() {
-                let _ = fs::remove_file(&new);
-            }
-            result
+                fs::rename(&*new, file)
+                    .with_context(|| format!("cannot replace {}", file.display()))
+            })
         }
         Install::Deb => {
-            let staging = temp_staging()?;
-            let result = install_deb(&asset, &staging);
-            let _ = fs::remove_dir_all(&staging);
-            result
+            let staging = Staging::temp()?;
+            install_deb(&asset, &staging)
         }
         Install::MacApp { bundle } => {
-            let staging = temp_staging()?;
-            let result = install_mac_app(&asset, bundle, &staging);
-            let _ = fs::remove_dir_all(&staging);
-            result
+            let staging = Staging::temp()?;
+            install_mac_app(&asset, bundle, &staging)
         }
         Install::Windows { dir } => {
-            let staging = staged(dir, "");
-            fs::create_dir(&staging)
-                .with_context(|| format!("cannot write to {}", dir.display()))?;
-            let result = install_windows(&asset, dir, &staging);
-            let _ = fs::remove_dir_all(&staging);
-            result
+            let staging = Staging::beside(dir)?;
+            install_windows(&asset, dir, &staging)
         }
     }
 }
@@ -497,11 +519,11 @@ fn install_mac_app(asset: &Asset, bundle: &Path, staging: &Path) -> Result<()> {
             .arg(&dmg),
         UNPACK_LIMIT,
     )?;
-    let new = staged(parent, ".app");
+    let new = Staging::guard(staged(parent, ".app"));
     let copied = run(
         Command::new("ditto")
             .arg(mount.join("nuntio.app"))
-            .arg(&new),
+            .arg(&*new),
         COPY_LIMIT,
     );
     if let Err(err) = run(
@@ -513,18 +535,11 @@ fn install_mac_app(asset: &Asset, bundle: &Path, staging: &Path) -> Result<()> {
     ) {
         tracing::warn!("{err:#}");
     }
-    if let Err(err) = copied {
-        let _ = fs::remove_dir_all(&new);
-        return Err(err);
-    }
+    copied?;
     let old = staged(parent, "-old.app");
-    if let Err(err) = fs::rename(bundle, &old) {
-        let _ = fs::remove_dir_all(&new);
-        return Err(err).with_context(|| format!("cannot replace {}", bundle.display()));
-    }
-    if let Err(err) = fs::rename(&new, bundle) {
+    fs::rename(bundle, &old).with_context(|| format!("cannot replace {}", bundle.display()))?;
+    if let Err(err) = fs::rename(&*new, bundle) {
         let _ = fs::rename(&old, bundle);
-        let _ = fs::remove_dir_all(&new);
         return Err(err).with_context(|| format!("cannot replace {}", bundle.display()));
     }
     let _ = fs::remove_dir_all(&old);
