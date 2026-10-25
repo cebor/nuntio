@@ -14,24 +14,18 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect, Size};
 
+use super::areas::{self, Areas, Focus, Panels};
 use super::buffer::{Buffer, EditKind, Pos};
 use super::edit;
 use super::layout::{self, Row};
 use super::markdown::{self, LineView, PieceKind};
 use super::store::{Stamp, Store, validate_title};
-use super::ui::{self, Areas};
 use super::widgets::edit_input;
 
 /// How long after the last edit a note is saved.
 pub const AUTOSAVE: Duration = Duration::from_secs(1);
 /// Rows or items one wheel step moves.
 const WHEEL: usize = 3;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
-    List,
-    Editor,
-}
 
 /// A note in the list.
 #[derive(Debug, Clone)]
@@ -157,7 +151,7 @@ pub struct App {
     pub todos: Option<Todos>,
     pub prompt: Option<Prompt>,
     pub sidebar: bool,
-    /// Columns of the note list; `ui::areas` narrows it to fit.
+    /// Columns of the note list; `areas::areas` narrows it to fit.
     pub sidebar_width: u16,
     /// The divider is being dragged.
     pub resizing: bool,
@@ -561,7 +555,15 @@ impl App {
     /// Lay out the frame for `size`: the areas, the open note's rows, the
     /// scroll positions.
     pub fn prepare(&mut self, size: Size) {
-        self.areas = ui::areas(size, self);
+        self.areas = areas::areas(
+            size,
+            Panels {
+                todos: self.todos.is_some(),
+                focus: self.focus,
+                sidebar: self.sidebar,
+                sidebar_width: self.sidebar_width,
+            },
+        );
         self.cursor_xy = None;
         self.rows.clear();
         self.first_row.clear();
@@ -573,7 +575,7 @@ impl App {
             self.list_scroll = keep_visible(self.list_scroll, self.selected, height.max(1));
         }
         if let Some(todos) = &mut self.todos {
-            let height = self.areas.body.height.saturating_sub(2) as usize;
+            let height = self.areas.inner.height as usize;
             let rows = todos.rows();
             let at = rows
                 .iter()
@@ -998,7 +1000,7 @@ impl App {
             return;
         };
         let len = todos.items.len();
-        let page = self.areas.body.height.saturating_sub(3).max(1) as usize;
+        let page = self.areas.inner.height.saturating_sub(1).max(1) as usize;
         match key.code {
             KeyCode::Up => todos.selected = todos.selected.saturating_sub(1),
             KeyCode::Down => todos.selected = (todos.selected + 1).min(len.saturating_sub(1)),
@@ -1132,10 +1134,10 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
                 // The mouse at column c puts the divider there; the list starts after the frame.
-                let body = self.areas.body;
+                let Areas { body, inner, .. } = self.areas;
                 let (min, _) = NOTES_SIDEBAR_WIDTH;
-                let max = ui::max_list_width(body.width).max(min);
-                self.sidebar_width = at.x.saturating_sub(body.x + 1).clamp(min, max);
+                let max = areas::max_list_width(body.width).max(min);
+                self.sidebar_width = at.x.saturating_sub(inner.x).clamp(min, max);
                 true
             }
             MouseEventKind::Up(MouseButton::Left) if self.resizing => {
@@ -1250,14 +1252,16 @@ impl App {
         };
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let top = body.y + 1;
+                let top = self.areas.inner.y;
                 if at.y < top {
                     return false;
                 }
                 let index = todos.scroll + (at.y - top) as usize;
                 if let Some(TodoRow::Item(i)) = todos.rows().get(index).copied() {
                     todos.selected = i;
-                    if (ui::TODO_BOX_X..ui::TODO_BOX_X + 2).contains(&at.x.saturating_sub(body.x)) {
+                    if (areas::TODO_BOX_X..areas::TODO_BOX_X + 2)
+                        .contains(&at.x.saturating_sub(body.x))
+                    {
                         self.toggle_todo_item(now);
                     }
                 }

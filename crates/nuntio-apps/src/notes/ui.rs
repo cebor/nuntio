@@ -1,116 +1,22 @@
-//! Drawing the notes app with ratatui. Decisions live in `state`; this lays
-//! out the areas and draws what `App` reports. Only ANSI colors and
+//! Drawing the notes app with ratatui. Decisions live in `state` and the
+//! layout in `areas`; this draws what `App` reports. Only ANSI colors and
 //! modifiers, so the app follows the terminal's theme.
 
-use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
 use nuntio_tui::popup;
 use nuntio_tui::style::{ACCENT, Tone, border, center, heading, hints, panel, prompt, too_small};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect, Size};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
+use super::areas::{Areas, Focus, TODO_BOX_X, split};
 use super::failed::Failed;
 use super::layout::Row;
 use super::markdown::{self, PieceKind};
-use super::state::{App, Focus, Prompt, TodoRow};
-
-/// Width below which only the list or only the editor is shown.
-const NARROW: u16 = 60;
-/// Columns the editor keeps at least next to the list.
-const MIN_EDITOR: u16 = 30;
-/// Column of a todo's box in the overview, from the left of the body.
-pub const TODO_BOX_X: u16 = 5;
-
-/// Where things are on the screen; computed by `App::prepare`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Areas {
-    pub header: Rect,
-    /// Below the header, frame included.
-    pub body: Rect,
-    pub footer: Rect,
-    /// The note list, without its border.
-    pub list: Option<Rect>,
-    pub editor: Option<Rect>,
-    /// The note's text in the editor.
-    pub text: Option<Rect>,
-    pub too_small: bool,
-}
-
-/// The widest the list can be in a body `body_width` columns wide,
-/// frame included.
-pub fn max_list_width(body_width: u16) -> u16 {
-    NOTES_SIDEBAR_WIDTH
-        .1
-        .min(body_width.saturating_sub(2 + 1 + MIN_EDITOR))
-}
-
-/// Header, body and footer of a screen of `size`; `None` if it is too small.
-fn split(size: Size) -> Option<[Rect; 3]> {
-    if size.width < 40 || size.height < 8 {
-        return None;
-    }
-    Some(
-        Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .areas(Rect::new(0, 0, size.width, size.height)),
-    )
-}
-
-pub fn areas(size: Size, app: &App) -> Areas {
-    let Some([header, body, footer]) = split(size) else {
-        return Areas {
-            too_small: true,
-            ..Areas::default()
-        };
-    };
-    let mut areas = Areas {
-        header,
-        body,
-        footer,
-        ..Areas::default()
-    };
-    if app.todos.is_some() {
-        return areas;
-    }
-    // Inside the frame; the body is at least 40×6.
-    let inner = Rect {
-        x: body.x + 1,
-        y: body.y + 1,
-        width: body.width - 2,
-        height: body.height - 2,
-    };
-    if size.width < NARROW {
-        match app.focus {
-            Focus::List => areas.list = Some(inner),
-            Focus::Editor => areas.editor = Some(inner),
-        }
-    } else if app.sidebar {
-        let width = app.sidebar_width.min(max_list_width(body.width));
-        areas.list = Some(Rect { width, ..inner });
-        // The column after the list is the divider.
-        areas.editor = Some(Rect {
-            x: inner.x + width + 1,
-            width: inner.width - width - 1,
-            ..inner
-        });
-    } else {
-        areas.editor = Some(inner);
-    }
-    areas.text = areas.editor.map(|e| Rect {
-        x: e.x + 1,
-        y: e.y,
-        width: e.width.saturating_sub(2),
-        height: e.height,
-    });
-    areas
-}
+use super::state::{App, Prompt, TodoRow};
 
 /// `text` cut to `width` cells, with `…` if it was longer.
 fn truncate(text: &str, width: usize) -> String {
@@ -440,7 +346,10 @@ fn draw_todos(frame: &mut Frame, app: &App) {
     let Some(todos) = &app.todos else {
         return;
     };
-    let body = app.areas.body;
+    // The overview's rows fill the body inside the frame.
+    let Areas {
+        body, inner: list, ..
+    } = app.areas;
     frame.render_widget(panel(false), body);
     let mut title = vec![
         Span::styled(" Todos ", heading()),
@@ -449,19 +358,7 @@ fn draw_todos(frame: &mut Frame, app: &App) {
     if todos.show_done {
         title.push(Span::styled("· done shown ", Tone::Dim.style()));
     }
-    border_title(
-        frame,
-        body.x + 1,
-        body.y,
-        body.width.saturating_sub(2),
-        title,
-    );
-    let list = Rect {
-        x: body.x + 1,
-        y: body.y + 1,
-        width: body.width.saturating_sub(2),
-        height: body.height.saturating_sub(2),
-    };
+    border_title(frame, list.x, body.y, list.width, title);
     if todos.items.is_empty() {
         center(
             frame,

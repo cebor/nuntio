@@ -1,6 +1,7 @@
 //! `nuntio-apps notes`: Markdown notes, one `.md` file per note in one
 //! folder, edited with a live preview.
 
+mod areas;
 mod buffer;
 mod edit;
 mod failed;
