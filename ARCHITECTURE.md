@@ -236,7 +236,7 @@ Pipeline:
 - Three pipelines: alpha blend; `fill` (REPLACE, for a pane's own background); `cutout` (transparent rounded window corners).
 - One render pass. Each pane is scissored to its area. Draw order inside a pane: backgrounds → images → cursor → underline/strikeout → glyphs → dim veil. Then the UI, popups and cutouts.
 
-Atlases (`atlas.rs`, etagere): mask (R8), color (RGBA, emoji) and image (RGBA). When full they grow, then clear, then skip missing glyphs. Glyph and cluster sprites are cached in `HashMap`s; images are cached by `TermImage::uid` and uploaded once.
+Atlases (`atlas.rs`, etagere): mask (R8), color (RGBA, emoji) and image (RGBA). When full they grow, then clear, then skip missing glyphs. Glyph and cluster sprites are cached in `HashMap`s; images are cached by `TermImage::uid` and uploaded once. `ImageCache` (`images.rs`) owns the image atlas with the regions of the uploaded images and forgets them whenever the atlas is cleared, grown or replaced.
 
 Glyphs come from cosmic-text (shaping, fallback, emoji vs text presentation). Box drawing, Powerline and media symbols are drawn procedurally (`box_drawing.rs`), as are curly, dotted and dashed underlines (`decoration.rs`).
 

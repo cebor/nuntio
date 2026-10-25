@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::rc::Rc;
@@ -15,6 +15,7 @@ use crate::atlas::{Atlas, AtlasRegion, MIN_ATLAS_SIZE};
 use crate::font::{CellMetrics, FaceStyle, Fonts, TextSize};
 use crate::frame::{Frame, Rect, UiRect, UiText};
 use crate::gpu::{FrameStatus, GpuContext, GpuOptions, oom_checked};
+use crate::images::ImageCache;
 use crate::mask::Mask;
 use crate::{box_drawing, decoration};
 
@@ -32,10 +33,6 @@ const INITIAL_MASK_ATLAS_SIZE: u32 = 1024;
 /// Starting size of the color atlas (1 MiB at four bytes per texel); stays
 /// that small unless emoji show up.
 const INITIAL_COLOR_ATLAS_SIZE: u32 = 512;
-/// Starting size of the image atlas (4 MiB); grows up to
-/// `MAX_IMAGE_ATLAS_SIZE` (256 MiB) when inline images need it.
-const INITIAL_IMAGE_ATLAS_SIZE: u32 = 1024;
-const MAX_IMAGE_ATLAS_SIZE: u32 = 8192;
 
 /// Consecutive overflowing frames between two clears of the glyph atlas.
 const OVERFLOW_RETRY_FRAMES: u32 = 32;
@@ -222,12 +219,7 @@ pub struct Renderer {
     fonts: Fonts,
     mask_atlas: Atlas,
     color_atlas: Atlas,
-    /// Inline images, premultiplied RGBA.
-    image_atlas: Atlas,
-    /// Where each uploaded image is, by [`TermImage::uid`](nuntio_term::TermImage::uid).
-    image_regions: HashMap<u64, AtlasRegion>,
-    /// Scratch: the uids of the images in the frame being prepared.
-    image_uids: HashSet<u64>,
+    images: ImageCache,
     glyphs: HashMap<GlyphKey, Rc<[Sprite]>>,
     /// Glyphs of characters with combining marks, by text and a slot for
     /// each size/bold/italic combination.
@@ -259,9 +251,6 @@ pub struct Renderer {
     /// The last frame had more instances than the GPU buffer holds (already
     /// warned).
     instances_truncated: bool,
-    /// The last frame's images didn't fit into the image atlas (already
-    /// warned).
-    image_overflow: bool,
 }
 
 impl Renderer {
@@ -304,16 +293,7 @@ impl Renderer {
             INITIAL_COLOR_ATLAS_SIZE,
             MIN_ATLAS_SIZE,
         );
-        let image_atlas = Atlas::new(
-            device,
-            wgpu::TextureFormat::Rgba8Unorm,
-            "image atlas",
-            INITIAL_IMAGE_ATLAS_SIZE,
-            device
-                .limits()
-                .max_texture_dimension_2d
-                .clamp(MIN_ATLAS_SIZE, MAX_IMAGE_ATLAS_SIZE),
-        );
+        let images = ImageCache::new(device);
         // Glyphs are drawn 1:1; nearest sampling keeps them sharp even when
         // a quad lands on a fractional position.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -348,7 +328,7 @@ impl Renderer {
             &uniforms,
             &mask_atlas,
             &color_atlas,
-            &image_atlas,
+            images.atlas(),
             [&sampler, &image_sampler],
         );
 
@@ -357,9 +337,7 @@ impl Renderer {
             fonts,
             mask_atlas,
             color_atlas,
-            image_atlas,
-            image_regions: HashMap::new(),
-            image_uids: HashSet::new(),
+            images,
             glyphs: HashMap::new(),
             clusters: HashMap::new(),
             cluster_text: String::new(),
@@ -378,7 +356,6 @@ impl Renderer {
             overflow_frames: 0,
             skip_missing: false,
             instances_truncated: false,
-            image_overflow: false,
         })
     }
 
@@ -590,7 +567,13 @@ impl Renderer {
 
     /// Lay out the frame's instances and upload them with the uniforms.
     fn prepare(&mut self, frame: &Frame) {
-        self.upload_images(frame);
+        let pieces = frame.panes.iter().flat_map(|p| &p.snapshot.images);
+        if self
+            .images
+            .upload(&self.gpu.device, &self.gpu.queue, pieces)
+        {
+            self.rebuild_bind_group();
+        }
         // While the atlas stays too small for the screen, clearing it again
         // and again would re-rasterize everything every frame: only now and
         // then, and draw what fits in between.
@@ -671,80 +654,9 @@ impl Renderer {
             &self.uniforms,
             &self.mask_atlas,
             &self.color_atlas,
-            &self.image_atlas,
+            self.images.atlas(),
             [&self.sampler, &self.image_sampler],
         );
-    }
-
-    /// Upload the frame's inline images that aren't in the image atlas yet.
-    fn upload_images(&mut self, frame: &Frame) {
-        if frame.panes.iter().all(|p| p.snapshot.images.is_empty()) {
-            // Give the memory back that a large image needed.
-            if self.image_atlas.size() > INITIAL_IMAGE_ATLAS_SIZE
-                && self
-                    .image_atlas
-                    .reset(&self.gpu.device, INITIAL_IMAGE_ATLAS_SIZE)
-            {
-                self.image_regions.clear();
-                self.rebuild_bind_group();
-            }
-            self.image_overflow = false;
-            return;
-        }
-        self.image_uids.clear();
-        self.image_uids.extend(
-            frame
-                .panes
-                .iter()
-                .flat_map(|p| &p.snapshot.images)
-                .map(|piece| piece.image.uid),
-        );
-        let mut cleared = false;
-        'pass: loop {
-            let mut skipped = false;
-            for piece in frame.panes.iter().flat_map(|p| &p.snapshot.images) {
-                let image = &piece.image;
-                if self.image_regions.contains_key(&image.uid) {
-                    continue;
-                }
-                let queue = &self.gpu.queue;
-                if let Some(region) =
-                    self.image_atlas
-                        .insert(queue, image.width, image.height, &image.rgba)
-                {
-                    self.image_regions.insert(image.uid, region);
-                    continue;
-                }
-                let max = self.image_atlas.max_size();
-                if image.width + 1 > max || image.height + 1 > max {
-                    skipped = true;
-                } else if !cleared
-                    && self
-                        .image_regions
-                        .keys()
-                        .any(|uid| !self.image_uids.contains(uid))
-                {
-                    // Images no longer on screen hold space: start over
-                    // before spending more memory. Without any, clearing
-                    // would re-upload the same images every frame.
-                    self.image_atlas.clear();
-                    self.image_regions.clear();
-                    cleared = true;
-                    continue 'pass;
-                } else if self.image_atlas.grow(&self.gpu.device) {
-                    self.image_regions.clear();
-                    self.rebuild_bind_group();
-                    continue 'pass;
-                } else {
-                    skipped = true;
-                }
-            }
-            if skipped && !self.image_overflow {
-                tracing::warn!("inline images do not fit into the image atlas");
-            }
-            self.image_overflow = skipped;
-            break;
-        }
     }
 
     /// Record the render pass of a `prepare`d frame into `view`.
@@ -983,15 +895,15 @@ impl Renderer {
 
         // Images cover the background, below the cursor and text.
         for piece in &snapshot.images {
-            let Some(&region) = self.image_regions.get(&piece.image.uid) else {
+            let Some(region) = self.images.region(piece.image.uid) else {
                 continue;
             };
             let (x, y) = origin(piece.column, piece.line);
             self.layout.instances.push(Instance {
                 pos: [x, y],
                 size: [piece.columns as f32 * cw, ch],
-                uv: image_uv(region, self.image_atlas.size(), piece),
-                color: image_bounds(region, self.image_atlas.size()),
+                uv: image_uv(region, self.images.atlas().size(), piece),
+                color: image_bounds(region, self.images.atlas().size()),
                 kind: if region.width as usize == piece.image.columns * m.width as usize
                     && region.height as usize == piece.image.lines * m.height as usize
                 {

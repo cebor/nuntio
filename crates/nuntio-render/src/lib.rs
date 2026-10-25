@@ -9,6 +9,7 @@ mod error;
 mod font;
 mod frame;
 mod gpu;
+mod images;
 mod mask;
 mod renderer;
 
