@@ -194,6 +194,8 @@ fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use nuntio_config::testutil::TempDir;
+
     use super::*;
 
     fn image(bytes: Vec<u8>) -> arboard::ImageData<'static> {
@@ -227,9 +229,7 @@ mod tests {
 
     #[test]
     fn stale_directories_are_swept() -> anyhow::Result<()> {
-        let root = std::env::temp_dir().join(format!("nuntio-sweep-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root)?;
+        let root = TempDir::new("sweep");
         for name in [
             "nuntio-paste-1-10",
             "nuntio-paste-2-10",
@@ -262,7 +262,6 @@ mod tests {
         assert_eq!(dir_pid("nuntio-paste-x-1"), None);
         assert_eq!(dir_pid("nuntio-paste-12"), None);
         assert_eq!(dir_pid("other"), None);
-        std::fs::remove_dir_all(&root)?;
         Ok(())
     }
 }

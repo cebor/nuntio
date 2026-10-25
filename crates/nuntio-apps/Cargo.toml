@@ -18,5 +18,8 @@ unicode-width.workspace = true
 unicode-segmentation.workspace = true
 pulldown-cmark.workspace = true
 
+[dev-dependencies]
+nuntio-config = { workspace = true, features = ["testutil"] }
+
 [lints]
 workspace = true

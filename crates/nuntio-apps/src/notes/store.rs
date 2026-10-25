@@ -220,28 +220,12 @@ impl Store for DirStore {
 
 #[cfg(test)]
 mod tests {
+    use nuntio_config::testutil::TempDir;
+
     use super::*;
 
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("nuntio-apps-test-{}-{name}", std::process::id()));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-
-        fn store(&self) -> DirStore {
-            DirStore(self.0.clone())
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
+    fn dir_store(tmp: &TempDir) -> DirStore {
+        DirStore(tmp.to_path_buf())
     }
 
     #[test]
@@ -298,11 +282,11 @@ mod tests {
     #[test]
     fn list_skips_dot_files_and_other_extensions() {
         let tmp = TempDir::new("list");
-        let mut store = tmp.store();
+        let mut store = dir_store(&tmp);
         store.write("One", "- [ ] a\n").unwrap();
-        fs::write(tmp.0.join("notes.txt"), "x").unwrap();
-        fs::write(tmp.0.join(".hidden.md"), "x").unwrap();
-        fs::create_dir(tmp.0.join("Dir.md")).unwrap();
+        fs::write(tmp.join("notes.txt"), "x").unwrap();
+        fs::write(tmp.join(".hidden.md"), "x").unwrap();
+        fs::create_dir(tmp.join("Dir.md")).unwrap();
         store.trash("One").unwrap();
         store.write("Two", "b").unwrap();
         let listing = store.list().unwrap();
@@ -315,9 +299,9 @@ mod tests {
     #[test]
     fn list_counts_notes_that_are_not_text() {
         let tmp = TempDir::new("unreadable");
-        let mut store = tmp.store();
+        let mut store = dir_store(&tmp);
         store.write("Fine", "b").unwrap();
-        fs::write(tmp.0.join("Binary.md"), [0xff, 0xfe, 0x00]).unwrap();
+        fs::write(tmp.join("Binary.md"), [0xff, 0xfe, 0x00]).unwrap();
         let listing = store.list().unwrap();
         assert_eq!(listing.notes.len(), 1);
         assert_eq!(listing.unreadable, 1);
@@ -326,7 +310,7 @@ mod tests {
     #[test]
     fn write_read_and_stamp() {
         let tmp = TempDir::new("write");
-        let mut store = tmp.store();
+        let mut store = dir_store(&tmp);
         assert_eq!(store.stamp("A").unwrap(), None);
         let stamp = store.write("A", "hello").unwrap();
         assert_eq!(store.stamp("A").unwrap(), Some(stamp));
@@ -339,7 +323,7 @@ mod tests {
     #[test]
     fn create_refuses_a_taken_title() {
         let tmp = TempDir::new("create");
-        let mut store = tmp.store();
+        let mut store = dir_store(&tmp);
         store.create("A").unwrap();
         assert_eq!(store.read("A").unwrap().0, "");
         let err = store.create("A").unwrap_err();
@@ -349,7 +333,7 @@ mod tests {
     #[test]
     fn rename_refuses_collisions_but_allows_case_changes() {
         let tmp = TempDir::new("rename");
-        let mut store = tmp.store();
+        let mut store = dir_store(&tmp);
         store.write("a", "1").unwrap();
         store.write("b", "2").unwrap();
         let err = store.rename("a", "b").unwrap_err();
@@ -357,7 +341,7 @@ mod tests {
         assert_eq!(store.read("b").unwrap().0, "2");
         store.rename("a", "A").unwrap();
         assert!(store.stamp("A").unwrap().is_some());
-        let names: Vec<_> = fs::read_dir(&tmp.0)
+        let names: Vec<_> = fs::read_dir(&tmp)
             .unwrap()
             .flatten()
             .filter_map(|e| e.file_name().into_string().ok())
@@ -371,13 +355,13 @@ mod tests {
     #[test]
     fn trash_numbers_duplicates() {
         let tmp = TempDir::new("trash");
-        let mut store = tmp.store();
+        let mut store = dir_store(&tmp);
         for text in ["1", "2", "3"] {
             store.write("A", text).unwrap();
             store.trash("A").unwrap();
         }
         assert_eq!(store.stamp("A").unwrap(), None);
-        let trash = tmp.0.join(".trash");
+        let trash = tmp.join(".trash");
         assert_eq!(fs::read_to_string(trash.join("A.md")).unwrap(), "1");
         assert_eq!(fs::read_to_string(trash.join("A (2).md")).unwrap(), "2");
         assert_eq!(fs::read_to_string(trash.join("A (3).md")).unwrap(), "3");
@@ -386,7 +370,7 @@ mod tests {
     #[test]
     fn dir_store_is_a_trait_object() {
         let tmp = TempDir::new("object");
-        let mut store: Box<dyn Store> = Box::new(tmp.store());
+        let mut store: Box<dyn Store> = Box::new(dir_store(&tmp));
         store.create("A").unwrap();
         assert_eq!(store.list().unwrap().notes.len(), 1);
     }

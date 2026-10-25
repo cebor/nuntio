@@ -349,6 +349,8 @@ pub fn draw_hint(
 
 #[cfg(test)]
 mod tests {
+    use nuntio_config::testutil::TempDir;
+
     use super::*;
     use crate::style::test_metrics::*;
     use nuntio_term::Rgb;
@@ -398,7 +400,7 @@ mod tests {
 
     #[test]
     fn programs_are_not_opened() {
-        let dir = std::env::temp_dir().join(format!("nuntio-link-{}", std::process::id()));
+        let dir = TempDir::new("link");
         std::fs::create_dir_all(dir.join("Evil.app").join("Contents")).unwrap();
         let (text, exe) = (dir.join("notes.txt"), dir.join("setup.EXE"));
         std::fs::write(&text, "").unwrap();
@@ -433,7 +435,6 @@ mod tests {
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             check(&url(&script))
         };
-        std::fs::remove_dir_all(&dir).unwrap();
 
         assert!(results[0].is_ok(), "directory");
         assert!(results[1].is_ok(), "text file");
@@ -551,12 +552,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unresolvable_paths_are_refused() {
-        let dir = std::env::temp_dir().join(format!("nuntio-link-enotdir-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("link-enotdir");
         let file = dir.join("a.txt");
         std::fs::write(&file, "").unwrap();
         let result = check(&format!("file://{}/x.txt", file.display()));
-        std::fs::remove_dir_all(&dir).unwrap();
         assert!(result.is_err());
     }
 

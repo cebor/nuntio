@@ -953,14 +953,15 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn the_state_file_is_private() {
+        use nuntio_config::testutil::TempDir;
         use std::os::unix::fs::PermissionsExt;
-        let path = std::env::temp_dir().join(format!("nuntio-debug-{}", std::process::id()));
+        let dir = TempDir::new("debug");
+        let path = dir.join("state");
         std::fs::write(&path, "old").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         write_private(&path, "new").unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         let text = std::fs::read_to_string(&path).unwrap();
-        std::fs::remove_file(&path).unwrap();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(text, "new");
     }

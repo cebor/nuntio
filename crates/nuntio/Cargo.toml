@@ -75,6 +75,9 @@ windows-sys.workspace = true
 [build-dependencies]
 winresource = "0.1"
 
+[dev-dependencies]
+nuntio-config = { workspace = true, features = ["testutil"] }
+
 [lints]
 workspace = true
 

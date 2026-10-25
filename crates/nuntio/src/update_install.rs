@@ -763,6 +763,8 @@ fn checksum_for(sums: &str, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use nuntio_config::testutil::TempDir;
+
     use super::*;
 
     fn release(tag: &str, assets: &[&str]) -> Release {
@@ -863,16 +865,16 @@ mod tests {
             None
         );
 
-        let root = std::env::temp_dir().join(format!("nuntio-classify-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("prefix/bin")).unwrap();
-        let exe = root.join("prefix/bin/nuntio");
+        let root = TempDir::new("classify");
+        let bin = root.join("prefix").join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join("nuntio");
         assert_eq!(
             classify(&exe, "linux", None, None),
             None,
             "no lib/nuntio next to bin"
         );
-        fs::create_dir_all(root.join("prefix/lib/nuntio")).unwrap();
+        fs::create_dir_all(root.join("prefix").join("lib").join("nuntio")).unwrap();
         let tarball = Some(Install::Tarball {
             prefix: root.join("prefix"),
         });
@@ -893,9 +895,13 @@ mod tests {
         assert_eq!(classify(&exe, "linux", file, dir), tarball);
         let (file, dir) = env();
         assert_eq!(
-            classify(&mount.join("usr/bin/nuntio"), "linux", file, dir),
+            classify(
+                &mount.join("usr").join("bin").join("nuntio"),
+                "linux",
+                file,
+                dir
+            ),
             Some(Install::AppImage { file: appimage })
         );
-        fs::remove_dir_all(&root).unwrap();
     }
 }
