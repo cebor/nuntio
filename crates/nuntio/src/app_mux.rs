@@ -17,6 +17,7 @@ use crate::mux::agents::{AgentsUpdate, SessionKey};
 use crate::mux::entries::{self, MuxEntry, remote_session};
 use crate::mux::herdr::{Agent, AgentStatus, summary};
 use crate::mux::keys::MuxAction;
+use crate::mux::launch;
 use crate::mux::project::last_component;
 use crate::mux::resolve::resolve;
 use crate::mux::service::{
@@ -196,15 +197,7 @@ impl Core {
                 let Some(program) = snapshot.program(tool, &target) else {
                     return;
                 };
-                let mut argv = vec![program.to_owned()];
-                match (tool, &session) {
-                    (Tool::Herdr, Some(s)) => argv.extend(["--session".into(), s.clone()]),
-                    (Tool::Herdr, None) => {}
-                    (Tool::Tmux, Some(s)) => {
-                        argv.extend(["attach-session".into(), "-t".into(), s.clone()]);
-                    }
-                    (Tool::Tmux, None) => argv.push("attach-session".into()),
-                }
+                let argv = launch::owned(launch::attach(tool, program, session.as_deref()));
                 MuxOpen {
                     tool,
                     target,
@@ -217,14 +210,11 @@ impl Core {
                 let Some(program) = snapshot.program(Tool::Herdr, &Target::Local) else {
                     return;
                 };
-                let mut argv = vec![
-                    program.to_owned(),
-                    "--remote".into(),
-                    machine.target.clone(),
-                ];
-                if !machine.session.is_empty() && machine.session != "default" {
-                    argv.extend(["--session".into(), machine.session.clone()]);
-                }
+                let argv = launch::owned(launch::herdr_remote(
+                    program,
+                    &machine.target,
+                    &machine.session,
+                ));
                 MuxOpen {
                     tool: Tool::Herdr,
                     target: Target::Local,
@@ -237,11 +227,10 @@ impl Core {
                 let Some(program) = snapshot.program(Tool::Tmux, &target) else {
                     return;
                 };
+                let argv = launch::owned(launch::tmux_new_session(program, &name, Some(&dir)));
                 MuxOpen {
                     tool: Tool::Tmux,
-                    argv: [program, "new-session", "-A", "-s", &name, "-c", &dir]
-                        .map(str::to_owned)
-                        .to_vec(),
+                    argv,
                     target,
                     session: Some(name),
                     dir: Some(dir),
@@ -338,21 +327,13 @@ impl Core {
             return None;
         };
         let (argv, session) = match tool {
-            Tool::Herdr => (vec![program], None),
+            Tool::Herdr => (launch::herdr(&program, None), None),
             Tool::Tmux => (
-                [
-                    program.as_str(),
-                    "new-session",
-                    "-A",
-                    "-s",
-                    STARTUP_TMUX_SESSION,
-                ]
-                .map(str::to_owned)
-                .to_vec(),
+                launch::tmux_new_session(&program, STARTUP_TMUX_SESSION, None),
                 Some(STARTUP_TMUX_SESSION.to_owned()),
             ),
         };
-        let launch = mux_launch(tool, &target, &argv)?;
+        let launch = mux_launch(tool, &target, &launch::owned(argv))?;
         Some((
             launch,
             MuxPane {
@@ -486,10 +467,7 @@ impl Core {
         let Some(agent) = self.mux.agent_choices.get(index).cloned() else {
             return;
         };
-        let mut argv = vec![agent.program.clone()];
-        if let Some(session) = &agent.key.session {
-            argv.extend(["--session".to_owned(), session.clone()]);
-        }
+        let argv = launch::owned(launch::herdr(&agent.program, agent.key.session.as_deref()));
         self.open_mux(
             state,
             MuxOpen {

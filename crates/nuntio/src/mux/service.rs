@@ -12,6 +12,7 @@ use winit::event_loop::EventLoopProxy;
 use super::agents::{Endpoint, Monitor, SessionKey};
 use super::herdr::{self, Agent, HerdrSession, Machine};
 use super::keys::{self, Bindings};
+use super::launch;
 use super::project::{TmuxProjectSession, project_name, tmux_project};
 use super::resolve::resolve;
 use super::run::run;
@@ -254,12 +255,12 @@ impl Worker {
             Request::Refresh { project } => self.refresh(project),
             Request::OpenProject(entry) => self.open_project(entry),
             Request::FocusAgent(agent) => {
-                let mut args: Vec<&str> = Vec::new();
-                if let Some(session) = &agent.key.session {
-                    args.extend(["--session", session]);
-                }
-                args.extend(["agent", "focus", &agent.pane_id]);
-                run(&agent.key.target, &agent.program, &args, COMMAND_TIMEOUT);
+                let argv = launch::herdr_focus_agent(
+                    &agent.program,
+                    agent.key.session.as_deref(),
+                    &agent.pane_id,
+                );
+                run(&agent.key.target, argv[0], &argv[1..], COMMAND_TIMEOUT);
             }
         }
     }

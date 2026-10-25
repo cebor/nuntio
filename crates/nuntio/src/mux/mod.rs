@@ -5,6 +5,7 @@ pub mod agents;
 pub mod entries;
 pub mod herdr;
 pub mod keys;
+pub mod launch;
 pub mod project;
 pub mod resolve;
 pub mod run;
