@@ -67,7 +67,6 @@ If the helper isn't there to start, WSL panes use ConPTY from the start, without
 ## Limits
 
 - The `nuntio-config` command isn't available in shells that `shell.wsl` starts in a WSL distribution. Edit the config file instead.
-- nuntio can't see the processes inside WSL, so with `confirm_close` it closes a window, tab or pane without asking, even if a program runs.
 
 ## nuntio inside WSLg
 

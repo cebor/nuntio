@@ -526,7 +526,7 @@ impl Core {
                 .collect(),
             CloseTarget::Pane(id) => tabs.filter_map(|c| c.pane(id)).collect(),
         };
-        // Where the process can't be seen (Windows, WSL), don't ask.
+        // Where the process can't be seen (native Windows panes), don't ask.
         let running: Vec<String> = panes
             .iter()
             .filter(|p| p.term.foreground_is_shell() == Some(false))
