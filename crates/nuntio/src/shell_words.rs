@@ -7,13 +7,10 @@ pub enum PathSyntax {
     /// Backslash escapes (sh, bash, zsh, fish).
     Posix,
     /// Single quotes, in which PowerShell expands nothing.
-    #[cfg_attr(not(windows), allow(dead_code))]
     PowerShell,
     /// Double quotes, with `%` outside them so it can be escaped.
-    #[cfg_attr(not(windows), allow(dead_code))]
     Cmd,
     /// A Windows path, seen from inside WSL.
-    #[cfg_attr(not(windows), allow(dead_code))]
     Wsl,
 }
 

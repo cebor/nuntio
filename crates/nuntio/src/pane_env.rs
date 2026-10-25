@@ -41,7 +41,7 @@ fn prepend_path(dir: &Path, existing: Option<OsString>) -> Option<String> {
 /// `LC_CTYPE` is set: `LANG` for the system's language and region (a
 /// BCP 47 tag like `de-DE`) if that locale is installed, else only UTF-8
 /// characters (`LC_CTYPE=UTF-8`), so shells don't show `<00e4>` for "ä".
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(any(target_os = "macos", test))]
 fn locale_env(
     inherited: bool,
     system: Option<&str>,
