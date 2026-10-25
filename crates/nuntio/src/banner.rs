@@ -3,10 +3,9 @@
 //! dismisses it.
 
 use nuntio_render::{Rect, UiRect, UiText};
-use nuntio_term::rgb;
 
 use crate::actions::Action;
-use crate::style::{INFO_COLOR, UiMetrics};
+use crate::style::{ERROR_COLOR, INFO_COLOR, UiMetrics, WARNING_COLOR, WHITE};
 use unicode_width::UnicodeWidthStr;
 
 /// Space above and below the text, in logical pixels.
@@ -179,10 +178,10 @@ impl Banner {
             height,
             padding,
         } = Layout::new(bottom, metrics);
-        let (background, foreground) = match self.severity {
-            Severity::Error => (rgb(0xb3261e), rgb(0xffffff)),
-            Severity::Warning => (rgb(0x7a5c00), rgb(0xffffff)),
-            Severity::Info => (INFO_COLOR, rgb(0xffffff)),
+        let background = match self.severity {
+            Severity::Error => ERROR_COLOR,
+            Severity::Warning => WARNING_COLOR,
+            Severity::Info => INFO_COLOR,
         };
         // Leave room for the closing "×" at the right.
         let columns = ((window_width - 2.0 * padding) / cell.width as f32) as usize;
@@ -195,7 +194,7 @@ impl Banner {
                 Rect::new(0.0, top, window_width, height),
                 background,
             )],
-            vec![UiText::new(padding, top + padding, text, foreground)],
+            vec![UiText::new(padding, top + padding, text, WHITE)],
         )
     }
 }

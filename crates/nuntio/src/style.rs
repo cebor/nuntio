@@ -37,6 +37,10 @@ pub const WHITE: Rgb = rgb(0xffffff);
 pub const BLACK: Rgb = rgb(0x000000);
 /// The blue of informational banners and the update badge.
 pub const INFO_COLOR: Rgb = rgb(0x1f5fa8);
+/// The red of error banners.
+pub const ERROR_COLOR: Rgb = rgb(0xb3261e);
+/// The brown of warning banners.
+pub const WARNING_COLOR: Rgb = rgb(0x7a5c00);
 /// herdr agents: one needs input, one finished, one works.
 pub const AGENT_BLOCKED: Rgb = rgb(0xe06c75);
 pub const AGENT_DONE: Rgb = rgb(0x98c379);
