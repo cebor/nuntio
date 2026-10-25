@@ -444,22 +444,28 @@ fn apply(install: &Install, release: &Release) -> Result<()> {
     }
 }
 
-/// The new version in a .tar.gz: every file moves to the same place under
-/// `prefix`, `bin/nuntio` last. Files the new version no longer ships stay.
-fn install_tarball(asset: &Asset, prefix: &Path, staging: &Path) -> Result<()> {
+/// Download `asset` into `staging` and unpack it there with `<tar> <option>
+/// <archive> -C <dir>`; returns the single directory the archive holds.
+fn unpack(asset: &Asset, staging: &Path, tar: impl AsRef<OsStr>, option: &str) -> Result<PathBuf> {
     let archive = staging.join(&asset.name);
     asset.download_to(&archive)?;
     let unpacked = staging.join("unpacked");
     fs::create_dir(&unpacked)?;
     run(
-        Command::new("tar")
-            .arg("-xzf")
+        Command::new(tar)
+            .arg(option)
             .arg(&archive)
             .arg("-C")
             .arg(&unpacked),
         UNPACK_LIMIT,
     )?;
-    let root = only_dir(&unpacked, &asset.name)?;
+    only_dir(&unpacked, &asset.name)
+}
+
+/// The new version in a .tar.gz: every file moves to the same place under
+/// `prefix`, `bin/nuntio` last. Files the new version no longer ships stay.
+fn install_tarball(asset: &Asset, prefix: &Path, staging: &Path) -> Result<()> {
+    let root = unpack(asset, staging, "tar", "-xzf")?;
     let mut files = files_under(&root)?;
     let program = Path::new("bin").join("nuntio");
     files.sort_by_key(|rel| *rel == program);
@@ -550,19 +556,7 @@ fn install_mac_app(asset: &Asset, bundle: &Path, staging: &Path) -> Result<()> {
 /// renamed but not deleted, so each old file moves aside first; on an
 /// error everything is moved back.
 fn install_windows(asset: &Asset, dir: &Path, staging: &Path) -> Result<()> {
-    let zip = staging.join(&asset.name);
-    asset.download_to(&zip)?;
-    let unpacked = staging.join("unpacked");
-    fs::create_dir(&unpacked)?;
-    run(
-        Command::new(system_tar())
-            .arg("-xf")
-            .arg(&zip)
-            .arg("-C")
-            .arg(&unpacked),
-        UNPACK_LIMIT,
-    )?;
-    let root = only_dir(&unpacked, &asset.name)?;
+    let root = unpack(asset, staging, system_tar(), "-xf")?;
     // (file, its old version moved aside)
     let mut moved: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
     for rel in files_under(&root)? {
