@@ -12,6 +12,7 @@ use super::{
 use crate::args;
 use crate::widgets::{Choice, Pick, Picker, edit_input};
 use nuntio_config::detect::Found;
+use nuntio_tui::list;
 use nuntio_tui::style::Tone;
 use nuntio_tui::text_input::TextInput;
 
@@ -78,10 +79,12 @@ impl App {
     }
 
     fn sections_key(&mut self, key: Key) {
-        let last = Section::ALL.len() - 1;
+        let last = list::last(Section::ALL.len());
         match key {
-            Key::Up | Key::Char('k') => self.select_section(self.section.saturating_sub(1)),
-            Key::Down | Key::Char('j') => self.select_section((self.section + 1).min(last)),
+            Key::Up | Key::Char('k') => self.select_section(list::up(self.section, 1)),
+            Key::Down | Key::Char('j') => {
+                self.select_section(list::down(self.section, 1, Section::ALL.len()));
+            }
             Key::Home => self.select_section(0),
             Key::End => self.select_section(last),
             Key::Enter | Key::Right | Key::Char('l') => self.focus = Focus::Rows,
@@ -98,7 +101,7 @@ impl App {
 
     fn rows_key(&mut self, key: Key) {
         let count = self.rows(self.current_section()).len();
-        let last = count.saturating_sub(1);
+        let last = list::last(count);
         match key {
             Key::Up | Key::Char('k') => {
                 if self.row == 0 {
@@ -805,13 +808,13 @@ impl App {
             mut selected,
         } = mode;
         let mut entries = self.item_entries(setting);
-        let last = entries.len().saturating_sub(1);
+        let last = list::last(entries.len());
         let chosen = entries.iter().take_while(|e| e.is_chosen()).count();
         let mut changed = false;
         match key {
             Key::Esc | Key::Enter | Key::Char('q') => return,
-            Key::Up | Key::Char('k') => selected = selected.saturating_sub(1),
-            Key::Down | Key::Char('j') => selected = (selected + 1).min(last),
+            Key::Up | Key::Char('k') => selected = list::up(selected, 1),
+            Key::Down | Key::Char('j') => selected = list::down(selected, 1, entries.len()),
             Key::Char(' ') | Key::Char('d') | Key::Delete => match &mut entries[selected] {
                 Entry::Item { on, .. } if key == Key::Char(' ') => {
                     *on = !*on;
@@ -866,7 +869,7 @@ impl App {
             {
                 selected = i;
             }
-            selected = selected.min(entries_now.len().saturating_sub(1));
+            selected = list::clamp(selected, entries_now.len());
         }
         self.mode = Mode::Items(ItemsMode { setting, selected });
     }
@@ -913,10 +916,8 @@ impl App {
                 }
                 return;
             }
-            Key::Up => mode.selected = mode.selected.saturating_sub(1),
-            Key::Down => {
-                mode.selected = (mode.selected + 1).min(mode.results.len().saturating_sub(1));
-            }
+            Key::Up => mode.selected = list::up(mode.selected, 1),
+            Key::Down => mode.selected = list::down(mode.selected, 1, mode.results.len()),
             key => {
                 if edit_input(&mut mode.input, key) {
                     mode.results = self.search(mode.input.text());

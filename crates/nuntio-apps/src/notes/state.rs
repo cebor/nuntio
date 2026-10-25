@@ -7,6 +7,7 @@ use std::io;
 use std::time::{Duration, Instant, SystemTime};
 
 use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
+use nuntio_tui::list::{self, keep_visible};
 use nuntio_tui::style::Tone;
 use nuntio_tui::text_input::TextInput;
 use ratatui::crossterm::event::{
@@ -434,7 +435,7 @@ impl App {
 
     fn clamp_selection(&mut self) {
         let len = self.visible().len();
-        self.selected = self.selected.min(len.saturating_sub(1));
+        self.selected = list::clamp(self.selected, len);
     }
 
     /// Select entry `index` of the visible list and open it.
@@ -709,12 +710,12 @@ impl App {
         let len = self.visible().len();
         let page = self.areas.list.map_or(10, |l| l.height as usize).max(2) - 1;
         let target = match key.code {
-            KeyCode::Up => Some(self.selected.saturating_sub(1)),
-            KeyCode::Down => Some((self.selected + 1).min(len.saturating_sub(1))),
-            KeyCode::PageUp => Some(self.selected.saturating_sub(page)),
-            KeyCode::PageDown => Some((self.selected + page).min(len.saturating_sub(1))),
+            KeyCode::Up => Some(list::up(self.selected, 1)),
+            KeyCode::Down => Some(list::down(self.selected, 1, len)),
+            KeyCode::PageUp => Some(list::up(self.selected, page)),
+            KeyCode::PageDown => Some(list::down(self.selected, page, len)),
             KeyCode::Home if !self.filtering => Some(0),
-            KeyCode::End if !self.filtering => Some(len.saturating_sub(1)),
+            KeyCode::End if !self.filtering => Some(list::last(len)),
             _ => None,
         };
         if let Some(target) = target {
@@ -1008,14 +1009,12 @@ impl App {
         let len = todos.items.len();
         let page = self.areas.inner.height.saturating_sub(1).max(1) as usize;
         match key.code {
-            KeyCode::Up => todos.selected = todos.selected.saturating_sub(1),
-            KeyCode::Down => todos.selected = (todos.selected + 1).min(len.saturating_sub(1)),
-            KeyCode::PageUp => todos.selected = todos.selected.saturating_sub(page),
-            KeyCode::PageDown => {
-                todos.selected = (todos.selected + page).min(len.saturating_sub(1));
-            }
+            KeyCode::Up => todos.selected = list::up(todos.selected, 1),
+            KeyCode::Down => todos.selected = list::down(todos.selected, 1, len),
+            KeyCode::PageUp => todos.selected = list::up(todos.selected, page),
+            KeyCode::PageDown => todos.selected = list::down(todos.selected, page, len),
             KeyCode::Home => todos.selected = 0,
-            KeyCode::End => todos.selected = len.saturating_sub(1),
+            KeyCode::End => todos.selected = list::last(len),
             KeyCode::Char(' ') => self.toggle_todo_item(now),
             KeyCode::Char('a') => {
                 let show_done = !todos.show_done;
@@ -1177,12 +1176,11 @@ impl App {
                 true
             }
             MouseEventKind::ScrollDown if in_list => {
-                let target = (self.selected + WHEEL).min(self.visible().len().saturating_sub(1));
-                self.select(target);
+                self.select(list::down(self.selected, WHEEL, self.visible().len()));
                 true
             }
             MouseEventKind::ScrollUp if in_list => {
-                self.select(self.selected.saturating_sub(WHEEL));
+                self.select(list::up(self.selected, WHEEL));
                 true
             }
             MouseEventKind::ScrollDown if in_editor => {
@@ -1274,11 +1272,11 @@ impl App {
                 true
             }
             MouseEventKind::ScrollDown => {
-                todos.selected = (todos.selected + WHEEL).min(todos.items.len().saturating_sub(1));
+                todos.selected = list::down(todos.selected, WHEEL, todos.items.len());
                 true
             }
             MouseEventKind::ScrollUp => {
-                todos.selected = todos.selected.saturating_sub(WHEEL);
+                todos.selected = list::up(todos.selected, WHEEL);
                 true
             }
             _ => false,
@@ -1430,7 +1428,7 @@ impl App {
         }
         let selected = self.todos.as_ref().map_or(0, |t| t.selected);
         self.todos = Some(Todos {
-            selected: selected.min(items.len().saturating_sub(1)),
+            selected: list::clamp(selected, items.len()),
             items,
             show_done,
             scroll: 0,
@@ -1544,17 +1542,6 @@ impl App {
             );
         }
         self.follow = true;
-    }
-}
-
-/// The scroll offset that keeps `index` within `height` rows.
-fn keep_visible(scroll: usize, index: usize, height: usize) -> usize {
-    if index < scroll {
-        index
-    } else if index >= scroll + height {
-        index + 1 - height
-    } else {
-        scroll
     }
 }
 

@@ -1,6 +1,7 @@
 //! State of the editing widgets: a filterable choice list, and how keys edit
 //! a text input.
 
+use nuntio_tui::list;
 use nuntio_tui::text_input::{Edit, TextInput};
 
 use crate::state::Key;
@@ -77,14 +78,14 @@ impl Picker {
     /// Handle a key; returns whether the highlighted entry changed.
     pub fn key(&mut self, key: Key) -> bool {
         let before = self.current();
-        let last = self.visible.len().saturating_sub(1);
+        let len = self.visible.len();
         match key {
-            Key::Up => self.selected = self.selected.saturating_sub(1),
-            Key::Down => self.selected = (self.selected + 1).min(last),
-            Key::PageUp => self.selected = self.selected.saturating_sub(10),
-            Key::PageDown => self.selected = (self.selected + 10).min(last),
+            Key::Up => self.selected = list::up(self.selected, 1),
+            Key::Down => self.selected = list::down(self.selected, 1, len),
+            Key::PageUp => self.selected = list::up(self.selected, 10),
+            Key::PageDown => self.selected = list::down(self.selected, 10, len),
             Key::Home => self.selected = 0,
-            Key::End => self.selected = last,
+            Key::End => self.selected = list::last(len),
             Key::Char(c) if self.filter.is_some() => {
                 self.filter.as_mut().unwrap().push(c);
                 self.refilter();

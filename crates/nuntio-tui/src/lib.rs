@@ -3,6 +3,7 @@
 //! single-line text input, popups and the colors, tones and drawing pieces
 //! they draw with.
 
+pub mod list;
 pub mod popup;
 pub mod style;
 pub mod terminal;

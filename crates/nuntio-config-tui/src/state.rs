@@ -18,6 +18,7 @@ use nuntio_config::{
 use crate::args;
 use crate::widgets::Picker;
 use nuntio_config::detect::Found;
+use nuntio_tui::list;
 use nuntio_tui::style::Tone;
 use nuntio_tui::text_input::TextInput;
 
@@ -662,7 +663,7 @@ impl App {
 
     fn clamp_row(&mut self) {
         let count = self.rows(self.current_section()).len();
-        self.row = self.row.min(count.saturating_sub(1));
+        self.row = list::clamp(self.row, count);
     }
 
     pub fn row_label(&self, row: Row) -> String {
