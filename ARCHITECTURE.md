@@ -42,7 +42,7 @@ flowchart LR
     subgraph proc[nuntio process]
         main[Main thread<br/>App = Core + WindowState]
         pty[PTY reader thread<br/>one per pane]
-        svc[Service threads<br/>config watcher, sysmon,<br/>update check, clipboard, links]
+        svc[Service threads<br/>config watcher, sysmon, clipboard, links,<br/>update check and install,<br/>multiplexers, herdr agents]
     end
     win <--> main
     main -->|Frame| gpu[(GPU via wgpu)]

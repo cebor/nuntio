@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100" role="img" aria-labelledby="title desc">
   <title id="title">nuntio system architecture</title>
-  <desc id="desc">The nuntio process: the main thread owns the window, the wgpu renderer, tabs and panes; one PTY reader thread per pane parses shell output into alacritty_terminal and wakes the main thread through UserEvents; service threads watch the config, sample the system, check for updates and read the clipboard. Child processes are shells in a PTY or ConPTY, WSL shells behind the nuntio-wsl relay, and the helper apps nuntio-config (settings TUI, which writes the config file that nuntio hot-reloads) and nuntio-apps notes (Markdown notes).</desc>
+  <desc id="desc">The nuntio process: the main thread owns the window, the wgpu renderer, tabs and panes; one PTY reader thread per pane parses shell output into alacritty_terminal and wakes the main thread through UserEvents; service threads watch the config, sample the system, check for and install updates, find herdr and tmux and monitor herdr agents through their CLI and socket, and read the clipboard. Child processes are shells in a PTY or ConPTY, WSL shells behind the nuntio-wsl relay, and the helper apps nuntio-config (settings TUI, which writes the config file that nuntio hot-reloads) and nuntio-apps notes (Markdown notes).</desc>
   <defs>
     <style>
       text { font-family: Inter, 'Segoe UI', 'Helvetica Neue', Arial, 'DejaVu Sans', sans-serif; }
@@ -157,7 +157,7 @@
   <text x="306" y="396" class="desc">keys → Bindings (first match wins) or input::encode_key → TermHandle::write · idle ≈ 0 % CPU</text>
 
   <!-- B2 renderer -->
-  <rect x="290" y="440" width="390" height="140" rx="10" fill="#BB9AF7" fill-opacity="0.10" stroke="#BB9AF7" stroke-width="1.5"/>
+  <rect x="290" y="440" width="390" height="158" rx="10" fill="#BB9AF7" fill-opacity="0.10" stroke="#BB9AF7" stroke-width="1.5"/>
   <text x="306" y="460" class="crate render">nuntio-render</text>
   <text x="306" y="477" class="desc">wgpu · render(&amp;Frame) → FrameStatus · not Send</text>
   <g>
@@ -176,26 +176,32 @@
   </g>
 
   <!-- B3 service threads -->
-  <rect x="740" y="440" width="390" height="140" rx="10" fill="#E0AF68" fill-opacity="0.10" stroke="#E0AF68" stroke-width="1.5"/>
+  <rect x="740" y="440" width="390" height="158" rx="10" fill="#E0AF68" fill-opacity="0.10" stroke="#E0AF68" stroke-width="1.5"/>
   <text x="756" y="460" class="crate svc">service threads</text>
   <text x="756" y="477" class="desc">each sends UserEvent through a cloned EventLoopProxy</text>
   <g>
-    <rect x="756" y="488" width="112" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="812" y="504" class="chip mid">config watcher</text>
-    <rect x="876" y="488" width="60" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="906" y="504" class="chip mid">sysmon</text>
-    <rect x="944" y="488" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="993.5" y="504" class="chip mid">update-check</text>
-    <rect x="756" y="517" width="112" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="812" y="533" class="chip mid">clipboard-read</text>
-    <rect x="876" y="517" width="79" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="915.5" y="533" class="chip mid">link-open</text>
-    <rect x="963" y="517" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="1012.5" y="533" class="chip mid">font preload</text>
-    <rect x="756" y="546" width="165" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="838.5" y="562" class="chip mid">debug-server (feature)</text>
-    <rect x="929" y="546" width="126" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
-    <text x="992" y="562" class="chip mid">update-check-now</text>
+    <rect x="756" y="486" width="112" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="812" y="502" class="chip mid">config watcher</text>
+    <rect x="876" y="486" width="60" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="906" y="502" class="chip mid">sysmon</text>
+    <rect x="944" y="486" width="112" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1000" y="502" class="chip mid">clipboard-read</text>
+    <rect x="756" y="513" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="805.5" y="529" class="chip mid">update-check</text>
+    <rect x="863" y="513" width="126" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="926" y="529" class="chip mid">update-check-now</text>
+    <rect x="997" y="513" width="112" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1053" y="529" class="chip mid">update-install</text>
+    <rect x="756" y="540" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="805.5" y="556" class="chip mid">multiplexers</text>
+    <rect x="863" y="540" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="912.5" y="556" class="chip mid">herdr agents</text>
+    <rect x="970" y="540" width="79" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="1009.5" y="556" class="chip mid">link-open</text>
+    <rect x="756" y="567" width="99" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="805.5" y="583" class="chip mid">font preload</text>
+    <rect x="863" y="567" width="165" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
+    <text x="945.5" y="583" class="chip mid">debug-server (feature)</text>
   </g>
 
   <!-- B4 PTY reader threads (one per pane) -->
@@ -207,26 +213,26 @@
   <text x="1114" y="625" class="small end">one per pane · IoLoop</text>
   <text x="306" y="642" class="desc">IoLoop over a Backend: Unix PTY · ConPTY · WslPipe (Windows) · ExitGuard closes the pane even on panic</text>
   <g>
-    <rect x="306" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <rect x="306" y="652" width="132" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
     <text x="316" y="670" class="chip bold">Backend</text>
     <text x="316" y="687" class="small">poll · read · write</text>
-    <rect x="473" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
-    <text x="483" y="670" class="chip bold">CwdScanner</text>
-    <text x="483" y="687" class="small">OSC 7 · OSC 9;9</text>
-    <rect x="640" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
-    <text x="650" y="670" class="chip bold">ImageScanner</text>
-    <text x="650" y="687" class="small">OSC 1337 · CSI 16 t</text>
-    <rect x="807" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
-    <text x="817" y="670" class="chip bold">vte parser</text>
-    <text x="817" y="687" class="small">alacritty_terminal</text>
-    <rect x="974" y="652" width="140" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
-    <text x="984" y="670" class="chip bold">Term</text>
-    <text x="984" y="687" class="small">FairMutex · lease()</text>
+    <rect x="464" y="652" width="120" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="474" y="670" class="chip bold">CwdScanner</text>
+    <text x="474" y="687" class="small">OSC 7 · OSC 9;9</text>
+    <rect x="610" y="652" width="197" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="620" y="670" class="chip bold">ImageScanner</text>
+    <text x="620" y="687" class="small">OSC 1337 · Kitty APC · CSI 16 t</text>
+    <rect x="833" y="652" width="125" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="843" y="670" class="chip bold">vte parser</text>
+    <text x="843" y="687" class="small">alacritty_terminal</text>
+    <rect x="984" y="652" width="128" height="44" rx="8" fill="#9ECE6A" fill-opacity="0.08" stroke="#9ECE6A"/>
+    <text x="994" y="670" class="chip bold">Term</text>
+    <text x="994" y="687" class="small">FairMutex · lease()</text>
   </g>
-  <line x1="446" y1="674" x2="473" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
-  <line x1="613" y1="674" x2="640" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
-  <line x1="780" y1="674" x2="807" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
-  <line x1="947" y1="674" x2="974" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="438" y1="674" x2="464" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="584" y1="674" x2="610" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="807" y1="674" x2="833" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
+  <line x1="958" y1="674" x2="984" y2="674" stroke="#C0CAF5" stroke-width="2" marker-end="url(#m-bytes)"/>
   <g>
     <rect x="306" y="706" width="145" height="24" rx="12" fill="#24283B" stroke="#3B4261"/>
     <text x="378.5" y="722" class="chip mid">image decode worker</text>
@@ -355,10 +361,12 @@
   <text x="756" y="870" class="head">GitHub releases API</text>
   <text x="756" y="890" class="small mono">/repos/cebor/nuntio/releases/latest</text>
   <text x="756" y="912" class="desc">opt-in: [updates] check = true</text>
-  <text x="756" y="928" class="desc">tag_name only · ETag requests</text>
-  <text x="756" y="944" class="desc">state: cache dir nuntio/update.toml</text>
+  <text x="756" y="928" class="desc">tag_name · asset names · ETag requests</text>
+  <text x="756" y="944" class="desc">cache dir nuntio/: update.toml · update.lock</text>
   <text x="756" y="960" class="desc">banner · tab-bar badge · status item</text>
-  <text x="756" y="1022" class="small">informs only, downloads nothing</text>
+  <text x="756" y="982" class="desc">release packages: SHA256SUMS and the</text>
+  <text x="756" y="998" class="desc">asset from releases/download/&lt;tag&gt;/, install</text>
+  <text x="756" y="1022" class="small">source builds only inform</text>
 
   <!-- D4 config files -->
   <rect x="1180" y="845" width="360" height="195" rx="10" fill="#7DCFFF" fill-opacity="0.08" stroke="#7DCFFF" stroke-width="1.5"/>
