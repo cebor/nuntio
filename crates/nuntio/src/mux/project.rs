@@ -2,13 +2,15 @@
 
 use super::tmux::TmuxSession;
 
-/// The last component of `dir`, which may use `/` or `\`. `"project"` if
-/// there is none.
+/// The last component of `dir`, which may use `/` or `\`; `None` if there
+/// is none.
+pub fn last_component(dir: &str) -> Option<&str> {
+    dir.rsplit(['/', '\\']).find(|part| !part.is_empty())
+}
+
+/// [`last_component`] of `dir`, `"project"` if there is none.
 pub fn project_name(dir: &str) -> String {
-    dir.rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or("project")
-        .to_owned()
+    last_component(dir).unwrap_or("project").to_owned()
 }
 
 /// [`project_name`] as a tmux session name: tmux replaces `.` and `:` in
@@ -93,6 +95,11 @@ mod tests {
         assert_eq!(project_name("/"), "project");
         assert_eq!(project_name(""), "project");
         assert_eq!(project_name("/a/v1.2"), "v1.2");
+        assert_eq!(last_component("x"), Some("x"));
+        assert_eq!(last_component("/home/me/code/nuntio/"), Some("nuntio"));
+        assert_eq!(last_component(r"C:\Users\me\x"), Some("x"));
+        assert_eq!(last_component("/"), None);
+        assert_eq!(last_component(""), None);
         assert_eq!(tmux_name("/a/v1.2:x"), "v1_2_x");
     }
 

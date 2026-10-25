@@ -17,6 +17,7 @@ use crate::mux::agents::{AgentsUpdate, SessionKey};
 use crate::mux::entries::{self, MuxEntry, remote_session};
 use crate::mux::herdr::{Agent, AgentStatus, summary};
 use crate::mux::keys::MuxAction;
+use crate::mux::project::last_component;
 use crate::mux::resolve::resolve;
 use crate::mux::service::{
     AgentRef, MuxOpen, MuxService, MuxSettings, MuxSnapshot, ProjectDir, Request,
@@ -76,12 +77,6 @@ fn mux_action(action: Action) -> Option<MuxAction> {
         Action::ZoomPane => MuxAction::Zoom,
         _ => return None,
     })
-}
-
-/// The last component of a path, Linux or Windows.
-fn basename(path: &str) -> &str {
-    let path = path.trim_end_matches(['/', '\\']);
-    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 impl Core {
@@ -402,7 +397,10 @@ impl Core {
                 if window::wants_attention(tab_active, state.focused, false) {
                     let messages = newly_blocked
                         .iter()
-                        .map(|a| format!("{} in {} needs input", a.agent, basename(&a.cwd)))
+                        .map(|a| {
+                            let dir = last_component(&a.cwd).unwrap_or_default();
+                            format!("{} in {dir} needs input", a.agent)
+                        })
                         .collect();
                     self.notify(Banner::new(Severity::Info, Topic::Agents, messages));
                 }
@@ -459,7 +457,11 @@ impl Core {
                 detail.push_str(&format!(" · {}", distro.name));
             }
             entries.push(MenuEntry {
-                label: format!("{} · {}", agent.agent, basename(&agent.cwd)),
+                label: format!(
+                    "{} · {}",
+                    agent.agent,
+                    last_component(&agent.cwd).unwrap_or_default()
+                ),
                 detail: Some(detail),
                 current: false,
                 action: Action::FocusAgent(self.mux.agent_choices.len()),
@@ -507,14 +509,6 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn basenames_of_linux_and_windows_paths() {
-        assert_eq!(basename("/home/me/code/nuntio"), "nuntio");
-        assert_eq!(basename("/home/me/code/nuntio/"), "nuntio");
-        assert_eq!(basename(r"C:\Users\me\x"), "x");
-        assert_eq!(basename("x"), "x");
-    }
 
     #[test]
     fn tab_switching_stays_with_nuntio() {
