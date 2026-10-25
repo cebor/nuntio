@@ -3,7 +3,7 @@
 
 use nuntio_config::Theme;
 use nuntio_config::schema::Section;
-use nuntio_tui::style::{ACCENT, Tone};
+use nuntio_tui::style::{ACCENT, Tone, hints};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
@@ -482,7 +482,7 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let hints: &[(&str, &str)] = match &app.mode {
+    let pairs: &[(&str, &str)] = match &app.mode {
         Mode::Normal if app.focus == Focus::Sections => &[
             ("↑↓", "section"),
             ("⏎/Tab", "settings"),
@@ -539,15 +539,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ("Esc", "cancel"),
         ],
     };
-    let editor = editor_hint(hints, &app.editor_name, area.width);
-    let hints = fit_hints(hints, editor, area.width);
-    let mut spans = vec![Span::raw(" ")];
-    for &(key, what) in &hints {
-        let what = if key == "e" { editor } else { what };
-        spans.push(Span::raw(key).fg(ACCENT));
-        spans.push(Span::styled(format!(" {what}  "), Tone::Dim.style()));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    let editor = editor_hint(pairs, &app.editor_name, area.width);
+    let pairs: Vec<(&str, &str)> = fit_hints(pairs, editor, area.width)
+        .into_iter()
+        .map(|(key, what)| (key, if key == "e" { editor } else { what }))
+        .collect();
+    frame.render_widget(Paragraph::new(hints(&pairs)), area);
 }
 
 /// The columns the footer takes with `editor` as the text of the `e` hint:

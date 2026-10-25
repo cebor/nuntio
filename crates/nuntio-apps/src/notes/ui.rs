@@ -3,7 +3,7 @@
 //! modifiers, so the app follows the terminal's theme.
 
 use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
-use nuntio_tui::style::{ACCENT, Tone};
+use nuntio_tui::style::{ACCENT, Tone, hints};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
@@ -556,18 +556,6 @@ fn draw_todos(frame: &mut Frame, app: &App) {
         };
         frame.render_widget(Paragraph::new(line), area);
     }
-}
-
-fn hints(pairs: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
-    for (i, (key, what)) in pairs.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(Span::styled((*key).to_owned(), Style::new().fg(ACCENT)));
-        spans.push(Span::styled(format!(" {what}"), dim()));
-    }
-    Line::from(spans)
 }
 
 fn draw_footer(frame: &mut Frame, app: &App) {
