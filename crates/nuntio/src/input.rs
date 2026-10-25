@@ -7,7 +7,7 @@
 use nuntio_config::{KeyCombo, KeyName};
 use nuntio_term::TermMode;
 
-use crate::actions::named_key;
+use crate::actions::{NAMED_KEYS, modifiers_state, named_key};
 use crate::kitty_keys;
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{
@@ -396,17 +396,7 @@ pub fn is_modifier(key: &Key) -> bool {
 /// what the debug server and multiplexer bindings press on a pane's behalf.
 pub fn synthetic_press(combo: &KeyCombo, kind: KeyEventKind) -> (KeyPress, ModifiersState) {
     let m = combo.mods;
-    let mut mods = ModifiersState::empty();
-    for (on, flag) in [
-        (m.ctrl, ModifiersState::CONTROL),
-        (m.shift, ModifiersState::SHIFT),
-        (m.alt, ModifiersState::ALT),
-        (m.super_key, ModifiersState::SUPER),
-    ] {
-        if on {
-            mods |= flag;
-        }
-    }
+    let mods = modifiers_state(m);
     let press = match combo.key {
         KeyName::Char(c) => {
             let shifted = if m.shift {
@@ -476,16 +466,29 @@ pub fn chord_bytes(combo: &KeyCombo, mode: TermMode) -> Vec<u8> {
     bytes
 }
 
-/// The US-layout key for a letter or digit.
-fn char_code(c: char) -> Option<KeyCode> {
+const LETTERS: [KeyCode; 26] = {
     use KeyCode::*;
-    const LETTERS: [KeyCode; 26] = [
+    [
         KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
         KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
-    ];
-    const DIGITS: [KeyCode; 10] = [
+    ]
+};
+
+const DIGITS: [KeyCode; 10] = {
+    use KeyCode::*;
+    [
         Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
-    ];
+    ]
+};
+
+/// F1 to F12 as physical keys.
+const FUNCTION_CODES: [KeyCode; 12] = {
+    use KeyCode::*;
+    [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12]
+};
+
+/// The US-layout key for a letter or digit.
+fn char_code(c: char) -> Option<KeyCode> {
     match c {
         'a'..='z' => Some(LETTERS[(c as u8 - b'a') as usize]),
         '0'..='9' => Some(DIGITS[(c as u8 - b'0') as usize]),
@@ -493,54 +496,24 @@ fn char_code(c: char) -> Option<KeyCode> {
     }
 }
 
+/// The physical key on a US layout that types `key`.
 fn named_code(key: NamedKey) -> Option<KeyCode> {
-    let code = match key {
-        NamedKey::Enter => KeyCode::Enter,
-        NamedKey::Tab => KeyCode::Tab,
-        NamedKey::Escape => KeyCode::Escape,
-        NamedKey::Space => KeyCode::Space,
-        NamedKey::Backspace => KeyCode::Backspace,
-        NamedKey::Delete => KeyCode::Delete,
-        NamedKey::Insert => KeyCode::Insert,
-        NamedKey::Home => KeyCode::Home,
-        NamedKey::End => KeyCode::End,
-        NamedKey::PageUp => KeyCode::PageUp,
-        NamedKey::PageDown => KeyCode::PageDown,
-        NamedKey::ArrowUp => KeyCode::ArrowUp,
-        NamedKey::ArrowDown => KeyCode::ArrowDown,
-        NamedKey::ArrowLeft => KeyCode::ArrowLeft,
-        NamedKey::ArrowRight => KeyCode::ArrowRight,
-        NamedKey::F1 => KeyCode::F1,
-        NamedKey::F2 => KeyCode::F2,
-        NamedKey::F3 => KeyCode::F3,
-        NamedKey::F4 => KeyCode::F4,
-        NamedKey::F5 => KeyCode::F5,
-        NamedKey::F6 => KeyCode::F6,
-        NamedKey::F7 => KeyCode::F7,
-        NamedKey::F8 => KeyCode::F8,
-        NamedKey::F9 => KeyCode::F9,
-        NamedKey::F10 => KeyCode::F10,
-        NamedKey::F11 => KeyCode::F11,
-        NamedKey::F12 => KeyCode::F12,
-        _ => return None,
-    };
-    Some(code)
+    match NAMED_KEYS.iter().find(|(_, winit, _)| *winit == key) {
+        Some(&(.., code)) => Some(code),
+        None => {
+            let n = function_number(key).filter(|n| *n <= 12)?;
+            Some(FUNCTION_CODES[usize::from(n) - 1])
+        }
+    }
 }
 
 /// The unshifted character of a key on a US layout.
 pub(crate) fn us_char(code: KeyCode) -> Option<char> {
     use KeyCode::*;
-    let letters = [
-        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
-        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
-    ];
-    let digits = [
-        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
-    ];
-    if let Some(i) = letters.iter().position(|&k| k == code) {
+    if let Some(i) = LETTERS.iter().position(|&k| k == code) {
         return Some((b'a' + i as u8) as char);
     }
-    if let Some(i) = digits.iter().position(|&k| k == code) {
+    if let Some(i) = DIGITS.iter().position(|&k| k == code) {
         return Some((b'0' + i as u8) as char);
     }
     Some(match code {

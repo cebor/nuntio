@@ -1,7 +1,7 @@
 //! Keyboard shortcuts: platform defaults plus `[[keybindings]]` from the config.
 
 use nuntio_config::{KeyCombo, KeyName, Mods, NamedKey as Named};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey};
 
 use crate::input;
 use crate::pane_tree::Direction;
@@ -379,49 +379,63 @@ fn mods_of(mods: ModifiersState) -> Mods {
     }
 }
 
+/// The modifier state that stands for `mods`: the inverse of `mods_of`.
+pub(crate) fn modifiers_state(mods: Mods) -> ModifiersState {
+    let mut state = ModifiersState::empty();
+    for (on, flag) in [
+        (mods.ctrl, ModifiersState::CONTROL),
+        (mods.shift, ModifiersState::SHIFT),
+        (mods.alt, ModifiersState::ALT),
+        (mods.super_key, ModifiersState::SUPER),
+    ] {
+        if on {
+            state |= flag;
+        }
+    }
+    state
+}
+
+/// The named keys other than F1 to F12 (see `input::function_key`): the
+/// config's name, winit's key and the physical key on a US layout.
+pub(crate) const NAMED_KEYS: [(Named, NamedKey, KeyCode); 15] = [
+    (Named::Enter, NamedKey::Enter, KeyCode::Enter),
+    (Named::Tab, NamedKey::Tab, KeyCode::Tab),
+    (Named::Escape, NamedKey::Escape, KeyCode::Escape),
+    (Named::Space, NamedKey::Space, KeyCode::Space),
+    (Named::Backspace, NamedKey::Backspace, KeyCode::Backspace),
+    (Named::Delete, NamedKey::Delete, KeyCode::Delete),
+    (Named::Insert, NamedKey::Insert, KeyCode::Insert),
+    (Named::Home, NamedKey::Home, KeyCode::Home),
+    (Named::End, NamedKey::End, KeyCode::End),
+    (Named::PageUp, NamedKey::PageUp, KeyCode::PageUp),
+    (Named::PageDown, NamedKey::PageDown, KeyCode::PageDown),
+    (Named::Up, NamedKey::ArrowUp, KeyCode::ArrowUp),
+    (Named::Down, NamedKey::ArrowDown, KeyCode::ArrowDown),
+    (Named::Left, NamedKey::ArrowLeft, KeyCode::ArrowLeft),
+    (Named::Right, NamedKey::ArrowRight, KeyCode::ArrowRight),
+];
+
 /// The config's name for `key`, if it has one.
-fn config_named_key(key: NamedKey) -> Option<nuntio_config::NamedKey> {
-    Some(match key {
-        NamedKey::Enter => Named::Enter,
-        NamedKey::Tab => Named::Tab,
-        NamedKey::Escape => Named::Escape,
-        NamedKey::Space => Named::Space,
-        NamedKey::Backspace => Named::Backspace,
-        NamedKey::Delete => Named::Delete,
-        NamedKey::Insert => Named::Insert,
-        NamedKey::Home => Named::Home,
-        NamedKey::End => Named::End,
-        NamedKey::PageUp => Named::PageUp,
-        NamedKey::PageDown => Named::PageDown,
-        NamedKey::ArrowUp => Named::Up,
-        NamedKey::ArrowDown => Named::Down,
-        NamedKey::ArrowLeft => Named::Left,
-        NamedKey::ArrowRight => Named::Right,
+fn config_named_key(key: NamedKey) -> Option<Named> {
+    match NAMED_KEYS.iter().find(|(_, winit, _)| *winit == key) {
+        Some(&(config, ..)) => Some(config),
         // The config knows F1 to F12.
-        _ => Named::F(input::function_number(key).filter(|n| *n <= 12)?),
-    })
+        None => Some(Named::F(input::function_number(key).filter(|n| *n <= 12)?)),
+    }
 }
 
 /// The key a debug server request or a multiplexer binding names, as winit
 /// reports it.
-pub(crate) fn named_key(key: nuntio_config::NamedKey) -> NamedKey {
+pub(crate) fn named_key(key: Named) -> NamedKey {
     match key {
-        Named::Enter => NamedKey::Enter,
-        Named::Tab => NamedKey::Tab,
-        Named::Escape => NamedKey::Escape,
-        Named::Space => NamedKey::Space,
-        Named::Backspace => NamedKey::Backspace,
-        Named::Delete => NamedKey::Delete,
-        Named::Insert => NamedKey::Insert,
-        Named::Home => NamedKey::Home,
-        Named::End => NamedKey::End,
-        Named::PageUp => NamedKey::PageUp,
-        Named::PageDown => NamedKey::PageDown,
-        Named::Up => NamedKey::ArrowUp,
-        Named::Down => NamedKey::ArrowDown,
-        Named::Left => NamedKey::ArrowLeft,
-        Named::Right => NamedKey::ArrowRight,
         Named::F(n) => input::function_key(n.clamp(1, 12)).expect("F1 to F12 exist"),
+        _ => {
+            let (_, winit, _) = NAMED_KEYS
+                .iter()
+                .find(|(config, ..)| *config == key)
+                .expect("every other named key is in NAMED_KEYS");
+            *winit
+        }
     }
 }
 
