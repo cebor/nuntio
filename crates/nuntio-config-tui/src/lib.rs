@@ -190,8 +190,7 @@ pub fn main() -> Result<()> {
     app.editor_name = editor_name(&editor());
 
     let mut view = ui::View::default();
-    let mut terminal = terminal::init(MODES)?;
-    let result = (|| -> Result<()> {
+    terminal::run(MODES, |terminal| {
         while !app.quit {
             terminal.draw(|frame| ui::draw(frame, &app, &mut view))?;
             // Blocks until there is input: no CPU use while idle.
@@ -208,7 +207,7 @@ pub fn main() -> Result<()> {
                 app.open_editor = false;
                 terminal::restore(MODES);
                 let edited = run_editor(&path);
-                terminal = terminal::init(MODES)?;
+                *terminal = terminal::init(MODES)?;
                 match edited {
                     Ok(()) => app.reload(),
                     Err(err) => app.message = Some((Tone::Error, format!("{err:#}"))),
@@ -216,9 +215,7 @@ pub fn main() -> Result<()> {
             }
         }
         Ok(())
-    })();
-    terminal::restore(MODES);
-    result
+    })
 }
 
 #[cfg(test)]

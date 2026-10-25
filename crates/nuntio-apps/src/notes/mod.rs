@@ -114,18 +114,11 @@ pub fn run(parser: lexopt::Parser) -> Result<()> {
     let config = nuntio_config::config_path(args.config.clone());
     let opened = open(&args, config.as_deref());
 
-    let mut terminal = nuntio_tui::terminal::init(MODES)?;
-    let result = (|| -> Result<()> {
-        // Starts crossterm's event reader, which only then listens for
-        // resizes: nuntio resizes a new split's pane right after starting it.
-        event::poll(std::time::Duration::ZERO)?;
-        match opened {
-            Ok(app) => run_notes(&mut terminal, app, config.as_deref()),
-            Err(failed) => run_failed(&mut terminal, &failed),
-        }
-    })();
-    nuntio_tui::terminal::restore(MODES);
-    result.context("the notes app failed")
+    nuntio_tui::terminal::run(MODES, |terminal| match opened {
+        Ok(app) => run_notes(terminal, app, config.as_deref()),
+        Err(failed) => run_failed(terminal, &failed),
+    })
+    .context("the notes app failed")
 }
 
 /// Show the failure until the user quits.

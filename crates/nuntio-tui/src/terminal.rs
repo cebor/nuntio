@@ -2,11 +2,12 @@
 //! bracketed paste, and the modes an app asks for.
 
 use std::io::{self, Write};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::Engine;
 use ratatui::crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use ratatui::crossterm::execute;
@@ -51,6 +52,24 @@ pub fn init(modes: Modes) -> Result<ratatui::DefaultTerminal> {
 pub fn restore(modes: Modes) {
     restore_modes(modes);
     ratatui::restore();
+}
+
+/// Run `app` on a set-up terminal and restore the terminal afterwards, also
+/// when `app` fails. `app` may [`restore`] and [`init`] the terminal itself
+/// (to run another program on the screen) and replace the terminal it is
+/// given with the new one.
+pub fn run(
+    modes: Modes,
+    app: impl FnOnce(&mut ratatui::DefaultTerminal) -> Result<()>,
+) -> Result<()> {
+    let mut terminal = init(modes)?;
+    // Starts crossterm's event reader, which only then listens for
+    // resizes: nuntio resizes a new split's pane right after starting it.
+    let result = event::poll(Duration::ZERO)
+        .map_err(Into::into)
+        .and_then(|_| app(&mut terminal));
+    restore(modes);
+    result
 }
 
 fn enable_modes(modes: Modes) -> io::Result<()> {
