@@ -131,7 +131,7 @@ pub struct Shell {
 /// nuntio-wsl, which `wslpath` turns into a Linux path under any automount
 /// root. If that fails, nuntio-wsl never reports ready and nuntio falls back
 /// to ConPTY.
-const WSL_HELPER_SCRIPT: &str = r#"exec "$(wslpath -u "$0")" "$@""#;
+pub const WSL_HELPER_SCRIPT: &str = r#"exec "$(wslpath -u "$0")" "$@""#;
 
 impl Shell {
     /// Program and arguments to spawn. With `wsl`, the shell starts in

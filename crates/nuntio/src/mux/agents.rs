@@ -108,24 +108,14 @@ fn wsl_bridge(distro: &Distro, socket: &str) -> io::Result<Connection> {
     use std::process::Stdio;
 
     let helper = crate::wsl::helper().ok_or_else(|| io::Error::other("no nuntio-wsl helper"))?;
-    let mut command = std::process::Command::new("wsl.exe");
-    command.args(["-d", &distro.name]);
-    if let Some(user) = &distro.user {
-        command.args(["-u", user]);
-    }
+    let mut command = distro.command();
     command
-        .args([
-            "--exec",
-            "/bin/sh",
-            "-c",
-            r#"exec "$(wslpath -u "$0")" "$@""#,
-        ])
+        .args(["--exec", "/bin/sh", "-c", nuntio_config::WSL_HELPER_SCRIPT])
         .arg(helper)
         .args(["socket", socket])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    crate::command::no_window(&mut command);
     let mut child = command.spawn()?;
     let stdin = child
         .stdin

@@ -2,13 +2,13 @@
 //! `wsl.exe` and whose processes it can't see.
 
 use std::collections::HashMap;
-#[cfg(windows)]
 use std::process::Command;
 #[cfg(windows)]
 use std::time::Duration;
 
 use nuntio_term::ReportedDir;
 
+use crate::command::no_window;
 use crate::tab_title::strip_user_host;
 
 /// Whether this is a Linux build running inside WSL, where the opener hands
@@ -79,6 +79,20 @@ pub fn wsl_path(path: &str) -> String {
 pub struct Distro {
     pub name: String,
     pub user: Option<String>,
+}
+
+impl Distro {
+    /// `wsl.exe -d <name> [-u <user>]`, without a console window. The
+    /// caller adds `--exec` and the program.
+    pub fn command(&self) -> Command {
+        let mut command = Command::new("wsl.exe");
+        command.args(["-d", &self.name]);
+        if let Some(user) = &self.user {
+            command.args(["-u", user]);
+        }
+        no_window(&mut command);
+        command
+    }
 }
 
 /// Where Windows sees `dir` (absolute) of a WSL distribution, if it is on a
@@ -170,16 +184,9 @@ const HOME_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(windows)]
 fn query_home(distro: &Distro) -> Option<String> {
-    let mut command = Command::new("wsl.exe");
-    command.args(["-d", &distro.name]);
-    if let Some(user) = &distro.user {
-        command.args(["-u", user]);
-    }
+    let mut command = distro.command();
     command.args(["--exec", "sh", "-c", r#"printf %s "$HOME""#]);
-    let output = match crate::command::output_within(
-        crate::command::no_window(&mut command),
-        HOME_LOOKUP_TIMEOUT,
-    ) {
+    let output = match crate::command::output_within(&mut command, HOME_LOOKUP_TIMEOUT) {
         Ok(Some(output)) => output,
         Ok(None) => {
             tracing::warn!(distro = distro.name, "wsl.exe did not answer in time");

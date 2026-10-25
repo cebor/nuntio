@@ -10,19 +10,18 @@ use crate::command::{no_window, output_within};
 /// through `wsl.exe --exec`.
 pub fn command(target: &Target, program: &str, args: &[&str]) -> Command {
     let mut command = match target {
-        Target::Local => Command::new(program),
+        Target::Local => {
+            let mut command = Command::new(program);
+            no_window(&mut command);
+            command
+        }
         Target::Wsl(distro) => {
-            let mut command = Command::new("wsl.exe");
-            command.args(["-d", &distro.name]);
-            if let Some(user) = &distro.user {
-                command.args(["-u", user]);
-            }
+            let mut command = distro.command();
             command.args(["--exec", program]);
             command
         }
     };
     command.args(args);
-    no_window(&mut command);
     command
 }
 
