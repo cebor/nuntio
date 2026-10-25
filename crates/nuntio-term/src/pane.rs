@@ -17,7 +17,7 @@ use thiserror::Error;
 use crate::backend::Backend;
 use crate::image::{ImageStore, crop_columns, strip_image_text};
 use crate::io_loop::{IoLoop, LoopSender, Msg, ReplyBudget};
-use crate::osc_cwd::ReportedDir;
+use crate::osc_cwd::{ReportedDir, wsl_share};
 use crate::palette::Palette;
 use crate::process;
 use crate::search::{self, Search};
@@ -1150,15 +1150,10 @@ fn pick_directory(
 /// paths (`C:\`, `c:/`) and shares of WSL distributions count as local.
 fn is_local(path: &str) -> bool {
     let bytes = path.as_bytes();
-    let separator = |i: usize| matches!(bytes.get(i), Some(b'\\' | b'/'));
     if bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':') {
-        return separator(2);
+        return matches!(bytes.get(2), Some(b'\\' | b'/'));
     }
-    if !(separator(0) && separator(1)) {
-        return false;
-    }
-    let host = path[2..].split(['\\', '/']).next().unwrap_or_default();
-    host.eq_ignore_ascii_case("wsl.localhost") || host.eq_ignore_ascii_case("wsl$")
+    wsl_share(path).is_some()
 }
 
 /// Paste payload: with bracketed paste the text is wrapped in markers, with
@@ -1304,6 +1299,7 @@ mod tests {
     fn only_local_windows_directories_are_used() {
         assert!(is_local(r"C:\Users\me"));
         assert!(is_local(r"\\wsl.localhost\Ubuntu\home\me"));
+        assert!(is_local("//wsl.localhost/Ubuntu/home/me"));
         assert!(is_local(r"\\WSL$\Debian"));
         assert!(!is_local(r"\\evil\share"));
         assert!(!is_local("//evil/share"));

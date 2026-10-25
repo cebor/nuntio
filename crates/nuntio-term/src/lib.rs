@@ -19,7 +19,7 @@ mod wsl_pipe;
 pub use crate::image::{ImagePiece, TermImage};
 pub use alacritty_terminal::term::TermMode;
 pub use alacritty_terminal::vte::ansi::Rgb;
-pub use osc_cwd::ReportedDir;
+pub use osc_cwd::{ReportedDir, wsl_share};
 pub use palette::{Palette, rgb};
 pub use pane::{
     ForegroundInfo, GridPoint, Program, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent,

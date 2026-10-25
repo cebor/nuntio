@@ -19,6 +19,25 @@ pub enum ReportedDir {
     Windows(String),
 }
 
+/// A path on a WSL share (`\\wsl.localhost\Ubuntu\home\x`, also `\\wsl$\`,
+/// with `/` for any separator): the distribution (`Ubuntu`) and the path
+/// inside it from its separator on (`\home\x`, empty for the root). `None`
+/// for any other path.
+pub fn wsl_share(path: &str) -> Option<(&str, &str)> {
+    let separator = |c: char| matches!(c, '\\' | '/');
+    let after_slashes = path.strip_prefix(separator)?.strip_prefix(separator)?;
+    let (host, after_host) = after_slashes.split_at(after_slashes.find(separator)?);
+    if !["wsl.localhost", "wsl$"]
+        .iter()
+        .any(|wsl| host.eq_ignore_ascii_case(wsl))
+    {
+        return None;
+    }
+    // The separator is one byte.
+    let share = &after_host[1..];
+    Some(share.split_at(share.find(separator).unwrap_or(share.len())))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Ground,
@@ -213,6 +232,26 @@ mod tests {
         assert_eq!(scan(b"\x1b]9;9;\x07"), None);
         assert_eq!(scan(b"\x1b[31m7;file://h/x\x07"), None, "no OSC");
         assert_eq!(scan(b"\x1b]7;file://h/x\x18\x07"), None, "cancelled");
+    }
+
+    #[test]
+    fn wsl_shares_take_either_separator() {
+        assert_eq!(
+            wsl_share(r"\\wsl.localhost\Ubuntu\home\me"),
+            Some(("Ubuntu", r"\home\me"))
+        );
+        assert_eq!(wsl_share(r"\\WSL$\Debian"), Some(("Debian", "")));
+        assert_eq!(
+            wsl_share("//wsl.localhost/Ubuntu/home/me"),
+            Some(("Ubuntu", "/home/me"))
+        );
+        assert_eq!(wsl_share(r"\\wsl$/Ubuntu\x"), Some(("Ubuntu", r"\x")));
+        assert_eq!(wsl_share(r"\\wsl.localhost\"), Some(("", "")));
+        assert_eq!(wsl_share(r"\\wsl.localhost.evil.com\x"), None);
+        assert_eq!(wsl_share(r"\\evil\share"), None);
+        assert_eq!(wsl_share(r"\\wsl.localhost"), None);
+        assert_eq!(wsl_share(r"\wsl.localhost\Ubuntu"), None);
+        assert_eq!(wsl_share("/home/me"), None);
     }
 
     #[test]

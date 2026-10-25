@@ -6,7 +6,7 @@ use std::process::Command;
 #[cfg(windows)]
 use std::time::Duration;
 
-use nuntio_term::ReportedDir;
+use nuntio_term::{ReportedDir, wsl_share};
 
 use crate::command::no_window;
 use crate::tab_title::strip_user_host;
@@ -26,21 +26,6 @@ pub fn running_in_wsl() -> bool {
                     }))
     });
     *WSL
-}
-
-/// A path on a WSL share (`\\wsl.localhost\Ubuntu\home\x`, also `\\wsl$\`):
-/// the distribution (`Ubuntu`) and the path inside it (`\home\x`, empty for
-/// the root). `None` for any other path.
-fn wsl_share(path: &str) -> Option<(&str, &str)> {
-    [r"\\wsl.localhost\", r"\\wsl$\"]
-        .into_iter()
-        .find_map(|host| {
-            let rest = path
-                .get(..host.len())
-                .filter(|prefix| prefix.eq_ignore_ascii_case(host))
-                .map(|_| &path[host.len()..])?;
-            Some(rest.split_at(rest.find('\\').unwrap_or(rest.len())))
-        })
 }
 
 /// Where WSL sees the file `rest` (backslashes allowed) on the Windows
@@ -254,6 +239,8 @@ mod tests {
         assert_eq!(wsl_path(r"\\wsl.localhost\Ubuntu\home\me\x"), "/home/me/x");
         assert_eq!(wsl_path(r"\\wsl$\Debian\etc"), "/etc");
         assert_eq!(wsl_path(r"\\wsl$\Debian"), "/");
+        assert_eq!(wsl_path("//wsl.localhost/Ubuntu/home/me/x"), "/home/me/x");
+        assert_eq!(wsl_path("//wsl$/Debian"), "/");
         assert_eq!(wsl_path(r"\\?\C:\a"), "/mnt/c/a");
     }
 
@@ -282,6 +269,11 @@ mod tests {
             linux_path_in(r"\\wsl$\Ubuntu\x", "Ubuntu"),
             Some("/x".into())
         );
+        assert_eq!(
+            linux_path_in("//wsl.localhost/Ubuntu/home/me", "Ubuntu"),
+            Some("/home/me".into())
+        );
+        assert_eq!(linux_path_in("//wsl.localhost/Ubuntu/x", "Debian"), None);
         assert_eq!(linux_path_in(r"\\server\share", "Ubuntu"), None);
         assert_eq!(
             linux_path_in(r"\\?\C:\x", "Ubuntu"),
