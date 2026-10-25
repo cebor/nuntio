@@ -116,15 +116,12 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
         path: path.to_owned(),
         message,
     };
-    let source = match std::fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Loaded {
-                config: Config::default(),
-                warnings: Vec::new(),
-            });
-        }
-        Err(err) => return Err(error(err.to_string())),
+    let Some(source) = crate::read_config_source(path).map_err(|err| error(err.to_string()))?
+    else {
+        return Ok(Loaded {
+            config: Config::default(),
+            warnings: Vec::new(),
+        });
     };
     parse(&source).map_err(error)
 }

@@ -110,11 +110,9 @@ fn open(args: &Args, config: Option<&Path>) -> Result<App, Failed> {
 /// Write `width` as `notes.sidebar_width` into the config at `path`,
 /// keeping the rest of the file. A missing file is created.
 fn save_sidebar_width(path: &Path, width: u16) -> Result<(), String> {
-    let source = match std::fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => return Err(err.to_string()),
-    };
+    let source = nuntio_config::read_config_source(path)
+        .map_err(|err| err.to_string())?
+        .unwrap_or_default();
     let mut doc = nuntio_config::ConfigDoc::parse(&source)?;
     doc.set("notes.sidebar_width", i64::from(width));
     let text = doc.to_string();

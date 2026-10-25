@@ -317,6 +317,15 @@ fn has_comment(item: &Item) -> bool {
         .any(|raw| raw.as_str().is_some_and(|s| s.contains('#')))
 }
 
+/// The text of the config at `path`; `None` if there is no such file.
+pub fn read_config_source(path: &Path) -> io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(source) => Ok(Some(source)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 /// Unique temporary names within this process.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 

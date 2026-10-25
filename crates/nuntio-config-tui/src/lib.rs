@@ -28,11 +28,7 @@ struct FileStore(PathBuf);
 
 impl Store for FileStore {
     fn read(&self) -> io::Result<Option<String>> {
-        match std::fs::read_to_string(&self.0) {
-            Ok(text) => Ok(Some(text)),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err),
-        }
+        nuntio_config::read_config_source(&self.0)
     }
 
     fn write(&mut self, contents: &str) -> io::Result<()> {
