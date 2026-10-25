@@ -94,6 +94,10 @@ pub enum TodoRow {
 }
 
 impl Todos {
+    pub fn selected_item(&self) -> Option<&TodoItem> {
+        self.items.get(self.selected)
+    }
+
     pub fn rows(&self) -> Vec<TodoRow> {
         let mut rows = Vec::new();
         for (i, item) in self.items.iter().enumerate() {
@@ -350,10 +354,16 @@ impl App {
         }
     }
 
-    fn close_open(&mut self) {
+    /// Take the open note away, keeping its cursor for when it is opened
+    /// again.
+    fn remember_cursor(&mut self) {
         if let Some(open) = self.open.take() {
             self.cursors.insert(open.title, open.buffer.cursor());
         }
+    }
+
+    fn close_open(&mut self) {
+        self.remember_cursor();
         self.rows.clear();
         self.first_row.clear();
         self.cursor_xy = None;
@@ -404,9 +414,7 @@ impl App {
         if !self.save_and_continue() {
             return false;
         }
-        if let Some(open) = self.open.take() {
-            self.cursors.insert(open.title, open.buffer.cursor());
-        }
+        self.remember_cursor();
         let cursor = self.cursors.get(title).copied().unwrap_or_default();
         self.scroll = 0;
         let loaded = self.load(title, cursor);
@@ -758,10 +766,15 @@ impl App {
         }
     }
 
-    fn clear_filter(&mut self) {
-        let open = self.open.as_ref().map(|o| o.title.clone());
+    /// Stop filtering and show all notes.
+    fn drop_filter(&mut self) {
         self.filter = None;
         self.filtering = false;
+    }
+
+    fn clear_filter(&mut self) {
+        let open = self.open.as_ref().map(|o| o.title.clone());
+        self.drop_filter();
         if let Some(title) = open {
             self.select_title_quietly(&title);
         }
@@ -1298,8 +1311,7 @@ impl App {
             return;
         }
         self.todos = None;
-        self.filter = None;
-        self.filtering = false;
+        self.drop_filter();
         self.refresh();
         if self.open_title(&title) {
             self.focus = Focus::Editor;
@@ -1340,8 +1352,7 @@ impl App {
             open.title = title.clone();
             open.stamp = self.store.stamp(&title).ok().flatten();
         }
-        self.filter = None;
-        self.filtering = false;
+        self.drop_filter();
         self.refresh();
         self.select_title_quietly(&title);
     }
@@ -1427,12 +1438,7 @@ impl App {
     }
 
     fn toggle_todo_item(&mut self, now: Instant) {
-        let Some(item) = self
-            .todos
-            .as_ref()
-            .and_then(|t| t.items.get(t.selected))
-            .cloned()
-        else {
+        let Some(item) = self.todos.as_ref().and_then(Todos::selected_item).cloned() else {
             return;
         };
         let toggled = if self.open.as_ref().is_some_and(|o| o.title == item.title) {
@@ -1511,12 +1517,7 @@ impl App {
     }
 
     fn open_todo_item(&mut self) {
-        let Some(item) = self
-            .todos
-            .as_ref()
-            .and_then(|t| t.items.get(t.selected))
-            .cloned()
-        else {
+        let Some(item) = self.todos.as_ref().and_then(Todos::selected_item).cloned() else {
             return;
         };
         if self.filter.is_some()
@@ -1525,8 +1526,7 @@ impl App {
                 .iter()
                 .any(|&i| self.notes[i].title == item.title)
         {
-            self.filter = None;
-            self.filtering = false;
+            self.drop_filter();
         }
         if !self.open_title(&item.title) {
             return;
