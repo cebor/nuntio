@@ -320,12 +320,10 @@ impl Bindings {
                 warnings.push(format!("keybinding \"{}\" has no `action`", entry.key));
                 continue;
             }
-            let parsed = KeyCombo::parse(&entry.key)
-                .map_err(|e| e.to_string())
-                .and_then(|combo| {
-                    let action = Action::from_name(&entry.action)?;
-                    Ok(Binding { combo, action })
-                });
+            let parsed = entry.check().map_err(|e| e.to_string()).and_then(|combo| {
+                let action = Action::from_name(&entry.action)?;
+                Ok(Binding { combo, action })
+            });
             match parsed {
                 Ok(binding) => custom.push(binding),
                 Err(err) => warnings.push(format!("keybinding \"{}\": {err}", entry.key)),

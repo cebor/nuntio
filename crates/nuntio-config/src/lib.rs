@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 
 pub use color::{Color, ColorError};
 pub use edit::{ConfigDoc, write_atomically};
-pub use keys::{ACTIONS, KeyCombo, KeyComboError, KeyName, Mods, NamedKey};
+pub use keys::{
+    ACTIONS, KeyCombo, KeyComboError, KeyName, KeybindingProblem, Mods, NamedKey, action,
+};
 pub use load::{
     CONFIG_ENV, ConfigError, ConfigLocation, Loaded, config_dir, config_path, load, locate_config,
     parse, themes_dir,

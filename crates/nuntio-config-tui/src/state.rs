@@ -11,7 +11,8 @@ use unicode_width::UnicodeWidthStr;
 use nuntio_config::schema::{Kind, SETTINGS, SPRING, Section, Setting};
 use nuntio_config::toml_edit::{self, InlineTable};
 use nuntio_config::{
-    ACTIONS, Config, ConfigDoc, KeyCombo, Keybinding, StatusItem, ThemeSelection, ThemeSet,
+    Config, ConfigDoc, KeyCombo, Keybinding, KeybindingProblem, StatusItem, ThemeSelection,
+    ThemeSet, action,
 };
 
 use crate::args;
@@ -731,13 +732,13 @@ impl App {
     pub fn binding_problem(&self, index: usize) -> Option<String> {
         let bindings = self.doc.keybindings();
         let binding = bindings.get(index)?;
-        let combo = match KeyCombo::parse(&binding.key) {
+        let combo = match binding.check() {
             Ok(combo) => combo,
-            Err(err) => return Some(format!("key \"{}\": {err}", binding.key)),
+            Err(KeybindingProblem::Key(err)) => {
+                return Some(format!("key \"{}\": {err}", binding.key));
+            }
+            Err(problem) => return Some(problem.to_string()),
         };
-        if !ACTIONS.iter().any(|a| a.value == binding.action) {
-            return Some(format!("unknown action `{}`", binding.action));
-        }
         let earlier = bindings[..index]
             .iter()
             .position(|b| b.active_combo() == Some(combo));
@@ -868,7 +869,7 @@ impl App {
     fn binding_details(&self, index: usize) -> Vec<(Tone, String)> {
         let mut lines = Vec::new();
         let binding = &self.doc.keybindings()[index];
-        if let Some(action) = ACTIONS.iter().find(|a| a.value == binding.action) {
+        if let Some(action) = action(&binding.action) {
             lines.push((Tone::Normal, action.help.into()));
         }
         if let Some(problem) = self.binding_problem(index) {
@@ -898,6 +899,7 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
+    use nuntio_config::ACTIONS;
     use nuntio_config::schema::setting_at;
 
     use super::*;

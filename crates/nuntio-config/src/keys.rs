@@ -116,15 +116,36 @@ impl KeyCombo {
     }
 }
 
+/// Why a `[[keybindings]]` entry does nothing.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum KeybindingProblem {
+    #[error("{0}")]
+    Key(#[from] KeyComboError),
+    #[error("unknown action `{0}`")]
+    UnknownAction(String),
+}
+
+/// The documented action called `name`, `none` included.
+pub fn action(name: &str) -> Option<&'static Variant> {
+    ACTIONS.iter().find(|a| a.value == name)
+}
+
 impl crate::Keybinding {
-    /// The combination of an entry nuntio uses: its action is one of
-    /// [`ACTIONS`] and its key parses. nuntio skips every other entry
-    /// (with a warning), so such entries shadow nothing.
-    pub fn active_combo(&self) -> Option<KeyCombo> {
-        if !ACTIONS.iter().any(|a| a.value == self.action) {
-            return None;
+    /// The combination of an entry nuntio uses, or what is wrong with it:
+    /// its key must parse, then its action must be one of [`ACTIONS`].
+    pub fn check(&self) -> Result<KeyCombo, KeybindingProblem> {
+        let combo = KeyCombo::parse(&self.key)?;
+        match action(&self.action) {
+            Some(_) => Ok(combo),
+            None => Err(KeybindingProblem::UnknownAction(self.action.clone())),
         }
-        KeyCombo::parse(&self.key).ok()
+    }
+
+    /// The combination of an entry nuntio uses ([`Self::check`] passes).
+    /// nuntio skips every other entry (with a warning), so such entries
+    /// shadow nothing.
+    pub fn active_combo(&self) -> Option<KeyCombo> {
+        self.check().ok()
     }
 }
 
