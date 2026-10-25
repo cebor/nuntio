@@ -2,7 +2,7 @@
 # and dependency sources. Run with `cargo deny check`; CI does too.
 
 [graph]
-all-features = false
+all-features = true
 
 [advisories]
 # Unmaintained crates deep in the tree (winit, wgpu) are common and not
