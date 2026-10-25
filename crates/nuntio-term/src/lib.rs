@@ -12,6 +12,8 @@ mod process;
 mod search;
 mod snapshot;
 mod sync;
+#[cfg(test)]
+mod test_support;
 mod url;
 #[cfg(windows)]
 mod wsl_pipe;

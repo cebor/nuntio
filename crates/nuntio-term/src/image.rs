@@ -972,35 +972,9 @@ pub(crate) fn visible_image_ids<T: EventListener>(
 mod tests {
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::grid::Scroll;
-    use alacritty_terminal::term::Config;
-    use alacritty_terminal::vte::ansi::Processor;
-    use image::ImageFormat;
 
     use super::*;
-
-    const GEOMETRY: CellGeometry = CellGeometry {
-        columns: 80,
-        lines: 24,
-        cell_width: 10,
-        cell_height: 20,
-    };
-
-    fn png(width: u32, height: u32) -> Vec<u8> {
-        encode_png(&RgbaImage::from_pixel(
-            width,
-            height,
-            image::Rgba([255, 0, 0, 255]),
-        ))
-    }
-
-    /// `image` as the base64 payload of an inline image.
-    fn encode_png(image: &RgbaImage) -> Vec<u8> {
-        let mut bytes = Cursor::new(Vec::new());
-        image.write_to(&mut bytes, ImageFormat::Png).unwrap();
-        base64::engine::general_purpose::STANDARD
-            .encode(bytes.into_inner())
-            .into_bytes()
-    }
+    use crate::test_support::{GEOMETRY, b64, feed, png, png_of, term};
 
     fn request(args: &str, payload: Vec<u8>) -> ImageRequest {
         ImageRequest {
@@ -1017,16 +991,6 @@ mod tests {
 
     fn alpha(image: &TermImage, x: u32, y: u32) -> u8 {
         image.rgba[((y * image.width + x) * 4 + 3) as usize]
-    }
-
-    fn term(columns: u16, lines: u16) -> Term<VoidListener> {
-        let size = crate::TermSize {
-            columns,
-            lines,
-            cell_width: 1,
-            cell_height: 1,
-        };
-        Term::new(Config::default(), &size, VoidListener)
     }
 
     fn test_image(columns: usize, lines: usize) -> TermImage {
@@ -1066,7 +1030,7 @@ mod tests {
     #[test]
     fn width_in_cells_keeps_the_aspect_ratio() {
         // 40×40 px at 2 columns: 20×20 px, one 20 px line.
-        let image = decode_with("inline=1;width=2", png(40, 40), GEOMETRY);
+        let image = decode_with("inline=1;width=2", b64(&png(40, 40)), GEOMETRY);
         assert_eq!((image.columns, image.lines), (2, 1));
         assert_eq!((image.width, image.height), (20, 20));
         assert_eq!(image.rgba.len(), 20 * 20 * 4);
@@ -1075,7 +1039,7 @@ mod tests {
     #[test]
     fn box_with_preserved_aspect_ratio_is_fitted() {
         // A square in a 4×2 cell box (40×40 px): fits exactly.
-        let image = decode_with("inline=1;width=6;height=2", png(10, 10), GEOMETRY);
+        let image = decode_with("inline=1;width=6;height=2", b64(&png(10, 10)), GEOMETRY);
         assert_eq!((image.columns, image.lines), (6, 2));
         assert_eq!((image.width, image.height), (60, 40));
         assert_eq!(alpha(&image, 39, 39), 255);
@@ -1086,7 +1050,7 @@ mod tests {
     fn box_without_preserved_aspect_ratio_is_stretched() {
         let image = decode_with(
             "inline=1;width=6;height=2;preserveAspectRatio=0",
-            png(10, 10),
+            b64(&png(10, 10)),
             GEOMETRY,
         );
         assert_eq!((image.width, image.height), (60, 40));
@@ -1095,7 +1059,7 @@ mod tests {
 
     #[test]
     fn auto_width_is_limited_to_the_terminal() {
-        let image = decode_with("inline=1", png(2000, 100), GEOMETRY);
+        let image = decode_with("inline=1", b64(&png(2000, 100)), GEOMETRY);
         assert_eq!(image.columns, GEOMETRY.columns);
         // 800×40 px after scaling down.
         assert_eq!((image.width, image.lines), (800, 2));
@@ -1104,13 +1068,13 @@ mod tests {
     #[test]
     fn rows_are_limited_relative_to_the_screen() {
         let args = "inline=1;width=2;height=10000;preserveAspectRatio=0";
-        let image = decode_with(args, png(1, 1), GEOMETRY);
+        let image = decode_with(args, b64(&png(1, 1)), GEOMETRY);
         assert_eq!(image.lines, 384);
         let tall = CellGeometry {
             lines: 1000,
             ..GEOMETRY
         };
-        let image = decode_with(args, png(1, 1), tall);
+        let image = decode_with(args, b64(&png(1, 1)), tall);
         assert_eq!(image.lines, 10_000);
     }
 
@@ -1118,7 +1082,7 @@ mod tests {
     fn enlarging_beyond_the_budget_is_refused() {
         let request = request(
             "inline=1;width=4095px;height=4095px;preserveAspectRatio=0",
-            png(4095, 1),
+            b64(&png(4095, 1)),
         );
         let result = decode(&request, &parse_args(&request.args), GEOMETRY);
         assert!(matches!(result, Err(ImageError::Image(_))));
@@ -1144,7 +1108,7 @@ mod tests {
 
     #[test]
     fn unknown_cell_size() {
-        let request = request("inline=1", png(1, 1));
+        let request = request("inline=1", b64(&png(1, 1)));
         let geometry = CellGeometry {
             cell_width: 0,
             ..GEOMETRY
@@ -1158,8 +1122,7 @@ mod tests {
     #[test]
     fn place_writes_cells_and_moves_the_cursor() {
         let mut term = term(10, 5);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"ab");
+        feed(&mut term, b"ab");
         place(&mut term, 7, &test_image(3, 2), 0);
         for (row, col) in [(0, 0), (0, 2), (1, 1)] {
             assert_eq!(
@@ -1176,8 +1139,7 @@ mod tests {
     #[test]
     fn place_at_the_bottom_scrolls() {
         let mut term = term(10, 3);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"\r\n\r\n");
+        feed(&mut term, b"\r\n\r\n");
         place(&mut term, 1, &test_image(2, 2), 0);
         let cursor = term.grid().cursor.point;
         assert_eq!(cursor.line.0, 2);
@@ -1189,23 +1151,21 @@ mod tests {
     #[test]
     fn place_crops_at_the_right_edge() {
         let mut term = term(5, 3);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"abc");
+        feed(&mut term, b"abc");
         place(&mut term, 1, &test_image(4, 1), 0);
         assert_eq!(image_cell_ref(cell_at(&term, 0, 4)), Some((1, 0, 1)));
         assert!(term.grid().cursor.input_needs_wrap);
         assert_eq!(term.grid().cursor.point.column.0, 4);
-        parser.advance(&mut term, b"x");
+        feed(&mut term, b"x");
         assert_eq!(cell_at(&term, 1, 0).c, 'x');
     }
 
     #[test]
     fn place_clears_split_wide_characters() {
         let mut term = term(6, 2);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, "a界b界".as_bytes());
+        feed(&mut term, "a界b界".as_bytes());
         // Over the spacer of the first 界 and the first half of the second.
-        parser.advance(&mut term, b"\x1b[1;3H");
+        feed(&mut term, b"\x1b[1;3H");
         place(&mut term, 1, &test_image(3, 1), 0);
         assert_eq!(cell_at(&term, 0, 1).c, ' ');
         assert!(!cell_at(&term, 0, 1).flags.contains(Flags::WIDE_CHAR));
@@ -1216,8 +1176,7 @@ mod tests {
     #[test]
     fn pending_wrap_starts_on_the_next_line() {
         let mut term = term(3, 3);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"abc");
+        feed(&mut term, b"abc");
         assert!(term.grid().cursor.input_needs_wrap);
         place(&mut term, 1, &test_image(1, 1), 0);
         assert_eq!(cell_at(&term, 0, 2).c, 'c');
@@ -1233,8 +1192,7 @@ mod tests {
             0xFF, 0xFF, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
             0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
         ];
-        let payload = base64::engine::general_purpose::STANDARD.encode(gif);
-        let request = request("inline=1", payload.into_bytes());
+        let request = request("inline=1", b64(&gif));
         let result = decode(&request, &parse_args(&request.args), GEOMETRY);
         assert!(
             matches!(result, Err(ImageError::Image(image::ImageError::Limits(_)))),
@@ -1245,7 +1203,6 @@ mod tests {
     #[test]
     fn eviction_keeps_images_on_screen() {
         let mut term = term(4, 2);
-        let mut parser: Processor = Processor::new();
         let key = |n| ImageKey {
             hash: n,
             geometry: GEOMETRY,
@@ -1254,7 +1211,7 @@ mod tests {
         let mut store = ImageStore::with_budget(20);
         let old = store.insert(key(1), test_image(2, 2));
         place(&mut term, old, &test_image(2, 2), 0);
-        parser.advance(&mut term, b"\x1b[Hxx\r\nxx");
+        feed(&mut term, b"\x1b[Hxx\r\nxx");
         let kept = store.insert(key(2), test_image(2, 2));
         place(&mut term, kept, &test_image(2, 2), 0);
         store.evict(&term);
@@ -1267,12 +1224,11 @@ mod tests {
     #[test]
     fn a_scan_that_found_nothing_is_not_repeated() {
         let mut term = term(4, 2);
-        let mut parser: Processor = Processor::new();
         // Budget 16 bytes, limit 32; each image is 16 bytes.
         let mut store = ImageStore::with_budget(16);
         let a = store.insert(test_key(1), test_image(2, 2));
         place(&mut term, a, &test_image(2, 2), 0);
-        parser.advance(&mut term, b"\x1b[1;3H");
+        feed(&mut term, b"\x1b[1;3H");
         let b = store.insert(test_key(2), test_image(2, 2));
         place(&mut term, b, &test_image(2, 2), 0);
         store.evict(&term);
@@ -1281,7 +1237,7 @@ mod tests {
 
         // Overwrite both images with text: nothing refers to them any more,
         // but the scan isn't repeated yet.
-        parser.advance(&mut term, b"\x1b[Hxxxx\r\nxxxx");
+        feed(&mut term, b"\x1b[Hxxxx\r\nxxxx");
         store.evict(&term);
         assert!(store.get(a).is_some());
 
@@ -1302,12 +1258,11 @@ mod tests {
     /// Three 16-byte images in a 4×2 terminal: the first two in the
     /// scrollback, the third visible. Returns their ids.
     fn scrolled_images(store: &mut ImageStore, term: &mut Term<VoidListener>) -> [u32; 3] {
-        let mut parser: Processor = Processor::new();
         [1, 2, 3].map(|n| {
             let id = store.insert(test_key(n), test_image(2, 2));
             place(term, id, &test_image(2, 2), 0);
             if n < 3 {
-                parser.advance(term, b"\r\n\r\n\r\n");
+                feed(term, b"\r\n\r\n\r\n");
             }
             id
         })
@@ -1319,8 +1274,7 @@ mod tests {
         place(&mut term, 1, &test_image(6, 2), 0);
         // The cursor below the image, as after a prompt: a cursor right of
         // the new width would reflow its own line.
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"\x1b[4;1H");
+        feed(&mut term, b"\x1b[4;1H");
         crop_columns(&mut term, 4);
         let size = crate::TermSize {
             columns: 4,
@@ -1346,9 +1300,8 @@ mod tests {
     #[test]
     fn place_stops_below_the_scroll_region() {
         let mut term = term(10, 5);
-        let mut parser: Processor = Processor::new();
         // Lines 1 to 3 scroll; the cursor goes to the last line, below them.
-        parser.advance(&mut term, b"\x1b[1;3r\x1b[5;1H");
+        feed(&mut term, b"\x1b[1;3r\x1b[5;1H");
         place(&mut term, 1, &test_image(2, 3), 0);
         assert_eq!(image_cell_ref(cell_at(&term, 4, 0)), Some((1, 0, 0)));
         for line in 0..4 {
@@ -1364,8 +1317,7 @@ mod tests {
     #[test]
     fn image_drawn_up_past_the_top_shows_only_its_bottom() {
         let mut term = term(4, 4);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"\x1b[2;1H\x1b7\x1b[3A");
+        feed(&mut term, b"\x1b[2;1H\x1b7\x1b[3A");
         assert_eq!(rows_above_screen(&term, Some(3)), 2);
         assert_eq!(rows_above_screen(&term, Some(1)), 0);
         assert_eq!(rows_above_screen(&term, None), 0);
@@ -1377,7 +1329,7 @@ mod tests {
         }
 
         let mut term = self::term(4, 4);
-        parser.advance(&mut term, b"\x1b[2;2H");
+        feed(&mut term, b"\x1b[2;2H");
         let cursor = term.grid().cursor.point;
         place(&mut term, 1, &test_image(2, 4), 4);
         assert_eq!(term.grid().cursor.point, cursor);
@@ -1418,12 +1370,11 @@ mod tests {
     #[test]
     fn images_of_the_primary_screen_survive_while_the_alt_screen_is_active() {
         let mut term = term(4, 2);
-        let mut parser: Processor = Processor::new();
         let mut store = ImageStore::with_budget(16);
         let primary = store.insert(test_key(1), test_image(2, 2));
         place(&mut term, primary, &test_image(2, 2), 0);
         store.placed(primary, false);
-        parser.advance(&mut term, b"\x1b[?1049h");
+        feed(&mut term, b"\x1b[?1049h");
         let alt = store.insert(test_key(2), test_image(2, 2));
         place(&mut term, alt, &test_image(2, 2), 0);
         store.placed(alt, true);
@@ -1438,14 +1389,13 @@ mod tests {
     #[test]
     fn images_of_the_alt_screen_are_dropped_after_leaving_it() {
         let mut term = term(4, 2);
-        let mut parser: Processor = Processor::new();
         let mut store = ImageStore::with_budget(16);
-        parser.advance(&mut term, b"\x1b[?1049h");
+        feed(&mut term, b"\x1b[?1049h");
         let alt = store.insert(test_key(1), test_image(2, 2));
         place(&mut term, alt, &test_image(2, 2), 0);
         store.placed(alt, true);
         // alacritty clears the alternate screen whenever it is entered.
-        parser.advance(&mut term, b"\x1b[?1049l");
+        feed(&mut term, b"\x1b[?1049l");
         let primary = store.insert(test_key(2), test_image(2, 2));
         place(&mut term, primary, &test_image(2, 2), 0);
         store.placed(primary, false);
@@ -1457,12 +1407,11 @@ mod tests {
     #[test]
     fn the_hard_limit_holds_when_every_image_is_visible() {
         let mut term = term(4, 2);
-        let mut parser: Processor = Processor::new();
         // Budget 16 bytes, limit 32.
         let mut store = ImageStore::with_budget(16);
         // Each image leaves one column of the one before visible.
         let [first, second, third] = [1, 2, 3].map(|n| {
-            parser.advance(&mut term, format!("\x1b[1;{n}H").as_bytes());
+            feed(&mut term, format!("\x1b[1;{n}H").as_bytes());
             let id = store.insert(test_key(n), test_image(2, 2));
             place(&mut term, id, &test_image(2, 2), 0);
             id
@@ -1485,7 +1434,7 @@ mod tests {
         let mut source = RgbaImage::new(2, 1);
         source.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
         source.put_pixel(1, 0, image::Rgba([0, 0, 0, 0]));
-        let payload = encode_png(&source);
+        let payload = b64(&png_of(&source));
         let image = decode_with(
             "inline=1;width=1px;height=1px;preserveAspectRatio=0",
             payload,

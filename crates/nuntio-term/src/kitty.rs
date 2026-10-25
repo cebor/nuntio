@@ -743,50 +743,16 @@ fn delete<T: EventListener>(cmd: &Command, term: &mut Term<T>, store: &mut Image
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::index::{Column, Line};
-    use alacritty_terminal::term::Config;
-    use alacritty_terminal::vte::ansi::Processor;
-    use base64::Engine;
 
     use super::*;
     use crate::image::image_cell_ref;
-
-    const GEOMETRY: CellGeometry = CellGeometry {
-        columns: 80,
-        lines: 24,
-        cell_width: 10,
-        cell_height: 20,
-    };
-
-    fn term() -> Term<VoidListener> {
-        let size = crate::TermSize {
-            columns: 80,
-            lines: 24,
-            cell_width: 10,
-            cell_height: 20,
-        };
-        Term::new(Config::default(), &size, VoidListener)
-    }
-
-    fn b64(bytes: &[u8]) -> Vec<u8> {
-        base64::engine::general_purpose::STANDARD
-            .encode(bytes)
-            .into_bytes()
-    }
+    use crate::test_support::{GEOMETRY, b64, feed, png, term};
 
     /// `width`×`height` red pixels, `channels` bytes each.
     fn raw(width: u32, height: u32, channels: usize) -> Vec<u8> {
         [255, 0, 0, 255][..channels].repeat((width * height) as usize)
-    }
-
-    fn png(width: u32, height: u32) -> Vec<u8> {
-        let image = RgbaImage::from_pixel(width, height, image::Rgba([0, 255, 0, 255]));
-        let mut bytes = Cursor::new(Vec::new());
-        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
-        bytes.into_inner()
     }
 
     fn finish(
@@ -826,11 +792,7 @@ mod tests {
     }
 
     fn move_to(term: &mut Term<VoidListener>, line: usize, column: usize) {
-        let mut parser: Processor = Processor::new();
-        parser.advance(
-            term,
-            format!("\x1b[{};{}H", line + 1, column + 1).as_bytes(),
-        );
+        feed(term, format!("\x1b[{};{}H", line + 1, column + 1));
     }
 
     #[test]
@@ -863,7 +825,7 @@ mod tests {
 
     #[test]
     fn transmit_and_place_writes_the_cells() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let reply = send(
             &mut term,
@@ -890,7 +852,7 @@ mod tests {
 
     #[test]
     fn fixed_placement_leaves_the_cursor() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         move_to(&mut term, 2, 5);
         let reply = send(
@@ -909,7 +871,7 @@ mod tests {
 
     #[test]
     fn fixed_placement_is_cropped_at_the_screen_edges() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         move_to(&mut term, 22, 78);
         send(
@@ -928,7 +890,7 @@ mod tests {
 
     #[test]
     fn placing_again_moves_the_placement() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         send(
             &mut term,
@@ -962,7 +924,7 @@ mod tests {
 
     #[test]
     fn placements_without_a_number_are_separate() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         send(
             &mut term,
@@ -979,7 +941,7 @@ mod tests {
 
     #[test]
     fn delete_by_image_id_erases_and_frees_the_data() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let data = b64(&raw(1, 1, 4));
         send(
@@ -1049,7 +1011,7 @@ mod tests {
             ("a=d,d=n,I=4", [true, true, true]),
         ];
         for (control, expected) in cases {
-            let mut term = term();
+            let mut term = term(80, 24);
             let mut store = ImageStore::default();
             setup(&mut term, &mut store);
             assert_eq!(send(&mut term, &mut store, control, b""), None);
@@ -1059,7 +1021,7 @@ mod tests {
 
     #[test]
     fn uppercase_delete_keeps_data_of_images_with_other_placements() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let data = b64(&raw(1, 1, 4));
         send(
@@ -1079,7 +1041,7 @@ mod tests {
 
     #[test]
     fn delete_by_number() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let reply = send(
             &mut term,
@@ -1102,7 +1064,7 @@ mod tests {
 
     #[test]
     fn transmitting_again_replaces_the_placements() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let data = b64(&raw(1, 1, 4));
         send(
@@ -1119,7 +1081,7 @@ mod tests {
 
     #[test]
     fn placing_a_missing_image_is_an_error() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let reply = send(&mut term, &mut store, "a=p,i=5", b"");
         assert_eq!(
@@ -1188,7 +1150,7 @@ mod tests {
 
     #[test]
     fn replies_and_quiet_levels() {
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let good = b64(&raw(1, 1, 4));
         let mut run = |control: &str, payload: &[u8]| send(&mut term, &mut store, control, payload);
@@ -1253,7 +1215,7 @@ mod tests {
         assert_eq!(transfer.payload, data);
         assert_eq!(transfer.command.action, b'T');
         assert!(!transfer.command.more);
-        let mut term = term();
+        let mut term = term(80, 24);
         let mut store = ImageStore::default();
         let reply = finish(&mut term, &mut store, transfer);
         assert_eq!(reply.as_deref(), Some("\x1b_Gi=1;OK\x1b\\"));

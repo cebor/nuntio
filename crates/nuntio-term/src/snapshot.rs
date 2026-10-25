@@ -315,24 +315,16 @@ fn resolve_fg(color: Color, flags: Flags, palette: &Palette, overrides: &Colors)
 #[cfg(test)]
 mod tests {
     use alacritty_terminal::event::{VoidListener, WindowSize};
-    use alacritty_terminal::term::Config;
-    use alacritty_terminal::vte::ansi::Processor;
 
     use crate::image::{CellGeometry, ImageKey, TermImage, place};
     use crate::image_scan::ImageRequest;
 
     use super::*;
+    use crate::test_support::{feed, term};
 
     fn capture(input: &str) -> Snapshot {
-        let size = crate::TermSize {
-            columns: 10,
-            lines: 2,
-            cell_width: 1,
-            cell_height: 1,
-        };
-        let mut term = Term::new(Config::default(), &size, VoidListener);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, input.as_bytes());
+        let mut term = term(10, 2);
+        feed(&mut term, input);
         let mut snapshot = Snapshot::default();
         snapshot.refresh(
             &term,
@@ -377,16 +369,8 @@ mod tests {
 
     #[test]
     fn refresh_reuses_the_buffer() {
-        let size = |columns, lines| crate::TermSize {
-            columns,
-            lines,
-            cell_width: 1,
-            cell_height: 1,
-        };
-        let big = size(10, 2);
-        let mut term = Term::new(Config::default(), &big, VoidListener);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"hello");
+        let mut term = term(10, 2);
+        feed(&mut term, b"hello");
         let mut s = Snapshot::default();
         s.refresh(
             &term,
@@ -398,7 +382,7 @@ mod tests {
         let (ptr, capacity) = (s.cells.as_ptr(), s.cells.capacity());
         assert_eq!(s.cell(0, 0).c, 'h');
 
-        parser.advance(&mut term, b"\r\nworld");
+        feed(&mut term, b"\r\nworld");
         s.refresh(
             &term,
             &Palette::default(),
@@ -409,10 +393,9 @@ mod tests {
         assert_eq!((s.cells.as_ptr(), s.cells.capacity()), (ptr, capacity));
         assert_eq!(s.cell(0, 1).c, 'w');
 
-        let small = size(5, 1);
-        let term = Term::new(Config::default(), &small, VoidListener);
+        let small = crate::test_support::term(5, 1);
         s.refresh(
-            &term,
+            &small,
             &Palette::default(),
             &ImageStore::default(),
             &[],
@@ -424,16 +407,9 @@ mod tests {
 
     /// A 10×3 terminal with "ab" and a 3×2 image after it, stored if
     /// `stored`.
-    fn with_image(stored: bool) -> (Term<VoidListener>, Processor, ImageStore) {
-        let size = crate::TermSize {
-            columns: 10,
-            lines: 3,
-            cell_width: 1,
-            cell_height: 1,
-        };
-        let mut term = Term::new(Config::default(), &size, VoidListener);
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, b"ab");
+    fn with_image(stored: bool) -> (Term<VoidListener>, ImageStore) {
+        let mut term = term(10, 3);
+        feed(&mut term, b"ab");
         let image = || TermImage {
             uid: 0,
             columns: 3,
@@ -462,7 +438,7 @@ mod tests {
             5
         };
         place(&mut term, id, &image(), 0);
-        (term, parser, store)
+        (term, store)
     }
 
     /// `(line, column, columns, image_line, image_column)` of each run.
@@ -475,14 +451,14 @@ mod tests {
 
     #[test]
     fn image_runs() {
-        let (mut term, mut parser, store) = with_image(true);
+        let (mut term, store) = with_image(true);
         let mut s = Snapshot::default();
         s.refresh(&term, &Palette::default(), &store, &[], None);
         assert_eq!(runs(&s), [(0, 2, 3, 0, 0), (1, 2, 3, 1, 0)]);
         assert!((2..5).all(|c| s.cell(c, 0).is_blank() && s.cell(c, 1).is_blank()));
         assert_eq!(s.cell(1, 0).c, 'b');
 
-        parser.advance(&mut term, b"\x1b[1;4HX");
+        feed(&mut term, b"\x1b[1;4HX");
         s.refresh(&term, &Palette::default(), &store, &[], None);
         assert_eq!(
             runs(&s),
@@ -493,7 +469,7 @@ mod tests {
 
     #[test]
     fn unknown_image_has_no_runs() {
-        let (term, _, store) = with_image(false);
+        let (term, store) = with_image(false);
         let mut s = Snapshot::default();
         s.refresh(&term, &Palette::default(), &store, &[], None);
         assert!(s.images.is_empty());

@@ -319,31 +319,14 @@ pub(crate) fn visible_matches<T>(term: &Term<T>, search: &mut Search) -> Vec<Mat
 
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::event::VoidListener;
-    use alacritty_terminal::term::Config;
-    use alacritty_terminal::vte::ansi::Processor;
 
     use super::*;
+    use crate::test_support::{feed, term};
 
     #[test]
     fn plain_text_is_escaped() {
         assert_eq!(escape("a.b(c)*"), "a\\.b\\(c\\)\\*");
         assert!(Search::new("foo(", false).is_ok());
-    }
-
-    fn term(lines: usize) -> Term<VoidListener> {
-        let size = crate::TermSize {
-            columns: 20,
-            lines: lines as u16,
-            cell_width: 1,
-            cell_height: 1,
-        };
-        Term::new(Config::default(), &size, VoidListener)
-    }
-
-    fn feed(term: &mut Term<VoidListener>, text: &str) {
-        let mut parser: Processor = Processor::new();
-        parser.advance(term, text.as_bytes());
     }
 
     fn text_at<T>(term: &Term<T>, m: &Match) -> String {
@@ -352,7 +335,7 @@ mod tests {
 
     #[test]
     fn the_current_match_follows_scrolling_output() {
-        let mut term = term(4);
+        let mut term = term(20, 4);
         feed(&mut term, "one\r\ntwo\r\nneedle\r\n");
         let mut search = Search::new("needle", false).unwrap();
         assert!(find(&mut term, &mut search, true, None, 0));
@@ -369,8 +352,8 @@ mod tests {
 
     #[test]
     fn a_stale_anchor_column_after_narrowing_is_ignored() {
-        let mut term = term(4);
-        feed(&mut term, &format!("{}needle", " ".repeat(14)));
+        let mut term = term(20, 4);
+        feed(&mut term, format!("{}needle", " ".repeat(14)));
         let mut first = Search::new("needle", false).unwrap();
         assert!(find(&mut term, &mut first, true, None, 0));
         term.resize(crate::TermSize {
@@ -393,9 +376,9 @@ mod tests {
 
     #[test]
     fn typing_counts_only_a_window() {
-        let mut term = term(4);
+        let mut term = term(20, 4);
         feed(&mut term, "needle\r\n");
-        feed(&mut term, &"x\r\n".repeat(2500));
+        feed(&mut term, "x\r\n".repeat(2500));
         feed(&mut term, "needle\r\n");
         let mut search = Search::new("needle", false).unwrap();
         assert!(find(
@@ -426,7 +409,7 @@ mod tests {
 
     #[test]
     fn matches_are_counted_across_the_scrollback() {
-        let mut term = term(3);
+        let mut term = term(20, 3);
         feed(&mut term, "a1\r\nb\r\na2\r\nc\r\nd\r\na3\r\ne");
         let mut search = Search::new("a", false).unwrap();
         assert!(find(&mut term, &mut search, true, None, 0));
@@ -441,9 +424,9 @@ mod tests {
 
     #[test]
     fn typing_scans_a_limited_number_of_lines() {
-        let mut term = term(4);
+        let mut term = term(20, 4);
         feed(&mut term, "needle\r\n");
-        feed(&mut term, &"x\r\n".repeat(2500));
+        feed(&mut term, "x\r\n".repeat(2500));
         let mut search = Search::new("needle", false).unwrap();
         assert!(!find(
             &mut term,
@@ -460,7 +443,7 @@ mod tests {
 
     #[test]
     fn next_and_previous_reuse_the_count() {
-        let mut term = term(3);
+        let mut term = term(20, 3);
         feed(&mut term, "a1\r\nb\r\na2\r\nc\r\nd\r\na3\r\ne");
         let mut search = Search::new("a", false).unwrap();
         let mut seen = Vec::new();
@@ -481,7 +464,7 @@ mod tests {
 
     #[test]
     fn output_that_does_not_scroll_is_counted() {
-        let mut term = term(24);
+        let mut term = term(20, 24);
         feed(&mut term, "a1\r\nb\r\na2");
         let mut search = Search::new("a", false).unwrap();
         assert!(find(&mut term, &mut search, true, None, 0));

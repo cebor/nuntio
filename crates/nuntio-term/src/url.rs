@@ -379,22 +379,8 @@ mod tests {
     }
 
     fn sized_term(columns: u16, bytes: &[u8]) -> Term<alacritty_terminal::event::VoidListener> {
-        use alacritty_terminal::term::Config;
-        use alacritty_terminal::vte::ansi::Processor;
-
-        let size = crate::TermSize {
-            columns,
-            lines: 3,
-            cell_width: 1,
-            cell_height: 1,
-        };
-        let mut term = Term::new(
-            Config::default(),
-            &size,
-            alacritty_terminal::event::VoidListener,
-        );
-        let mut parser: Processor = Processor::new();
-        parser.advance(&mut term, bytes);
+        let mut term = crate::test_support::term(columns, 3);
+        crate::test_support::feed(&mut term, bytes);
         term
     }
 
