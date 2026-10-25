@@ -67,7 +67,7 @@ pub fn installed_shells() -> Vec<Found> {
         // `bash` is left out, it's WSL's launcher on Windows.
         WINDOWS_SHELLS
             .iter()
-            .filter(|(name, _)| on_path(&format!("{name}.exe")))
+            .filter(|(name, _)| find_on_path(&format!("{name}.exe")).is_some())
             .map(|(name, help)| Found::new(*name, *help))
             .collect()
     }
@@ -85,14 +85,15 @@ pub fn installed_shells() -> Vec<Found> {
     }
 }
 
+/// The first `PATH` entry that has `file`, joined with it.
 #[cfg(windows)]
-fn on_path(file: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
+pub fn find_on_path(file: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
     // `symlink_metadata`: the Store's `pwsh.exe` is an app execution alias,
     // a reparse point that `metadata` can't follow.
-    std::env::split_paths(&path).any(|dir| std::fs::symlink_metadata(dir.join(file)).is_ok())
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(file))
+        .find(|path| std::fs::symlink_metadata(path).is_ok())
 }
 
 /// The paths in `/etc/shells`, in order and without duplicates.

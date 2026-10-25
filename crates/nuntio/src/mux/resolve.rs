@@ -101,12 +101,7 @@ fn windows_program(tool: Tool, name: &str) -> Option<String> {
     } else {
         format!("{name}.exe")
     };
-    let path = std::env::var_os("PATH")?;
-    // `symlink_metadata`: app execution aliases are reparse points that
-    // `metadata` can't follow.
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(&file))
-        .find(|p| std::fs::symlink_metadata(p).is_ok())
+    nuntio_config::detect::find_on_path(&file)
         .or_else(|| {
             let local = std::env::var_os("LOCALAPPDATA")?;
             let p = std::path::Path::new(&local).join(r"Programs\Herdr\bin\herdr.exe");
