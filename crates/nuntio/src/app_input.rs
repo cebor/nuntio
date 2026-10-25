@@ -20,7 +20,7 @@ use crate::actions::Action;
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
-use crate::menu::{MenuKind, Step, UpdateStage};
+use crate::menu::{MenuKind, Step};
 use crate::mouse::{Button, MouseAction};
 use crate::pane_tree::Axis;
 use crate::shell_words::path_word;
@@ -265,31 +265,6 @@ impl Core {
             at_new_tab,
         );
         self.refresh_mux(state);
-    }
-
-    /// Open, or close if it is open, the update menu, at the tab bar's
-    /// badge with `at_badge`, otherwise at the `update` status bar item.
-    /// nuntio that can't update itself opens the release page instead.
-    pub(super) fn open_update_menu(&mut self, state: &mut WindowState, at_badge: bool) {
-        if self.install.is_none() {
-            self.open_update();
-            return;
-        }
-        let Some(update) = &self.update else {
-            return;
-        };
-        if state.menu_kind() == Some(MenuKind::Update) {
-            state.close_menu();
-            return;
-        }
-        let stage = match &self.update_progress {
-            Some(update::Progress::Installing { .. }) => UpdateStage::Installing,
-            Some(update::Progress::Installed { version, .. }) if *version == update.version => {
-                UpdateStage::Installed
-            }
-            _ => UpdateStage::Available,
-        };
-        state.open_update_menu(&self.config, &self.stats, &update.version, stage, at_badge);
     }
 
     /// A launch for the helper `program` with `args`, whose tab is named
@@ -744,7 +719,7 @@ impl Core {
             // Closing the update banner means: not for this release.
             if closed.topic == Topic::Update
                 && action.is_none()
-                && let Some(update) = &self.update
+                && let Some(update) = self.update.available()
             {
                 update::dismiss(&update.version);
             }

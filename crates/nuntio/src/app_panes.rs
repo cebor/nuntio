@@ -13,7 +13,6 @@ use crate::event::{PaneId, UserEvent};
 use crate::pane_tree::Axis;
 use crate::shells::{self, Launch, ShellChoice};
 use crate::tabs::Placement;
-use crate::update;
 use crate::window::{Pane, TabContent, WindowState};
 use crate::wsl::Distro;
 
@@ -537,18 +536,6 @@ impl Core {
         }
         self.ask_to_repeat(Topic::Close, close_message(&running, target));
         false
-    }
-
-    /// Quit and start the installed update, once confirmed like quitting.
-    pub(super) fn restart_for_update(&mut self, state: &mut WindowState) {
-        if !matches!(
-            self.update_progress,
-            Some(update::Progress::Installed { .. })
-        ) {
-            tracing::debug!("no installed update to restart into");
-            return;
-        }
-        self.request_close(state, CloseTarget::Restart);
     }
 }
 

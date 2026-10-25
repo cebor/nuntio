@@ -82,7 +82,7 @@ flowchart TD
 
 |Crate|Owns|Must not know about|
 |---|---|---|
-|[`nuntio`](crates/nuntio)|The winit loop, `App`/`Core`/`WindowState`, tabs, `PaneTree`, input encoding, actions, overlays (tab bar, status bar, find bar, banner, menus), background services, the debug server. No lib target: `app_input.rs`, `app_panes.rs`, `app_mux.rs` and `debug_server.rs` are child modules of `app.rs` via `#[path]`, so they reach private `Core` state; likewise `update_install.rs` is the child module `update::install` of `update.rs`.|—|
+|[`nuntio`](crates/nuntio)|The winit loop, `App`/`Core`/`WindowState`, tabs, `PaneTree`, input encoding, actions, overlays (tab bar, status bar, find bar, banner, menus), background services, the debug server. No lib target: `app_input.rs`, `app_panes.rs`, `app_mux.rs`, `app_update.rs` and `debug_server.rs` are child modules of `app.rs` via `#[path]`, so they reach private `Core` state; likewise `update_install.rs` is the child module `update::install` of `update.rs`.|—|
 |[`nuntio-term`](crates/nuntio-term)|One PTY and IO thread per pane, ownership of the `Term`, image scanning, decoding and storage, `Snapshot`, palette, search, URLs (`url::link_at` also joins links a program broke across rows, judging each panel between box-drawing separators, U+2500..259F, on its own), cwd and foreground process.|winit, wgpu|
 |[`nuntio-render`](crates/nuntio-render)|wgpu, fonts, glyph and image atlases. Input is only a `Frame` and `nuntio_term::Snapshot`.|config, tabs, winit beyond raw window handles|
 |[`nuntio-config`](crates/nuntio-config)|Config types, `schema.rs`, loading and validation, `edit.rs`, themes, `keys.rs`, the file watcher, shell and WSL detection (`detect.rs`).|any other nuntio crate|
@@ -431,14 +431,14 @@ Build: [`crates/nuntio/build.rs`](crates/nuntio/build.rs) cross-builds `nuntio-w
 ## Background services
 
 - Status bar `sysmon`: started only if a placed `StatusItem` needs sampling (`sysmon::is_sampled`); synced on every reload.
-- Update check ([`update.rs`](crates/nuntio/src/update.rs)):
+- Update check ([`update.rs`](crates/nuntio/src/update.rs); the app side, `UpdateState`, in [`app_update.rs`](crates/nuntio/src/app_update.rs)):
   - opt-in: `[updates] check = true` plus at least one indicator;
   - GET `https://api.github.com/repos/cebor/nuntio/releases/latest`, using only `tag_name` and the asset names, with conditional ETag requests;
   - state in the cache dir (`nuntio/update.toml`);
   - source builds only inform (banner, tab-bar badge, status item); the wording depends on `NUNTIO_BUILD=release`, which `cargo xtask package` sets.
 - Self-update of release packages (`update_install.rs`, child module `update::install`):
   - `install::detect` at startup classifies the canonical exe path: tarball (`<prefix>/bin` + `<prefix>/lib/nuntio`), AppImage (`$APPIMAGE` with the exe inside `$APPDIR`), .deb (`/usr/bin/nuntio` + dpkg list), macOS bundle, Windows directory; anything else falls back to informing;
-  - offer (banner, badge and status item open the update menu) or install right away (`updates.install`); `Core::update_progress` tracks Installing/Installed;
+  - offer (banner, badge and status item open the update menu) or install right away (`updates.install`); `UpdateState::progress` (`app_update.rs`) tracks Installing/Installed;
   - the thread takes `nuntio/update.lock` in the cache dir, downloads `SHA256SUMS` and the asset from `releases/download/<tag>/`, checks the SHA-256 (`ring`) and swaps it in: renames within the install's filesystem (staged as `.nuntio-update-<pid>*`, leftovers removed at the next start), `pkexec apt-get install` for the .deb, `hdiutil` + `ditto` for the .dmg, system `tar` for .tar.gz and .zip;
   - restart: `CloseTarget::Restart` (confirmed like quitting) or `updates.restart` polling every 5 s in `about_to_wait` until every pane's foreground is its shell; `App::finish` returns the `Install` and `main` starts it detached after the panes are gone, passing only `--config` and `--log-level`.
 - Pasted images: a private temp dir per process; stale dirs from earlier runs are swept, the current one is removed in `exiting`.

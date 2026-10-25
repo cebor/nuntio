@@ -243,6 +243,33 @@ pub enum Progress {
     },
 }
 
+impl Progress {
+    /// The release being installed, without the `v`.
+    pub fn version(&self) -> &str {
+        let (Self::Installing { version, .. } | Self::Installed { version, .. }) = self;
+        version
+    }
+
+    /// The user asked for the install.
+    pub fn manual(&self) -> bool {
+        let (Self::Installing { manual, .. } | Self::Installed { manual, .. }) = self;
+        *manual
+    }
+
+    pub fn is_installing(&self) -> bool {
+        matches!(self, Self::Installing { .. })
+    }
+
+    pub fn is_installed(&self) -> bool {
+        matches!(self, Self::Installed { .. })
+    }
+
+    /// `version` is installed, waiting for the restart.
+    pub fn is_installed_for(&self, version: &str) -> bool {
+        matches!(self, Self::Installed { version: v, .. } if v == version)
+    }
+}
+
 pub fn decide(
     checked: Checked,
     checker_running: bool,
