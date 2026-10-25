@@ -7,6 +7,8 @@ use std::time::Duration;
 use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::theme::ThemeFormat;
+
 /// Editors write files in several steps; wait for them to settle.
 const DEBOUNCE: Duration = Duration::from_millis(150);
 
@@ -91,10 +93,7 @@ fn is_theme_path(path: &Path, dir: &Path) -> bool {
         && !path
             .file_name()
             .is_some_and(|name| name.as_encoded_bytes().starts_with(b".#"))
-        && matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("toml" | "itermcolors")
-        )
+        && ThemeFormat::of(path).is_some()
 }
 
 /// What an event means for the config.

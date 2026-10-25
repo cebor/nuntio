@@ -112,10 +112,10 @@ impl ThemeSet {
         // Names of user themes, to report two files with the same name.
         let mut seen: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
         for path in paths {
-            let result = match path.extension().and_then(|e| e.to_str()) {
-                Some("toml") => load_toml(&path),
-                Some("itermcolors") => load_itermcolors(&path),
-                _ => continue,
+            let result = match ThemeFormat::of(&path) {
+                Some(ThemeFormat::Toml) => load_toml(&path),
+                Some(ThemeFormat::ItermColors) => load_itermcolors(&path),
+                None => continue,
             };
             match result {
                 Ok(theme) => {
@@ -145,6 +145,24 @@ impl ThemeSet {
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.themes.values().map(|t| t.name.as_str())
+    }
+}
+
+/// The theme file formats, told apart by the file extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThemeFormat {
+    Toml,
+    ItermColors,
+}
+
+impl ThemeFormat {
+    /// The format of the file at `path`, if it is a theme file at all.
+    pub(crate) fn of(path: &Path) -> Option<Self> {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("toml") => Some(Self::Toml),
+            Some("itermcolors") => Some(Self::ItermColors),
+            _ => None,
+        }
     }
 }
 
