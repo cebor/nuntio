@@ -1185,7 +1185,6 @@ impl App {
                 self.scroll = self.scroll.saturating_sub(WHEEL);
                 true
             }
-            MouseEventKind::Moved => false,
             _ => false,
         }
     }
