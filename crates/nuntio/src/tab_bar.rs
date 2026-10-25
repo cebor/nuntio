@@ -109,6 +109,8 @@ pub struct TabBar {
     control_width: f32,
     /// Left edge of the new-tab button's area, right after the last tab.
     new_tab_x: f32,
+    /// Width of the new-tab button's area: a square pill plus the gap.
+    new_tab_width: f32,
     /// Width of the update badge's area; 0 without one.
     badge_width: f32,
 }
@@ -163,7 +165,7 @@ impl TabBar {
         let room = (width
             - start
             - inset
-            - 3.0 * control_width
+            - CONTROLS.len() as f32 * control_width
             - new_tab_width
             - badge_width
             - drag_width)
@@ -210,6 +212,7 @@ impl TabBar {
             scroll_width,
             control_width,
             new_tab_x,
+            new_tab_width,
             badge_width,
         }
     }
@@ -236,7 +239,7 @@ impl TabBar {
 
     /// Left edge of the ⌄ button, right after "+".
     pub fn tab_list_x(&self) -> f32 {
-        self.new_tab_x + self.new_tab_width()
+        self.new_tab_x + self.new_tab_width
     }
 
     /// The first tab after scrolling by `tabs`, positive towards the last
@@ -260,14 +263,9 @@ impl TabBar {
         }
     }
 
-    /// Width of the new-tab button's area: a square pill plus the gap.
-    fn new_tab_width(&self) -> f32 {
-        self.height - 2.0 * self.inset + self.gap
-    }
-
     /// Left edge of the window control buttons.
     fn controls_x(&self) -> f32 {
-        self.width - 3.0 * self.control_width
+        self.width - CONTROLS.len() as f32 * self.control_width
     }
 
     /// Left edge of the update badge's area: before the window controls,
@@ -301,17 +299,17 @@ impl TabBar {
         }
         if self.control_width > 0.0 && x >= self.controls_x() {
             let i = ((x - self.controls_x()) / self.control_width) as usize;
-            return Some(CONTROLS[i.min(2)]);
+            return Some(CONTROLS[i.min(CONTROLS.len() - 1)]);
         }
         if self.badge_width > 0.0 && x >= self.badge_x() && x < self.badge_x() + self.badge_width {
             return Some(BarHit::Update);
         }
-        if x >= self.new_tab_x && x < self.new_tab_x + self.new_tab_width() {
+        if x >= self.new_tab_x && x < self.new_tab_x + self.new_tab_width {
             return Some(BarHit::NewTab);
         }
         if self.overflows() {
             let list_x = self.tab_list_x();
-            if x >= list_x && x < list_x + self.new_tab_width() {
+            if x >= list_x && x < list_x + self.new_tab_width {
                 return Some(BarHit::TabList);
             }
             if x >= self.start && x < self.start + self.scroll_width {
@@ -485,7 +483,7 @@ impl TabBar {
                 (
                     BarHit::TabList,
                     self.tab_list_x(),
-                    self.new_tab_width(),
+                    self.new_tab_width,
                     Chevron::Down,
                     true,
                 ),
@@ -562,7 +560,7 @@ impl TabBar {
         hover_color: Rgb,
     ) {
         let x = self.new_tab_x + self.gap / 2.0;
-        let size = self.new_tab_width() - self.gap;
+        let size = self.new_tab_width - self.gap;
         if hovered {
             rects.push(self.pill(x, size, hover_bg));
         }
