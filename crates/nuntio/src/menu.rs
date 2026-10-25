@@ -198,6 +198,26 @@ fn push_sections(rows: &mut Vec<Row>, sections: &[MenuSection]) {
 }
 
 impl Row {
+    /// An entry that runs `action`, with its shortcut as `detail`.
+    fn action(action: Action, bindings: &Bindings) -> Self {
+        let label = action.label().expect("every action in a menu has a label");
+        Self::entry(label, action, bindings.shortcut(action))
+    }
+
+    /// An entry without a detail that isn't marked.
+    fn plain(label: impl Into<String>, action: Action) -> Self {
+        Self::entry(label, action, None)
+    }
+
+    fn entry(label: impl Into<String>, action: Action, detail: Option<String>) -> Self {
+        Row::Entry {
+            label: label.into(),
+            action,
+            detail,
+            current: false,
+        }
+    }
+
     fn is_entry(&self) -> bool {
         matches!(self, Row::Entry { .. })
     }
@@ -268,17 +288,7 @@ impl Menu {
         let mut rows = Vec::new();
         for &(title, entries) in MENU {
             rows.push(Row::Heading(title.into()));
-            for &action in entries {
-                rows.push(Row::Entry {
-                    label: action
-                        .label()
-                        .expect("every action in MENU has a label")
-                        .to_owned(),
-                    action,
-                    detail: bindings.shortcut(action),
-                    current: false,
-                });
-            }
+            rows.extend(entries.iter().map(|&action| Row::action(action, bindings)));
         }
         Self::with_rows(MenuKind::Actions, anchor, rows)
     }
@@ -295,15 +305,13 @@ impl Menu {
         bindings: &Bindings,
     ) -> Self {
         let mut rows = vec![Row::Heading("New Tab With".into())];
-        rows.extend(names.iter().enumerate().map(|(i, name)| Row::Entry {
-            label: name.clone(),
-            action: Action::NewTabWithShell(i),
-            detail: if i == 0 {
+        rows.extend(names.iter().enumerate().map(|(i, name)| {
+            let detail = if i == 0 {
                 bindings.shortcut(Action::NewTab)
             } else {
                 None
-            },
-            current: false,
+            };
+            Row::entry(name.clone(), Action::NewTabWithShell(i), detail)
         }));
         rows.push(Row::Heading("nuntio".into()));
         let helpers: &[Action] = if notes {
@@ -311,17 +319,7 @@ impl Menu {
         } else {
             &[Action::OpenSettings]
         };
-        rows.extend(helpers.iter().map(|&action| {
-            Row::Entry {
-                label: action
-                    .label()
-                    .expect("helper actions have a label")
-                    .to_owned(),
-                action,
-                detail: bindings.shortcut(action),
-                current: false,
-            }
-        }));
+        rows.extend(helpers.iter().map(|&action| Row::action(action, bindings)));
         push_sections(&mut rows, extra);
         Self::with_rows(MenuKind::Shells, anchor, rows)
     }
@@ -337,33 +335,22 @@ impl Menu {
             }],
         );
         if entries.is_empty() {
-            rows.push(Row::Entry {
-                label: "No agents".into(),
-                action: Action::OpenAgentsMenu,
-                detail: None,
-                current: false,
-            });
+            rows.push(Row::plain("No agents", Action::OpenAgentsMenu));
         }
         Self::with_rows(MenuKind::Agents, anchor, rows)
     }
 
     /// The menu of the update badge and the `update` status bar item.
     pub fn update(anchor: Anchor, version: &str, stage: UpdateStage) -> Self {
-        let entry = |label: &'static str, action| Row::Entry {
-            label: label.into(),
-            action,
-            detail: None,
-            current: false,
-        };
         let rows = vec![
             Row::Heading(format!("nuntio {version}").into()),
             match stage {
-                UpdateStage::Available => entry("Download & Install", Action::InstallUpdate),
+                UpdateStage::Available => Row::plain("Download & Install", Action::InstallUpdate),
                 // Already running: a click just closes the menu.
-                UpdateStage::Installing => entry("Installing…", Action::InstallUpdate),
-                UpdateStage::Installed => entry("Restart to Update", Action::RestartForUpdate),
+                UpdateStage::Installing => Row::plain("Installing…", Action::InstallUpdate),
+                UpdateStage::Installed => Row::plain("Restart to Update", Action::RestartForUpdate),
             },
-            entry("Release Notes", Action::OpenReleaseNotes),
+            Row::plain("Release Notes", Action::OpenReleaseNotes),
         ];
         Self::with_rows(MenuKind::Update, anchor, rows)
     }
