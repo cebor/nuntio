@@ -26,7 +26,7 @@ use winit::event::{Modifiers, MouseButton, MouseScrollDelta};
 use winit::event_loop::EventLoopProxy;
 use winit::keyboard::ModifiersState;
 
-use super::Core;
+use super::{Core, Exit};
 use crate::actions::Action;
 use crate::banner::Banner;
 use crate::event::{PaneId, UserEvent};
@@ -473,7 +473,7 @@ impl Core {
             Request::Quit => {
                 // No confirmation: the client wants it gone.
                 self.pending_close = None;
-                self.exit_requested = true;
+                self.quit(Exit::Quit);
                 Ok(Reply::ok(json!({})))
             }
         }

@@ -159,7 +159,7 @@ Ownership: `Tabs<TabContent>` → `TabContent { tree: PaneTree, panes: Vec<Pane>
 - `layout(area, gap)` returns the pane rects and dividers.
 - `neighbor` finds the next pane in a direction by geometry.
 
-`Tabs::close` refuses to close the last tab; the app sets `exit_requested` instead.
+`Tabs::close` refuses to close the last tab; the app sets `Core::exit` (`Exit::Quit`) instead.
 
 ## Output path: PTY to pixels
 

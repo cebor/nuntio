@@ -328,6 +328,14 @@ pub struct App {
     state: Option<WindowState>,
 }
 
+/// Why nuntio quits. A restart wins over a plain quit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Exit {
+    Quit,
+    /// Quit and start the installed update.
+    Restart,
+}
+
 /// Everything the app keeps besides the window's state, so that handlers
 /// can borrow both at once.
 struct Core {
@@ -367,8 +375,6 @@ struct Core {
     update_progress: Option<Progress>,
     /// When `updates.restart` next looks whether nothing runs.
     restart_check: Option<Instant>,
-    /// Quit and start the installed update.
-    restart: bool,
     clipboard: Option<arboard::Clipboard>,
     /// Clipboard images pasted as files; removed at exit.
     pasted_images: crate::pasted_images::PastedImages,
@@ -385,8 +391,10 @@ struct Core {
     shell_menu_placement: crate::tabs::Placement,
     /// Used up by the first pane.
     startup: Startup,
-    /// The last tab was closed; quit at the next opportunity.
-    exit_requested: bool,
+    /// Set once nuntio is to quit: the last tab was closed, the window
+    /// closed, or a restart into an update is due. The event loop stops at
+    /// the next opportunity.
+    exit: Option<Exit>,
     /// A close waiting for confirmation (`window.confirm_close`).
     pending_close: Option<Confirmation<CloseTarget>>,
     /// A paste waiting for confirmation (`confirm_paste`).
@@ -430,7 +438,7 @@ impl App {
     /// to start if nuntio quit to restart into an update.
     pub fn finish(self) -> (Result<()>, Option<update::install::Install>) {
         let core = self.core;
-        let restart = core.install.filter(|_| core.restart);
+        let restart = core.install.filter(|_| core.exit == Some(Exit::Restart));
         (core.error.map_or(Ok(()), Err), restart)
     }
 }
@@ -491,7 +499,6 @@ impl Core {
             install,
             update_progress: None,
             restart_check: None,
-            restart: false,
             clipboard,
             pasted_images: crate::pasted_images::PastedImages::new(),
             next_pane_id: 0,
@@ -499,7 +506,7 @@ impl Core {
             shell_choices: Vec::new(),
             shell_menu_placement: crate::tabs::Placement::AfterActive,
             startup,
-            exit_requested: false,
+            exit: None,
             pending_close: None,
             pending_paste: None,
             error: None,
@@ -916,6 +923,12 @@ impl Core {
         self.request_redraw();
     }
 
+    /// Stop the event loop at the next opportunity; a request to restart
+    /// stays one.
+    fn quit(&mut self, exit: Exit) {
+        self.exit = self.exit.max(Some(exit));
+    }
+
     /// `updates.restart`: restart into the installed update once every pane
     /// runs only its shell. A pane whose process can't be seen (Windows)
     /// counts as busy.
@@ -928,8 +941,7 @@ impl Core {
             .all(|p| p.term.foreground_is_shell() == Some(true))
         {
             tracing::info!("restarting into the installed update");
-            self.restart = true;
-            self.exit_requested = true;
+            self.quit(Exit::Restart);
             return true;
         }
         self.restart_check = Some(now + RESTART_POLL);
@@ -1706,7 +1718,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.core.exit_requested {
+        if self.core.exit.is_some() {
             event_loop.exit();
             return;
         }
@@ -1771,7 +1783,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Menu(MenuCommand::Quit) => match state {
                 Some(state) => core.request_close(state, CloseTarget::Window),
-                None => core.exit_requested = true,
+                None => core.quit(Exit::Quit),
             },
             #[cfg(feature = "debug-server")]
             UserEvent::Debug(call) => core.debug_call(state, call),

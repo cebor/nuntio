@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::Result;
 use nuntio_term::{Program, Shell, SpawnOptions, TermHandle, TermSize, Transport};
 
-use super::{Confirmation, Core, INITIAL_GRID, Startup, term_options};
+use super::{Confirmation, Core, Exit, INITIAL_GRID, Startup, term_options};
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{PaneId, UserEvent};
 use crate::pane_tree::Axis;
@@ -460,7 +460,7 @@ impl Core {
     /// Close a tab; closing the last one quits.
     fn close_tab(&mut self, state: &mut WindowState, index: usize) {
         if state.tabs.len() == 1 {
-            self.exit_requested = true;
+            self.quit(Exit::Quit);
             return;
         }
         let was_active = index == state.tabs.active_index();
@@ -485,11 +485,8 @@ impl Core {
             return;
         }
         match target {
-            CloseTarget::Window => self.exit_requested = true,
-            CloseTarget::Restart => {
-                self.restart = true;
-                self.exit_requested = true;
-            }
+            CloseTarget::Window => self.quit(Exit::Quit),
+            CloseTarget::Restart => self.quit(Exit::Restart),
             CloseTarget::Tab(id) => {
                 if let Some(index) = state.tabs.position(|c| c.contains(id)) {
                     self.close_tab(state, index);
