@@ -15,7 +15,7 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Position, Rect, Size};
 
 use super::areas::{self, Areas, Focus, Panels};
-use super::buffer::{Buffer, EditKind, Pos};
+use super::buffer::{Buffer, EditKind, Pos, split_lines};
 use super::edit;
 use super::layout::{self, Row};
 use super::markdown::{self, LineView, PieceKind};
@@ -177,13 +177,6 @@ pub struct App {
     pub quit: bool,
 }
 
-/// The lines of a note's text, as `Buffer` splits them.
-fn lines_of(text: &str) -> Vec<String> {
-    text.split('\n')
-        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_owned())
-        .collect()
-}
-
 fn counts_of(lines: &[String]) -> (usize, usize) {
     markdown::counts(&markdown::render(lines))
 }
@@ -294,7 +287,7 @@ impl App {
                     .notes
                     .into_iter()
                     .map(|f| {
-                        let (done, total) = counts_of(&lines_of(&f.text));
+                        let (done, total) = counts_of(&split_lines(&f.text));
                         Entry {
                             title: f.title,
                             modified: f.modified,
@@ -1410,7 +1403,7 @@ impl App {
             let Some(text) = texts.get(&entry.title) else {
                 continue;
             };
-            let lines = lines_of(text);
+            let lines = split_lines(text);
             for (line, view) in markdown::render(&lines).iter().enumerate() {
                 if let Some(task) = &view.task
                     && (show_done || !task.checked)

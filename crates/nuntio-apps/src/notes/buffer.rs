@@ -74,15 +74,18 @@ fn shifted(pos: &mut Pos, line: usize, range: &Range<usize>, new_len: usize) {
     };
 }
 
+/// The lines of a note's text: split at `\n`, with a `\r` before it dropped.
+pub fn split_lines(text: &str) -> Vec<String> {
+    text.split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_owned())
+        .collect()
+}
+
 impl Buffer {
     pub fn new(text: &str) -> Self {
         let crlf = text.contains("\r\n");
-        let lines = text
-            .split('\n')
-            .map(|l| l.strip_suffix('\r').unwrap_or(l).to_owned())
-            .collect();
         Self {
-            lines,
+            lines: split_lines(text),
             crlf,
             cursor: Pos::default(),
             anchor: None,
