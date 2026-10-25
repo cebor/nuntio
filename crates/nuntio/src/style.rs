@@ -109,6 +109,17 @@ pub fn rect(x: f32, y: f32, width: f32, height: f32, color: Rgb) -> UiRect {
     UiRect::fill(Rect::new(x, y, width, height), color)
 }
 
+/// The outline of a rectangle as four sharp rectangles (top, bottom, left,
+/// right) with lines `stroke` pixels thick.
+pub fn outline(x: f32, y: f32, width: f32, height: f32, stroke: f32, color: Rgb) -> [UiRect; 4] {
+    [
+        rect(x, y, width, stroke, color),
+        rect(x, y + height - stroke, width, stroke, color),
+        rect(x, y, stroke, height, color),
+        rect(x + width - stroke, y, stroke, height, color),
+    ]
+}
+
 /// A corner of a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Corner {

@@ -9,7 +9,7 @@ use nuntio_render::{UiRect, UiText};
 use nuntio_term::Rgb;
 use unicode_width::UnicodeWidthStr;
 
-use crate::style::{Palette, UiMetrics, luminance, mix, rect};
+use crate::style::{Palette, UiMetrics, luminance, mix, outline, rect};
 use crate::sysmon::Sample;
 
 /// Samples kept per graph: one minute at one sample per second.
@@ -497,7 +497,8 @@ impl StatusBar {
         let pin = (size * 0.2).round().max(st);
         let body = size - 2.0 * pin;
         let color = colors.label;
-        outline(out, x0 + pin, y0 + pin, body, body, st, color);
+        out.rects
+            .extend(outline(x0 + pin, y0 + pin, body, body, st, color));
         let core = (body * 0.4).round();
         let offset = ((body - core) / 2.0).round();
         out.rects.push(rect(
@@ -527,7 +528,8 @@ impl StatusBar {
         let board_top = y0 + (size * 0.15).round();
         let board_h = (size * 0.55).round();
         let color = colors.label;
-        outline(out, x0, board_top, board_w, board_h, st, color);
+        out.rects
+            .extend(outline(x0, board_top, board_w, board_h, st, color));
         // Three chips on the board.
         let gap = 2.0 * st;
         let chip_w = ((board_w - 2.0 * st - 4.0 * gap) / 3.0).floor();
@@ -623,7 +625,7 @@ impl StatusBar {
         let st = self.stroke();
         let (x0, y0, size) = self.icon_box(x);
         let color = colors.label;
-        outline(out, x0, y0, size, size, st, color);
+        out.rects.extend(outline(x0, y0, size, size, st, color));
         out.rects
             .push(rect(x0, y0, size, (size * 0.25).round().max(st), color));
         let cursor_w = (size * 0.3).round();
@@ -647,7 +649,8 @@ impl StatusBar {
         let knob = self.metrics.physical(2.0).max(1.0);
         let body = ICON_CELLS as f32 * cw - knob - stroke;
         let color = colors.label;
-        outline(out, x, top, body, height, stroke, color);
+        out.rects
+            .extend(outline(x, top, body, height, stroke, color));
         let knob_height = (height / 3.0).round();
         out.rects.push(rect(
             x + body,
@@ -761,16 +764,6 @@ fn hsl(hue: f32, saturation: f32, lightness: f32) -> Rgb {
         g: channel(g),
         b: channel(b),
     }
-}
-
-/// A rectangle drawn with lines `stroke` pixels thick.
-fn outline(out: &mut Output, x: f32, y: f32, width: f32, height: f32, stroke: f32, color: Rgb) {
-    out.rects.push(rect(x, y, width, stroke, color));
-    out.rects
-        .push(rect(x, y + height - stroke, width, stroke, color));
-    out.rects.push(rect(x, y, stroke, height, color));
-    out.rects
-        .push(rect(x + width - stroke, y, stroke, height, color));
 }
 
 /// Width of an item in cells. Values have a fixed width so items don't

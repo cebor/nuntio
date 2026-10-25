@@ -5,7 +5,7 @@ use std::ops::Range;
 use nuntio_render::{Rect, UiRect, UiText};
 use nuntio_term::{Rgb, rgb};
 
-use crate::style::{INFO_COLOR, Palette, UiMetrics, WHITE, mix, rect, truncate};
+use crate::style::{INFO_COLOR, Palette, UiMetrics, WHITE, mix, outline, rect, truncate};
 use unicode_width::UnicodeWidthStr;
 
 /// Widest a tab gets, in cells, so a few tabs don't stretch across the window.
@@ -619,16 +619,6 @@ impl TabBar {
             let gap = self.gap / 2.0;
             rects.push(self.pill(bx + gap, self.control_width - 2.0 * gap, hover_bg));
         }
-        let mut push = |x: f32, y: f32, width: f32, height: f32, color: Rgb| {
-            rects.push(rect(x, y, width, height, color));
-        };
-        // An outlined square.
-        let outline = |push: &mut dyn FnMut(f32, f32, f32, f32, Rgb), x, y, size, color| {
-            push(x, y, size, stroke, color);
-            push(x, y + size - stroke, size, stroke, color);
-            push(x, y, stroke, size, color);
-            push(x + size - stroke, y, stroke, size, color);
-        };
 
         for (i, control) in CONTROLS.into_iter().enumerate() {
             let bx = self.controls_x() + i as f32 * self.control_width;
@@ -643,24 +633,24 @@ impl TabBar {
             let y0 = ((self.height - icon) / 2.0).floor();
             match control {
                 BarHit::Minimize => {
-                    push(x0, (y0 + icon / 2.0).floor(), icon, stroke, color);
+                    rects.push(rect(x0, (y0 + icon / 2.0).floor(), icon, stroke, color));
                 }
                 BarHit::Maximize if maximized => {
                     // Restore: a front square with another peeking out behind.
                     let offset = self.metrics.physical(2.0);
                     let front = icon - offset;
-                    push(x0 + offset, y0, front, stroke, color);
-                    push(x0 + icon - stroke, y0, stroke, front, color);
-                    outline(&mut push, x0, y0 + offset, front, color);
+                    rects.push(rect(x0 + offset, y0, front, stroke, color));
+                    rects.push(rect(x0 + icon - stroke, y0, stroke, front, color));
+                    rects.extend(outline(x0, y0 + offset, front, front, stroke, color));
                 }
-                BarHit::Maximize => outline(&mut push, x0, y0, icon, color),
+                BarHit::Maximize => rects.extend(outline(x0, y0, icon, icon, stroke, color)),
                 _ => {
                     // Close: two diagonals built from stroke-sized steps.
                     let steps = (icon / stroke) as usize;
                     for k in 0..steps {
                         let d = k as f32 * stroke;
-                        push(x0 + d, y0 + d, stroke, stroke, color);
-                        push(x0 + icon - stroke - d, y0 + d, stroke, stroke, color);
+                        rects.push(rect(x0 + d, y0 + d, stroke, stroke, color));
+                        rects.push(rect(x0 + icon - stroke - d, y0 + d, stroke, stroke, color));
                     }
                 }
             }
