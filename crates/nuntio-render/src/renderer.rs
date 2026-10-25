@@ -247,7 +247,7 @@ enum AtlasFull {
 }
 
 /// Cached sprites of one cluster, one slot per size/bold/italic combination.
-type ClusterSlots = [Option<Rc<[Sprite]>>; 8];
+type ClusterSlots = [Option<Rc<[Sprite]>>; TextSize::COUNT * FaceStyle::COUNT];
 
 /// A frame read back by [`Renderer::capture`].
 #[cfg(feature = "capture")]
@@ -1081,7 +1081,7 @@ impl Renderer {
         style: FaceStyle,
         size: TextSize,
     ) -> Result<Rc<[Sprite]>, AtlasFull> {
-        let slot = size.slot() * 4 + usize::from(style.bold) * 2 + usize::from(style.italic);
+        let slot = size.slot() * FaceStyle::COUNT + style.slot();
         if let Some(sprites) = self
             .clusters
             .get(text)

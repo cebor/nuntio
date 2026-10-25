@@ -17,10 +17,20 @@ pub struct CellMetrics {
     pub strikeout_y: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) struct FaceStyle {
     pub(crate) bold: bool,
     pub(crate) italic: bool,
+}
+
+impl FaceStyle {
+    /// Number of different styles, the range of [`slot`](Self::slot).
+    pub(crate) const COUNT: usize = 4;
+
+    /// Index into the per-style state of the glyph caches.
+    pub(crate) const fn slot(self) -> usize {
+        self.bold as usize * 2 + self.italic as usize
+    }
 }
 
 /// A rasterized glyph, positioned relative to the cell's baseline origin.
@@ -45,6 +55,9 @@ pub(crate) enum TextSize {
 }
 
 impl TextSize {
+    pub(crate) const ALL: [Self; 2] = [Self::Terminal, Self::Small];
+    pub(crate) const COUNT: usize = Self::ALL.len();
+
     /// Index into the per-size state of [`Fonts`] and the glyph caches.
     pub(crate) const fn slot(self) -> usize {
         match self {
@@ -72,7 +85,7 @@ pub(crate) struct Fonts {
     system: FontSystem,
     swash: SwashCache,
     /// Indexed by [`TextSize::slot`].
-    faces: [Face; 2],
+    faces: [Face; TextSize::COUNT],
     family: Option<String>,
     /// Monochrome symbol font for text-presentation emoji (see
     /// [`prefers_text_presentation`]).
@@ -339,7 +352,7 @@ impl Fonts {
             stroke: 1,
             strikeout_y: 1,
         };
-        let faces = [TextSize::Terminal, TextSize::Small].map(|size| Face {
+        let faces = TextSize::ALL.map(|size| Face {
             buffer: new_buffer(&mut system, px_size * size.scale()),
             metrics: placeholder,
         });
@@ -393,11 +406,11 @@ impl Fonts {
 
     /// Rebuild the buffers and metrics of both sizes after a size or family change.
     fn remeasure(&mut self) {
-        for size in [TextSize::Terminal, TextSize::Small] {
+        for size in TextSize::ALL {
             self.faces[size.slot()].buffer =
                 new_buffer(&mut self.system, self.px_size * size.scale());
         }
-        for size in [TextSize::Terminal, TextSize::Small] {
+        for size in TextSize::ALL {
             self.faces[size.slot()].metrics = self.measure(size);
         }
     }
@@ -437,15 +450,7 @@ impl Fonts {
     }
 
     fn measure(&mut self, size: TextSize) -> CellMetrics {
-        self.shape(
-            "M",
-            FaceStyle {
-                bold: false,
-                italic: false,
-            },
-            size,
-            false,
-        );
+        self.shape("M", FaceStyle::default(), size, false);
         let px_size = self.px_size * size.scale();
         let run = self.faces[size.slot()].buffer.layout_runs().next();
         let glyph = run.and_then(|run| run.glyphs.first());
