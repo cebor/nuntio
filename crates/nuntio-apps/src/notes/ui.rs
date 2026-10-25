@@ -3,13 +3,14 @@
 //! modifiers, so the app follows the terminal's theme.
 
 use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
+use nuntio_tui::popup;
 use nuntio_tui::style::{ACCENT, Tone, border, center, heading, hints, panel, too_small};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use super::failed::Failed;
@@ -559,35 +560,8 @@ fn draw_footer(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(line), app.areas.footer);
 }
 
-/// A centered rect of at most `width`×`height` in `area`.
-fn popup(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    Rect {
-        x: area.x + (area.width - width) / 2,
-        y: area.y + (area.height - height) / 2,
-        width,
-        height,
-    }
-}
-
-/// A bordered popup in the middle of the screen, over what is below it.
-/// Returns the area inside the border.
-fn open_popup(frame: &mut Frame, width: u16, height: u16, title: &str) -> Rect {
-    let area = popup(frame.area(), width, height);
-    frame.render_widget(Clear, area);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .title(format!(" {title} "))
-        .title_style(Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
-        .border_style(Style::new().fg(ACCENT));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    inner
-}
-
 fn draw_input(frame: &mut Frame, title: &str, input: &TextInput, error: Option<&str>) {
-    let inner = open_popup(frame, 50, 4 + u16::from(error.is_some()), title);
+    let inner = popup::open(frame, 50, 4 + u16::from(error.is_some()), title);
     let mut lines = vec![Line::from(vec![
         Span::styled("› ", Style::new().fg(ACCENT)),
         Span::raw(input.text().to_owned()),
@@ -603,7 +577,7 @@ fn draw_input(frame: &mut Frame, title: &str, input: &TextInput, error: Option<&
 
 fn draw_message(frame: &mut Frame, title: &str, lines: Vec<Line>) {
     let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
-    let inner = open_popup(frame, width.max(30), lines.len() as u16 + 2, title);
+    let inner = popup::open(frame, width.max(30), lines.len() as u16 + 2, title);
     frame.render_widget(
         Paragraph::new(lines),
         Rect {

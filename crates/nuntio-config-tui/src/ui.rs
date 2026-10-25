@@ -3,13 +3,14 @@
 
 use nuntio_config::Theme;
 use nuntio_config::schema::Section;
+use nuntio_tui::popup;
 use nuntio_tui::style::{ACCENT, Tone, heading, hints, panel, too_small};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::state::{
@@ -64,21 +65,6 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
     }
 }
 
-/// A bordered popup of about `width`×`height` in the middle of the screen,
-/// over what is below it. Returns the area inside the border.
-fn open_popup(frame: &mut Frame, width: u16, height: u16, title: &str) -> Rect {
-    let area = popup(frame.area(), width, height);
-    frame.render_widget(Clear, area);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .title(format!(" {title} "))
-        .border_style(Style::new().fg(ACCENT));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    inner
-}
-
-/// A list with its `selected` line highlighted.
 fn draw_list(frame: &mut Frame, area: Rect, items: Vec<ListItem>, selected: usize) {
     let mut state = ListState::default().with_selected(Some(selected));
     let list = List::new(items).highlight_style(selected_style(true));
@@ -89,7 +75,7 @@ fn draw_picker(frame: &mut Frame, app: &App, mode: &PickerMode) {
     let picker = &mode.picker;
     // A stable size while filtering, and at least one line for "No matches".
     let height = (picker.choices.len() + usize::from(picker.filter.is_some())).max(1) as u16 + 2;
-    let inner = open_popup(frame, 60, height, &picker.title);
+    let inner = popup::open(frame, 60, height, &picker.title);
     let list_area = match &picker.filter {
         Some(filter) => {
             let [filter_area, list_area] =
@@ -132,7 +118,7 @@ fn draw_picker(frame: &mut Frame, app: &App, mode: &PickerMode) {
 }
 
 fn draw_input_popup(frame: &mut Frame, mode: &InputMode) {
-    let inner = open_popup(frame, 60, 5, &mode.title);
+    let inner = popup::open(frame, 60, 5, &mode.title);
     let [line_area, _, info_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -151,7 +137,7 @@ fn draw_input_popup(frame: &mut Frame, mode: &InputMode) {
 fn draw_items(frame: &mut Frame, app: &App, mode: &ItemsMode) {
     let entries = app.item_entries(mode.setting);
     // Preview and a rule above the list.
-    let inner = open_popup(frame, 44, entries.len() as u16 + 4, mode.setting.label);
+    let inner = popup::open(frame, 44, entries.len() as u16 + 4, mode.setting.label);
     let [preview_area, rule_area, list_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -211,7 +197,7 @@ fn item_line(app: &App, entry: Entry, width: usize) -> ListItem<'static> {
 
 fn draw_search(frame: &mut Frame, app: &App, mode: &SearchMode) {
     let height = mode.results.len().max(1) as u16 + 3;
-    let inner = open_popup(frame, 60, height, "Search");
+    let inner = popup::open(frame, 60, height, "Search");
     let [line_area, list_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
     draw_input(frame, line_area, &mode.input);
@@ -239,19 +225,6 @@ fn spring_line(label: &str, width: usize) -> String {
     let rest = width.saturating_sub(label.width() + 4);
     let left = rest / 3;
     format!(" ⟷ {}{label}{}", "─".repeat(left), "─".repeat(rest - left))
-}
-
-/// A centered area of the given size, clamped to `area`.
-fn popup(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width.saturating_sub(4));
-    let height = height.min(area.height.saturating_sub(2));
-    let [area] = Layout::horizontal([Constraint::Length(width)])
-        .flex(Flex::Center)
-        .areas(area);
-    let [area] = Layout::vertical([Constraint::Length(height)])
-        .flex(Flex::Center)
-        .areas(area);
-    area
 }
 
 fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput) {

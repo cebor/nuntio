@@ -41,7 +41,7 @@ For changes to rendering or terminal emulation, please also check the affected c
 | `crates/nuntio-apps` | Terminal apps nuntio opens in panes (`notes`) |
 | `crates/nuntio-config` | Config schema, loading, themes |
 | `crates/nuntio-config-tui` | The `nuntio-config` terminal UI |
-| `crates/nuntio-tui` | Terminal setup, key normalization, clipboard, text input and tones shared by the two terminal apps |
+| `crates/nuntio-tui` | Terminal setup, key normalization, clipboard, text input, popups and tones shared by the two terminal apps |
 | `crates/nuntio-render` | wgpu renderer |
 | `crates/nuntio-term` | Wrapper around `alacritty_terminal` and the PTY |
 | `crates/nuntio-wsl` | Linux helper that gives WSL panes on Windows a real PTY over plain pipes |
