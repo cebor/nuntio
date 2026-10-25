@@ -107,8 +107,8 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |unnamed scoped worker|`IoLoop` `work_serving`|decodes one image while the PTY thread keeps serving|the decode finishes|
 |`nuntio-wsl input/stdout/stderr/waiter`|`wsl_pipe.rs` (Windows)|the pipe transport of WSL panes|the pane closes|
 |`config watcher`|`nuntio-config` `watch.rs`|debounces notify events, calls `on_change`|`ConfigWatcher` dropped (it holds only a `Weak`)|
-|`sysmon`|`sysmon.rs` `SystemMonitor::start`|samples for the status bar|`SystemMonitor` dropped|
-|`update-check`|`update.rs` `Checker::start`|the periodic release check|`Checker` dropped|
+|`sysmon`|`sysmon.rs` `SystemMonitor::start` (a `ticker.rs` `Ticker`)|samples for the status bar|`SystemMonitor` dropped|
+|`update-check`|`update.rs` `Checker::start` (a `ticker.rs` `Ticker`)|the periodic release check|`Checker` dropped|
 |`update-check-now`|`update::check_now`|one manual check|after one check|
 |`update-install`|`update::install::start`|downloads, checks and installs a release package update, reports `UserEvent::UpdateInstalled`|after one install|
 |`clipboard-read`|`Core::request_paste`|reads the clipboard off the main thread|after one read|

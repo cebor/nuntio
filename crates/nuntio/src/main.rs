@@ -28,6 +28,7 @@ mod sysmon;
 mod tab_bar;
 mod tab_title;
 mod tabs;
+mod ticker;
 mod update;
 mod window;
 mod wsl;

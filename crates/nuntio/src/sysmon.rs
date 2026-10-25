@@ -1,8 +1,6 @@
 //! Samples CPU, memory, network and battery on a background thread for the
 //! status bar.
 
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use nuntio_config::StatusItem;
@@ -12,6 +10,7 @@ use sysinfo::{Networks, System};
 use winit::event_loop::EventLoopProxy;
 
 use crate::event::UserEvent;
+use crate::ticker::Ticker;
 
 const INTERVAL: Duration = Duration::from_secs(1);
 /// Reading the battery costs more than the rest, but plugging in the power
@@ -67,33 +66,30 @@ pub struct Battery {
 /// The sampling thread; it stops when this is dropped.
 pub struct SystemMonitor {
     items: Vec<StatusItem>,
-    _stop: mpsc::Sender<()>,
+    _ticker: Ticker,
 }
 
 impl SystemMonitor {
     pub fn start(items: &[StatusItem], proxy: EventLoopProxy<UserEvent>) -> Self {
-        let (stop, stopped) = mpsc::channel();
         let wanted = items.to_vec();
-        let spawned = thread::Builder::new().name("sysmon".into()).spawn(move || {
-            let mut sampler = Sampler::new(&wanted);
-            loop {
-                let sample = sampler.sample(Instant::now());
-                if proxy.send_event(UserEvent::SystemStats(sample)).is_err() {
-                    return;
+        let ticker = Ticker::start(
+            "sysmon",
+            "cannot start system monitor",
+            "system monitor stopped",
+            move || {
+                let mut sampler = Sampler::new(&wanted);
+                move || {
+                    let sample = sampler.sample(Instant::now());
+                    proxy
+                        .send_event(UserEvent::SystemStats(sample))
+                        .is_ok()
+                        .then_some(INTERVAL)
                 }
-                match stopped.recv_timeout(INTERVAL) {
-                    Err(RecvTimeoutError::Timeout) => {}
-                    _ => break,
-                }
-            }
-            tracing::debug!("system monitor stopped");
-        });
-        if let Err(err) = spawned {
-            tracing::warn!("cannot start system monitor: {err}");
-        }
+            },
+        );
         Self {
             items: items.to_vec(),
-            _stop: stop,
+            _ticker: ticker,
         }
     }
 

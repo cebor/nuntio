@@ -6,7 +6,6 @@
 use std::cmp::Ordering;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -16,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use winit::event_loop::EventLoopProxy;
 
 use crate::event::UserEvent;
+use crate::ticker::Ticker;
 
 #[path = "update_install.rs"]
 pub(crate) mod install;
@@ -501,22 +501,23 @@ fn sleep_after(wait: Duration) -> Duration {
 
 /// The daily check; it stops when this is dropped.
 pub struct Checker {
-    _stop: mpsc::Sender<()>,
+    _ticker: Ticker,
 }
 
 impl Checker {
     /// Check now if the last check is a day old (else report the cached
     /// release), then once a day, by the wall clock (checked at least hourly).
     pub fn start(proxy: EventLoopProxy<UserEvent>) -> Self {
-        let (stop, stopped) = mpsc::channel();
-        let spawned = thread::Builder::new()
-            .name("update-check".into())
-            .spawn(move || {
+        let ticker = Ticker::start(
+            "update-check",
+            "cannot start the update check",
+            "update check stopped",
+            move || {
                 // The release the main thread was last told about.
                 let mut reported: Option<Release> = None;
                 // The last successful check, in case the file can't be saved.
                 let mut remembered: Option<State> = None;
-                loop {
+                move || {
                     let mut state = State::load().newer(remembered.as_ref());
                     let now = now();
                     let wait = state.wait(now);
@@ -545,21 +546,15 @@ impl Checker {
                             manual: false,
                         };
                         if proxy.send_event(UserEvent::Update(checked)).is_err() {
-                            return;
+                            return None;
                         }
                         reported = Some(release);
                     }
-                    match stopped.recv_timeout(sleep_after(wait)) {
-                        Err(RecvTimeoutError::Timeout) => {}
-                        _ => break,
-                    }
+                    Some(sleep_after(wait))
                 }
-                tracing::debug!("update check stopped");
-            });
-        if let Err(err) = spawned {
-            tracing::warn!("cannot start the update check: {err}");
-        }
-        Self { _stop: stop }
+            },
+        );
+        Self { _ticker: ticker }
     }
 }
 
