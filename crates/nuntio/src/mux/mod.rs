@@ -21,6 +21,30 @@ use crate::style::{AGENT_BLOCKED, AGENT_DONE, AGENT_WORKING};
 use crate::window::Pane;
 use crate::wsl::Distro;
 
+/// Variables that tell herdr and tmux they run inside themselves.
+const INHERITED_ENV: [&str; 9] = [
+    "HERDR_ENV",
+    "HERDR_SOCKET_PATH",
+    "HERDR_BIN_PATH",
+    "HERDR_PANE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_SESSION",
+    "TMUX",
+    "TMUX_PANE",
+];
+
+/// Remove the variables of an enclosing herdr or tmux from nuntio's own
+/// environment. nuntio started from a herdr or tmux pane would hand them to
+/// its own panes, where herdr then refuses to start ("nested herdr is
+/// disabled"). Call it first thing in `main`, before any thread exists.
+pub fn scrub_inherited_env() {
+    for name in INHERITED_ENV {
+        // SAFETY: no other thread exists yet.
+        unsafe { std::env::remove_var(name) };
+    }
+}
+
 /// The color that marks agents in `status`; none for idle ones.
 pub fn agent_color(status: AgentStatus) -> Option<Rgb> {
     match status {

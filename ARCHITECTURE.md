@@ -308,7 +308,7 @@ Kitty graphics ([`kitty.rs`](crates/nuntio-term/src/kitty.rs)), which herdr send
 
 Opt-in (`[herdr]`, `[tmux]`); the code is in [`crates/nuntio/src/mux/`](crates/nuntio/src/mux/) and [`app_mux.rs`](crates/nuntio/src/app_mux.rs).
 
-- `main` removes `HERDR_*`, `TMUX` and `TMUX_PANE` from nuntio's own environment before any thread starts: panes inherit it, and herdr refuses to start "nested".
+- `mux::scrub_inherited_env`, which `main` calls before any thread starts, removes `HERDR_*`, `TMUX` and `TMUX_PANE` from nuntio's own environment: panes inherit it, and herdr refuses to start "nested".
 - A pane runs a multiplexer if nuntio started it there from the shell menu (`Pane::mux`) or its foreground process is called `herdr…`/`tmux…` (`mux::pane_mux`; in WSL through the helper's `fg` markers).
 - `run_action` first offers the action to `forward_to_mux`: new tab, split, close pane, focus, resize and zoom become the tool's own keys (herdr's `[keys]` config, tmux's `list-keys -T prefix`), encoded for the pane's keyboard mode by `input::chord_bytes`. Tab switching and closing tabs stay nuntio's. Unbound actions fall through to nuntio; a nuntio split of such a pane runs the default shell, not a second client.
 - The service thread resolves programs like a login shell would (`mux/resolve.rs`), on Windows also in every WSL distribution, and runs the tools' CLIs with a timeout (`command::output_within`). The shell menu shows its last snapshot and asks for a new one, which replaces the menu's sections in place.
