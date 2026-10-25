@@ -10,6 +10,10 @@ use anyhow::Context;
 use image::ImageEncoder;
 use image::codecs::png::PngEncoder;
 
+/// What the name of a `PastedImages` directory starts with; then come the
+/// process id and a timestamp.
+const DIR_PREFIX: &str = "nuntio-paste-";
+
 pub struct PastedImages {
     /// Created on the first save; removed by `remove_all`.
     dir: PathBuf,
@@ -27,7 +31,7 @@ impl PastedImages {
             .as_nanos();
         Self {
             // Pid and time make the name unique to this nuntio.
-            dir: std::env::temp_dir().join(format!("nuntio-paste-{}-{nanos}", std::process::id())),
+            dir: std::env::temp_dir().join(format!("{DIR_PREFIX}{}-{nanos}", std::process::id())),
             created: false,
             swept: false,
             count: 0,
@@ -95,7 +99,7 @@ const STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The process id in the name of a `PastedImages` directory.
 fn dir_pid(name: &str) -> Option<u32> {
-    let (pid, nanos) = name.strip_prefix("nuntio-paste-")?.split_once('-')?;
+    let (pid, nanos) = name.strip_prefix(DIR_PREFIX)?.split_once('-')?;
     if nanos.is_empty() || !nanos.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
