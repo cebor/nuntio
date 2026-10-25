@@ -182,7 +182,7 @@ fn log_file() -> std::io::Result<std::fs::File> {
 
 /// Where `log_file` writes.
 fn log_path() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("nuntio").join("nuntio.log"))
+    Some(nuntio_config::cache_dir()?.join("nuntio.log"))
 }
 
 /// Load DLLs only from our own directory and System32, not from `PATH`.

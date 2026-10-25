@@ -1,7 +1,13 @@
 //! `~` in paths: expanding it in configured directories and shortening the
-//! home directory for display.
+//! home directory for display; and nuntio's cache directory.
 
 use std::path::{Path, PathBuf};
+
+/// nuntio's own folder in the user's cache directory (log, update state and
+/// lock); it is not created here.
+pub fn cache_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join("nuntio"))
+}
 
 /// `dir` as a path: `~`, `~/…` and `~\…` start at `home`, anything else is
 /// taken as it is. `None` if `dir` starts with `~` and there is no home.

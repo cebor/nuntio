@@ -324,7 +324,7 @@ enum Locking {
 /// `update.lock` in the cache directory, so that two nuntio processes
 /// don't install at the same time.
 fn take_lock() -> Locking {
-    let Some(dir) = dirs::cache_dir().map(|d| d.join("nuntio")) else {
+    let Some(dir) = nuntio_config::cache_dir() else {
         return Locking::Unavailable;
     };
     let _ = fs::create_dir_all(&dir);

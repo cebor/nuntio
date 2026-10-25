@@ -27,7 +27,7 @@ pub use load::{
     CONFIG_ENV, ConfigError, ConfigLocation, Loaded, config_dir, config_path, load, locate_config,
     parse, themes_dir,
 };
-pub use paths::{expand_home, tilde_path};
+pub use paths::{cache_dir, expand_home, tilde_path};
 pub use theme::{DEFAULT_THEME, Theme, ThemeSet};
 pub use toml_edit;
 pub use watch::ConfigWatcher;

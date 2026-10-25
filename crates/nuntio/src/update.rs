@@ -331,7 +331,7 @@ struct State {
 
 impl State {
     fn path() -> Option<PathBuf> {
-        Some(dirs::cache_dir()?.join("nuntio").join("update.toml"))
+        Some(nuntio_config::cache_dir()?.join("update.toml"))
     }
 
     /// The saved state; none (or an unusable one, with a warning) gives an
