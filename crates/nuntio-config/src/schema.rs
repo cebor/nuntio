@@ -207,7 +207,7 @@ pub static STATUS_ITEMS: &[Variant] = &[
     ),
     variant(
         "update",
-        "A newer nuntio release, once the update check found one; click it for the release page.",
+        "A newer nuntio release, once the update check found one; click it for the update menu (download and install, restart, release notes) or, in nuntio built from source, the release page.",
     ),
     variant(
         "agents",
@@ -299,7 +299,7 @@ pub static SETTINGS: &[Setting] = &[
         Section::Updates,
         "Check for updates",
         Kind::Bool,
-        "Ask GitHub once a day whether a newer nuntio release exists. It downloads nothing unless Download and install is on. \
+        "Ask GitHub once a day whether a newer nuntio release exists. It downloads nothing until you choose Download & Install in the banner or the update menu, unless Download and install is on. \
          Needs at least one indicator below; turning off the last one turns this off too.",
     ),
     setting(
