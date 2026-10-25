@@ -97,6 +97,12 @@ pub(crate) struct Fonts {
 static PRELOADED: std::sync::Mutex<Option<std::thread::JoinHandle<FontSystem>>> =
     std::sync::Mutex::new(None);
 
+/// Lock `mutex` even if a thread panicked while holding it: a poisoned
+/// `PRELOADED` still holds a valid handle or none.
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Start loading the installed fonts on another thread, so that it runs
 /// while the window and the GPU are set up. Scanning the fonts takes
 /// tens of milliseconds (hundreds of faces on macOS).
@@ -105,14 +111,14 @@ pub fn preload_fonts() {
         .name("font preload".into())
         .spawn(FontSystem::new);
     match spawned {
-        Ok(handle) => *PRELOADED.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle),
+        Ok(handle) => *lock(&PRELOADED) = Some(handle),
         Err(err) => tracing::debug!("fonts load on the main thread: {err}"),
     }
 }
 
 /// The preloaded font database, or a new one.
 fn font_system() -> FontSystem {
-    let preloaded = PRELOADED.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let preloaded = lock(&PRELOADED).take();
     match preloaded.map(std::thread::JoinHandle::join) {
         Some(Ok(system)) => system,
         Some(Err(_)) => {

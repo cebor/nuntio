@@ -1,13 +1,20 @@
 //! Watching the config file and theme directory for changes.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::Duration;
 
 use notify::event::ModifyKind;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::theme::ThemeFormat;
+
+/// Lock `mutex` even if a thread panicked while holding it: the guarded
+/// state (the watch targets, the watcher) is plain data that is recomputed
+/// on the next event, so a poisoned lock is simply taken over.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Editors write files in several steps; wait for them to settle.
 const DEBOUNCE: Duration = Duration::from_millis(150);
@@ -152,11 +159,7 @@ impl ConfigWatcher {
         // as /var -> /private/var), and the config may itself be a symlink
         // into a dotfiles repository: match and watch every variant.
         let targets = Arc::new(Mutex::new(Targets::resolve(config_path, themes_dir)));
-        let initial = targets
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .wanted
-            .clone();
+        let initial = lock(&targets).wanted.clone();
 
         let (tx, rx) = mpsc::channel::<Signal>();
         let callback_targets = Arc::clone(&targets);
@@ -168,12 +171,7 @@ impl ConfigWatcher {
                     return;
                 }
             };
-            let verdict = {
-                let t = callback_targets
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                classify(&event, &t)
-            };
+            let verdict = classify(&event, &lock(&callback_targets));
             if verdict.changed {
                 let _ = tx.send(Signal::Changed);
             }
@@ -183,11 +181,7 @@ impl ConfigWatcher {
         })?;
         let watcher = Arc::new(Mutex::new(watcher));
         let mut watched = Vec::new();
-        let watching = watch_existing(
-            &mut watcher.lock().unwrap_or_else(PoisonError::into_inner),
-            &initial,
-            &mut watched,
-        );
+        let watching = watch_existing(&mut lock(&watcher), &initial, &mut watched);
         // Hot reload works as long as something is watched.
         if watched.is_empty()
             && let Some(err) = watching.failure
@@ -218,7 +212,7 @@ impl ConfigWatcher {
                     // the event thread, which may wait for this lock.
                     let fresh = Targets::resolve(&config_path, themes_dir.as_deref());
                     let (moved, wanted) = {
-                        let mut current = targets.lock().unwrap_or_else(PoisonError::into_inner);
+                        let mut current = lock(&targets);
                         let moved = *current != fresh;
                         if moved {
                             *current = fresh;
@@ -229,7 +223,7 @@ impl ConfigWatcher {
                         let Some(watcher) = thread_watcher.upgrade() else {
                             break;
                         };
-                        let mut watcher = watcher.lock().unwrap_or_else(PoisonError::into_inner);
+                        let mut watcher = lock(&watcher);
                         changed |= watch_existing(&mut watcher, &wanted, &mut watched).added;
                     }
                     // A symlink now points elsewhere: the config may differ.
