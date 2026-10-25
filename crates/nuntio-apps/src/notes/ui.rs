@@ -4,7 +4,7 @@
 
 use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
 use nuntio_tui::popup;
-use nuntio_tui::style::{ACCENT, Tone, border, center, heading, hints, panel, too_small};
+use nuntio_tui::style::{ACCENT, Tone, border, center, heading, hints, panel, prompt, too_small};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
@@ -255,13 +255,10 @@ fn draw_header(frame: &mut Frame, app: &App) {
 fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
     let mut area = area;
     if let Some(filter) = &app.filter {
-        let line = Line::from(vec![
-            Span::styled("/ ", Style::new().fg(ACCENT)),
-            Span::raw(filter.text().to_owned()),
-        ]);
+        let (line, column) = prompt("/ ", filter.text(), filter.cursor(), area.width);
         frame.render_widget(Paragraph::new(line), Rect { height: 1, ..area });
         if app.filtering && app.prompt.is_none() {
-            frame.set_cursor_position((area.x + 2 + filter.cursor_width(), area.y));
+            frame.set_cursor_position((area.x + column, area.y));
         }
         area.y += 1;
         area.height = area.height.saturating_sub(1);
@@ -562,17 +559,14 @@ fn draw_footer(frame: &mut Frame, app: &App) {
 
 fn draw_input(frame: &mut Frame, title: &str, input: &TextInput, error: Option<&str>) {
     let inner = popup::open(frame, 50, 4 + u16::from(error.is_some()), title);
-    let mut lines = vec![Line::from(vec![
-        Span::styled("› ", Style::new().fg(ACCENT)),
-        Span::raw(input.text().to_owned()),
-    ])];
+    let (prompt_line, column) = prompt("› ", input.text(), input.cursor(), inner.width);
+    let mut lines = vec![prompt_line];
     if let Some(error) = error {
         lines.push(Line::styled(error.to_owned(), Tone::Error.style()));
     }
     lines.push(hints(&[("Enter", "ok"), ("Esc", "cancel")]));
     frame.render_widget(Paragraph::new(lines), inner);
-    let x = (inner.x + 2 + input.cursor_width()).min(inner.right().saturating_sub(1));
-    frame.set_cursor_position((x, inner.y));
+    frame.set_cursor_position((inner.x + column, inner.y));
 }
 
 fn draw_message(frame: &mut Frame, title: &str, lines: Vec<Line>) {

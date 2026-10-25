@@ -52,9 +52,9 @@ mod tests {
     fn ctrl_u_clears_and_home_end_move() {
         let mut input = TextInput::new("hello");
         edit_input(&mut input, press(KeyCode::Home));
-        assert_eq!(input.cursor_width(), 0);
+        assert_eq!(input.cursor(), 0);
         edit_input(&mut input, press(KeyCode::End));
-        assert_eq!(input.cursor_width(), 5);
+        assert_eq!(input.cursor(), 5);
         edit_input(
             &mut input,
             KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),

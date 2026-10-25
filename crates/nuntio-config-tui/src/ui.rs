@@ -4,14 +4,14 @@
 use nuntio_config::Theme;
 use nuntio_config::schema::Section;
 use nuntio_tui::popup;
-use nuntio_tui::style::{ACCENT, Tone, heading, hints, panel, too_small};
+use nuntio_tui::style::{Tone, heading, hints, panel, prompt, too_small};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::state::{
     App, Entry, Focus, InputMode, ItemsMode, Mode, PickTarget, PickerMode, Row, SearchMode,
@@ -233,27 +233,9 @@ fn draw_input(frame: &mut Frame, area: Rect, input: &TextInput) {
 
 /// `› ` and `text`, scrolled to keep the cursor (a char index) visible.
 fn draw_prompt(frame: &mut Frame, area: Rect, text: &str, cursor: usize) {
-    let width = usize::from(area.width.saturating_sub(2));
-    let (text, cursor) = scrolled(text, cursor, width);
-    let line = Line::from(vec![Span::raw("› ").fg(ACCENT), Span::raw(text)]);
+    let (line, column) = prompt("› ", text, cursor, area.width);
     frame.render_widget(Paragraph::new(line), area);
-    frame.set_cursor_position(Position::new(area.x + 2 + cursor as u16, area.y));
-}
-
-/// The part of `text` to show in `width` columns so that the cursor (a
-/// char index) stays visible, and the cursor's column in it.
-fn scrolled(text: &str, cursor: usize, width: usize) -> (&str, usize) {
-    let column = |s: &str| -> usize { s.chars().map(|c| c.width().unwrap_or(0)).sum() };
-    let cursor_byte = text
-        .char_indices()
-        .nth(cursor)
-        .map_or(text.len(), |(i, _)| i);
-    // Drop leading characters until the cursor fits, with room for it.
-    let mut start = 0;
-    while column(&text[start..cursor_byte]) >= width.max(1) {
-        start += text[start..].chars().next().map_or(1, char::len_utf8);
-    }
-    (&text[start..], column(&text[start..cursor_byte]))
+    frame.set_cursor_position(Position::new(area.x + column, area.y));
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -586,14 +568,5 @@ mod tests {
         assert!(footer_width(&fitted, "editor") <= 80);
         // Nothing to drop when it fits.
         assert_eq!(fit_hints(&hints, "editor", 200), hints);
-    }
-
-    #[test]
-    fn input_scrolls_to_keep_the_cursor_visible() {
-        assert_eq!(scrolled("hello", 5, 10), ("hello", 5));
-        assert_eq!(scrolled("hello world", 11, 5), ("orld", 4));
-        assert_eq!(scrolled("hello world", 2, 5), ("hello world", 2));
-        // Wide characters count two columns.
-        assert_eq!(scrolled("日本語", 3, 4), ("語", 2));
     }
 }

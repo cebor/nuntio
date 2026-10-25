@@ -1,7 +1,7 @@
 //! A line of editable text with a cursor, for filters, prompts and input
 //! fields. Each app maps its own key type to [`Edit`].
 
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 /// What a key does to a [`TextInput`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,12 +42,6 @@ impl TextInput {
     /// The cursor's position in characters.
     pub fn cursor(&self) -> usize {
         self.cursor
-    }
-
-    /// Display width of the text before the cursor.
-    pub fn cursor_width(&self) -> u16 {
-        let before = &self.text[..self.byte_index(self.cursor)];
-        u16::try_from(before.width()).unwrap_or(u16::MAX)
     }
 
     fn byte_index(&self, char_index: usize) -> usize {
@@ -113,6 +107,26 @@ impl TextInput {
     }
 }
 
+/// The part of `text` to show in `width` columns so that the cursor (a
+/// char index) stays visible, and the cursor's column in it.
+pub fn visible(text: &str, cursor: usize, width: u16) -> (&str, u16) {
+    let column = |s: &str| -> usize { s.chars().map(|c| c.width().unwrap_or(0)).sum() };
+    let cursor_byte = text
+        .char_indices()
+        .nth(cursor)
+        .map_or(text.len(), |(i, _)| i);
+    // Drop leading characters until the cursor fits, with room for it.
+    let mut start = 0;
+    while column(&text[start..cursor_byte]) >= usize::from(width).max(1) {
+        start += text[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    let cursor_column = column(&text[start..cursor_byte]);
+    (
+        &text[start..],
+        u16::try_from(cursor_column).unwrap_or(u16::MAX),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,10 +162,19 @@ mod tests {
         let mut input = TextInput::new("");
         input.insert_str("a\r\n日");
         assert_eq!(input.text(), "a日");
-        assert_eq!(input.cursor_width(), 3);
+        assert_eq!(visible(input.text(), input.cursor(), 10).1, 3);
         input.apply(Edit::Home);
-        assert_eq!(input.cursor_width(), 0);
+        assert_eq!(visible(input.text(), input.cursor(), 10).1, 0);
         input.apply(Edit::End);
-        assert_eq!(input.cursor_width(), 3);
+        assert_eq!(visible(input.text(), input.cursor(), 10).1, 3);
+    }
+
+    #[test]
+    fn input_scrolls_to_keep_the_cursor_visible() {
+        assert_eq!(visible("hello", 5, 10), ("hello", 5));
+        assert_eq!(visible("hello world", 11, 5), ("orld", 4));
+        assert_eq!(visible("hello world", 2, 5), ("hello world", 2));
+        // Wide characters count two columns.
+        assert_eq!(visible("日本語", 3, 4), ("語", 2));
     }
 }

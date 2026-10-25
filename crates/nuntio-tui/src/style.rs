@@ -7,6 +7,9 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
+use unicode_width::UnicodeWidthStr;
+
+use crate::text_input::visible;
 
 /// The color of titles, borders and prompts.
 pub const ACCENT: Color = Color::Cyan;
@@ -70,6 +73,19 @@ pub fn center(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
 /// The screen of an app that has no room to draw.
 pub fn too_small(frame: &mut Frame) {
     center(frame, frame.area(), vec![Line::from("Terminal too small")]);
+}
+
+/// A line to type in, `width` columns wide: `marker` in the accent color,
+/// then the end of `text` that keeps the cursor (a char index) in view.
+/// Returns the line and the cursor's column in it.
+pub fn prompt<'a>(marker: &'a str, text: &'a str, cursor: usize, width: u16) -> (Line<'a>, u16) {
+    let marker_width = u16::try_from(marker.width()).unwrap_or(u16::MAX);
+    let (text, column) = visible(text, cursor, width.saturating_sub(marker_width));
+    let line = Line::from(vec![
+        Span::styled(marker, Tone::Accent.style()),
+        Span::raw(text),
+    ]);
+    (line, marker_width + column)
 }
 
 /// A line of key hints: ` key what  key what`, the key in the accent color
