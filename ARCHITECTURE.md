@@ -476,7 +476,7 @@ Details in [CONTRIBUTING.md](CONTRIBUTING.md).
 - Every setting has a `schema.rs` entry and a `docs/config.md` row (enforced by tests).
 - The helper binaries (`nuntio-config`, `nuntio-apps`) are never on the global PATH.
 - An invalid config never replaces a valid one.
-- The reusable library crates (`nuntio-config`, `nuntio-term`, `nuntio-render`) use `thiserror`; the binary and the app crates (`nuntio-config-tui`, `nuntio-apps`) use `anyhow`; logging uses `tracing`.
+- The reusable library crates (`nuntio-config`, `nuntio-term`, `nuntio-render`) use `thiserror`; the binary and the app crates and their support library (`nuntio-config-tui`, `nuntio-apps`, `nuntio-tui`) use `anyhow`; logging uses `tracing`.
 
 ## Where to change what
 

@@ -86,7 +86,7 @@ Keep pure logic (tabs, pane tree, tab bar layout, key/mouse encoding, config par
 
 - Code, comments, commit messages and repo docs in English. The user writes to you in German.
 - Commit messages: imperative subject ≤ 72 chars. For user-visible changes add a `Changelog: added|changed|deprecated|removed|fixed|security|performance` trailer; the subject becomes the release note. See CONTRIBUTING.md.
-- Errors: `thiserror` in the reusable library crates (`nuntio-config`, `nuntio-term`, `nuntio-render`), `anyhow` in the binary and the app crates (`nuntio-config-tui`, `nuntio-apps`). Log with `tracing`.
+- Errors: `thiserror` in the reusable library crates (`nuntio-config`, `nuntio-term`, `nuntio-render`), `anyhow` in the binary and the app crates and their support library (`nuntio-config-tui`, `nuntio-apps`, `nuntio-tui`). Log with `tracing`.
 - `SPEC.md` (the German product spec), `TODO-engines.md` and `docs/proposals/` are local planning files: they stay untracked, never add them to git.
 - Text files are LF everywhere (`.gitattributes`): tests and `include_str!` rely on it.
 
