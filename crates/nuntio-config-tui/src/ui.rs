@@ -3,7 +3,7 @@
 
 use nuntio_config::Theme;
 use nuntio_config::schema::Section;
-use nuntio_tui::style::{ACCENT, Tone, hints};
+use nuntio_tui::style::{ACCENT, Tone, heading, hints, panel, too_small};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
@@ -36,14 +36,7 @@ pub struct View {
 pub fn draw(frame: &mut Frame, app: &App, view: &mut View) {
     let area = frame.area();
     if area.height < 14 || area.width < 37 {
-        let text = Paragraph::new("Terminal too small").centered();
-        let [_, middle, _] = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ])
-        .areas(area);
-        frame.render_widget(text, middle);
+        too_small(frame);
         return;
     }
     let [header, body, details, footer] = Layout::vertical([
@@ -304,7 +297,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .areas(area);
     let title = Line::from(vec![
-        Span::raw(" nuntio-config ").bold().fg(ACCENT),
+        Span::styled(" nuntio-config ", heading()),
         Span::styled(app.path_label.as_str(), Tone::Dim.style()),
     ]);
     frame.render_widget(Paragraph::new(title), left);
@@ -320,7 +313,7 @@ fn draw_sections(frame: &mut Frame, area: Rect, app: &App) {
             if index != app.section {
                 return ListItem::new(format!("  {}", s.label()));
             }
-            let style = Style::new().fg(ACCENT).add_modifier(Modifier::BOLD);
+            let style = heading();
             let style = if focused {
                 style.add_modifier(Modifier::REVERSED)
             } else {
@@ -329,13 +322,7 @@ fn draw_sections(frame: &mut Frame, area: Rect, app: &App) {
             ListItem::new(format!("▌ {}", s.label())).style(style)
         })
         .collect();
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(if focused {
-            Style::new().fg(ACCENT)
-        } else {
-            Tone::Dim.style()
-        });
+    let block = panel(focused);
     // Selected only so the list scrolls to it; the item styles itself.
     let mut state = ListState::default().with_selected(Some(app.section));
     frame.render_stateful_widget(List::new(items).block(block), area, &mut state);
@@ -345,18 +332,15 @@ fn draw_sections(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_rows(frame: &mut Frame, area: Rect, app: &App, state: &mut ListState) {
     let focused = app.focus == Focus::Rows && matches!(app.mode, Mode::Normal);
     let mut items: Vec<ListItem> = Vec::new();
-    let mut heading = 0;
+    let mut heading_row = 0;
     for (section_index, &section) in Section::ALL.iter().enumerate() {
         if section_index > 0 {
             items.push(ListItem::new(""));
         }
         if section_index == app.section {
-            heading = items.len();
+            heading_row = items.len();
         }
-        items.push(ListItem::new(Line::styled(
-            section.label(),
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )));
+        items.push(ListItem::new(Line::styled(section.label(), heading())));
         let rows = app.rows(section);
         let label_width = rows
             .iter()
@@ -392,17 +376,10 @@ fn draw_rows(frame: &mut Frame, area: Rect, app: &App, state: &mut ListState) {
             item
         }));
     }
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .title(" Settings ")
-        .border_style(if focused {
-            Style::new().fg(ACCENT)
-        } else {
-            Tone::Dim.style()
-        });
-    let selected = heading + 1 + app.row;
+    let block = panel(focused).title(" Settings ");
+    let selected = heading_row + 1 + app.row;
     let on_sections = app.focus == Focus::Sections;
-    *state.offset_mut() = rows_offset(state.offset(), heading, selected, on_sections);
+    *state.offset_mut() = rows_offset(state.offset(), heading_row, selected, on_sections);
     state.select(Some(selected));
     let list = List::new(items)
         .block(block)
@@ -472,9 +449,7 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
             .into_iter()
             .map(|(t, text)| Line::styled(text, t.style())),
     );
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Tone::Dim.style());
+    let block = panel(false);
     let paragraph = Paragraph::new(Text::from(lines))
         .block(block)
         .wrap(Wrap { trim: true });

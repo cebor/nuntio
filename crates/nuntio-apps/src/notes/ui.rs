@@ -3,7 +3,7 @@
 //! modifiers, so the app follows the terminal's theme.
 
 use nuntio_config::schema::NOTES_SIDEBAR_WIDTH;
-use nuntio_tui::style::{ACCENT, Tone, hints};
+use nuntio_tui::style::{ACCENT, Tone, border, center, heading, hints, panel, too_small};
 use nuntio_tui::text_input::TextInput;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
@@ -111,21 +111,6 @@ pub fn areas(size: Size, app: &App) -> Areas {
     areas
 }
 
-fn dim() -> Style {
-    Style::new().add_modifier(Modifier::DIM)
-}
-
-fn center_line(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
-    let height = lines.len() as u16;
-    let [_, middle, _] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(height),
-        Constraint::Fill(1),
-    ])
-    .areas(area);
-    frame.render_widget(Paragraph::new(lines).centered(), middle);
-}
-
 /// `text` cut to `width` cells, with `…` if it was longer.
 fn truncate(text: &str, width: usize) -> String {
     if text.width() <= width {
@@ -148,17 +133,17 @@ fn truncate(text: &str, width: usize) -> String {
 /// The screen of a notes app that cannot start: the reason, centered.
 pub fn draw_failed(frame: &mut Frame, failed: &Failed) {
     let Some([header, body, _]) = split(frame.area().as_size()) else {
-        center_line(frame, frame.area(), vec![Line::from("Terminal too small")]);
+        too_small(frame);
         return;
     };
     draw_title(frame, header, &failed.dir_label);
-    center_line(
+    center(
         frame,
         body,
         vec![
             Line::styled(failed.message.clone(), Tone::Error.style()),
             Line::from(""),
-            Line::styled("q quits", dim()),
+            Line::styled("q quits", Tone::Dim.style()),
         ],
     );
 }
@@ -166,7 +151,7 @@ pub fn draw_failed(frame: &mut Frame, failed: &Failed) {
 pub fn draw(frame: &mut Frame, app: &App) {
     let areas = app.areas;
     if areas.too_small {
-        center_line(frame, frame.area(), vec![Line::from("Terminal too small")]);
+        too_small(frame);
         return;
     }
     draw_header(frame, app);
@@ -174,12 +159,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         draw_todos(frame, app);
     } else {
         let body = areas.body;
-        frame.render_widget(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .border_style(dim()),
-            body,
-        );
+        frame.render_widget(panel(false), body);
         if let (Some(list), Some(_)) = (areas.list, areas.editor) {
             let mut bar = vec![Line::raw("┬")];
             bar.extend((list.y..list.bottom()).map(|_| Line::raw("│")));
@@ -189,10 +169,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 width: 1,
                 ..body
             };
-            frame.render_widget(
-                Paragraph::new(bar).style(frame_style(app.resizing)),
-                divider,
-            );
+            frame.render_widget(Paragraph::new(bar).style(border(app.resizing)), divider);
         }
         // The list has no title of its own: the ` Notes ` pill is right above it.
         if let Some(list) = areas.list {
@@ -220,21 +197,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
-/// The frame's style: quiet, like the divider.
-fn frame_style(active: bool) -> Style {
-    if active {
-        Style::new().fg(ACCENT)
-    } else {
-        dim()
-    }
-}
-
 /// A panel's title in the frame: in the accent color while it has the focus.
 fn title_style(focused: bool) -> Style {
     if focused {
-        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        heading()
     } else {
-        dim()
+        Tone::Dim.style()
     }
 }
 
@@ -263,7 +231,7 @@ fn draw_title(frame: &mut Frame, area: Rect, dir_label: &str) {
                 .add_modifier(Modifier::BOLD | Modifier::REVERSED),
         ),
         Span::raw(" "),
-        Span::styled(dir_label.to_owned(), dim()),
+        Span::styled(dir_label.to_owned(), Tone::Dim.style()),
     ]);
     frame.render_widget(Paragraph::new(left), area);
 }
@@ -277,7 +245,7 @@ fn draw_header(frame: &mut Frame, app: &App) {
     };
     if 7 + 1 + app.dir_label.width() + 1 + count.width() <= usize::from(area.width) {
         frame.render_widget(
-            Paragraph::new(Line::styled(count, dim()).right_aligned()),
+            Paragraph::new(Line::styled(count, Tone::Dim.style()).right_aligned()),
             area,
         );
     }
@@ -299,18 +267,22 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
     }
     let visible = app.visible();
     if app.notes.is_empty() {
-        center_line(
+        center(
             frame,
             area,
             vec![
-                Line::styled("No notes yet", dim()),
-                Line::styled("Ctrl+N creates one", dim()),
+                Line::styled("No notes yet", Tone::Dim.style()),
+                Line::styled("Ctrl+N creates one", Tone::Dim.style()),
             ],
         );
         return;
     }
     if visible.is_empty() {
-        center_line(frame, area, vec![Line::styled("No matches", dim())]);
+        center(
+            frame,
+            area,
+            vec![Line::styled("No matches", Tone::Dim.style())],
+        );
         return;
     }
     let width = area.width as usize;
@@ -329,12 +301,9 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             app.focus == Focus::List && app.todos.is_none(),
         ) {
             (false, _) => (Span::raw(" "), Style::new()),
-            (true, true) => (
-                Span::styled("▌", Style::new().fg(ACCENT)),
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
+            (true, true) => (Span::styled("▌", Style::new().fg(ACCENT)), heading()),
             (true, false) => (
-                Span::styled("▌", dim()),
+                Span::styled("▌", Tone::Dim.style()),
                 Style::new().add_modifier(Modifier::BOLD),
             ),
         };
@@ -344,7 +313,7 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let style = if entry.done == entry.total {
                 Style::new().fg(Color::Green)
             } else {
-                dim()
+                Tone::Dim.style()
             };
             let gap = width.saturating_sub(used + progress.len() + 1);
             spans.push(Span::raw(" ".repeat(gap)));
@@ -368,7 +337,11 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
     let Some(open) = &app.open else {
-        center_line(frame, area, vec![Line::styled("No note open", dim())]);
+        center(
+            frame,
+            area,
+            vec![Line::styled("No note open", Tone::Dim.style())],
+        );
         return;
     };
     let Some(text) = app.areas.text else {
@@ -470,21 +443,13 @@ fn draw_todos(frame: &mut Frame, app: &App) {
         return;
     };
     let body = app.areas.body;
-    frame.render_widget(
-        Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(dim()),
-        body,
-    );
+    frame.render_widget(panel(false), body);
     let mut title = vec![
-        Span::styled(
-            " Todos ",
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!("{} open ", todos.open_count()), dim()),
+        Span::styled(" Todos ", heading()),
+        Span::styled(format!("{} open ", todos.open_count()), Tone::Dim.style()),
     ];
     if todos.show_done {
-        title.push(Span::styled("· done shown ", dim()));
+        title.push(Span::styled("· done shown ", Tone::Dim.style()));
     }
     border_title(
         frame,
@@ -500,7 +465,11 @@ fn draw_todos(frame: &mut Frame, app: &App) {
         height: body.height.saturating_sub(2),
     };
     if todos.items.is_empty() {
-        center_line(frame, list, vec![Line::styled("No open todos", dim())]);
+        center(
+            frame,
+            list,
+            vec![Line::styled("No open todos", Tone::Dim.style())],
+        );
         return;
     }
     for (i, row) in todos
