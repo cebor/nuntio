@@ -81,6 +81,52 @@ impl Instance {
             _pad: [0; 3],
         }
     }
+
+    /// A solid rectangle with rounded corners of `radius` pixels.
+    fn rounded(x: f32, y: f32, width: f32, height: f32, color: Rgb, radius: f32) -> Self {
+        let mut instance = Self::solid(x, y, width, height, color);
+        instance.kind = KIND_ROUNDED;
+        instance.uv[0] = radius;
+        instance
+    }
+
+    /// A corner of the window, `radius` pixels square at `x`, `y`, that the
+    /// cutout pipeline rounds off.
+    fn cutout(x: f32, y: f32, radius: f32) -> Self {
+        let mut instance = Self::solid(x, y, radius, radius, Rgb { r: 0, g: 0, b: 0 });
+        instance.uv[0] = radius;
+        instance
+    }
+
+    /// A glyph from the color atlas if `color`, else from the mask atlas,
+    /// with `uv` normalized to that atlas and tinted with `tint`.
+    fn sprite(pos: [f32; 2], size: [f32; 2], uv: [f32; 4], tint: Rgb, color: bool) -> Self {
+        Self {
+            pos,
+            size,
+            uv,
+            color: rgba(tint),
+            kind: if color { KIND_COLOR } else { KIND_MASK },
+            _pad: [0; 3],
+        }
+    }
+
+    /// An image from the image atlas; `scaled` if it is drawn at another
+    /// size than its bitmap, which `bounds` then keep filtering in range of.
+    fn image(pos: [f32; 2], size: [f32; 2], uv: [f32; 4], bounds: [f32; 4], scaled: bool) -> Self {
+        Self {
+            pos,
+            size,
+            uv,
+            color: bounds,
+            kind: if scaled {
+                KIND_IMAGE_SCALED
+            } else {
+                KIND_IMAGE
+            },
+            _pad: [0; 3],
+        }
+    }
 }
 
 #[repr(C)]
@@ -771,9 +817,7 @@ impl Renderer {
             let (width, height) = self.gpu.size();
             let (right, bottom) = (width as f32 - radius, height as f32 - radius);
             for (x, y) in [(0.0, 0.0), (right, 0.0), (0.0, bottom), (right, bottom)] {
-                let mut corner = Instance::solid(x, y, radius, radius, Rgb { r: 0, g: 0, b: 0 });
-                corner.uv[0] = radius;
-                self.layout.instances.push(corner);
+                self.layout.instances.push(Instance::cutout(x, y, radius));
             }
         }
         Ok(())
@@ -782,11 +826,11 @@ impl Renderer {
     /// UI rectangles, then the text over them.
     fn push_ui(&mut self, rects: &[UiRect], texts: &[UiText]) -> Result<(), AtlasFull> {
         for r in rects {
-            let mut instance = Instance::solid(r.x, r.y, r.width, r.height, r.color);
-            if r.radius > 0.0 {
-                instance.kind = KIND_ROUNDED;
-                instance.uv[0] = r.radius;
-            }
+            let instance = if r.radius > 0.0 {
+                Instance::rounded(r.x, r.y, r.width, r.height, r.color, r.radius)
+            } else {
+                Instance::solid(r.x, r.y, r.width, r.height, r.color)
+            };
             self.layout.instances.push(instance);
         }
         for text in texts {
@@ -855,15 +899,14 @@ impl Renderer {
                 &self.mask_atlas
             };
             let texel = 1.0 / atlas.size() as f32;
-            self.layout.instances.push(Instance {
-                pos: [x + sprite.x as f32, y + sprite.y as f32],
-                size: [r.width as f32, r.height as f32],
+            self.layout.instances.push(Instance::sprite(
+                [x + sprite.x as f32, y + sprite.y as f32],
+                [r.width as f32, r.height as f32],
                 // Normalized: the atlases can differ in size.
-                uv: [r.x as f32, r.y as f32, r.width as f32, r.height as f32].map(|v| v * texel),
-                color: rgba(color),
-                kind: if sprite.color { KIND_COLOR } else { KIND_MASK },
-                _pad: [0; 3],
-            });
+                [r.x as f32, r.y as f32, r.width as f32, r.height as f32].map(|v| v * texel),
+                color,
+                sprite.color,
+            ));
         }
     }
 
@@ -899,20 +942,16 @@ impl Renderer {
                 continue;
             };
             let (x, y) = origin(piece.column, piece.line);
-            self.layout.instances.push(Instance {
-                pos: [x, y],
-                size: [piece.columns as f32 * cw, ch],
-                uv: image_uv(region, self.images.atlas().size(), piece),
-                color: image_bounds(region, self.images.atlas().size()),
-                kind: if region.width as usize == piece.image.columns * m.width as usize
-                    && region.height as usize == piece.image.lines * m.height as usize
-                {
-                    KIND_IMAGE
-                } else {
-                    KIND_IMAGE_SCALED
-                },
-                _pad: [0; 3],
-            });
+            let atlas_size = self.images.atlas().size();
+            let unscaled = region.width as usize == piece.image.columns * m.width as usize
+                && region.height as usize == piece.image.lines * m.height as usize;
+            self.layout.instances.push(Instance::image(
+                [x, y],
+                [piece.columns as f32 * cw, ch],
+                image_uv(region, atlas_size, piece),
+                image_bounds(region, atlas_size),
+                !unscaled,
+            ));
         }
 
         // Cursor shapes sit on top of the background, below the text.
