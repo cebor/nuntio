@@ -18,26 +18,26 @@ pub struct CellMetrics {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FaceStyle {
-    pub bold: bool,
-    pub italic: bool,
+pub(crate) struct FaceStyle {
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
 }
 
 /// A rasterized glyph, positioned relative to the cell's baseline origin.
-pub struct RasterGlyph {
-    pub left: i32,
+pub(crate) struct RasterGlyph {
+    pub(crate) left: i32,
     /// Distance from the baseline up to the bitmap's top edge.
-    pub top: i32,
-    pub width: u32,
-    pub height: u32,
+    pub(crate) top: i32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     /// Color bitmap (emoji): RGBA8. Otherwise an 8-bit coverage mask.
-    pub color: bool,
-    pub data: Vec<u8>,
+    pub(crate) color: bool,
+    pub(crate) data: Vec<u8>,
 }
 
 /// Which of the two font sizes text is drawn in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TextSize {
+pub(crate) enum TextSize {
     /// The terminal font.
     Terminal,
     /// The smaller UI text (see [`SMALL_TEXT_SCALE`]).
@@ -46,7 +46,7 @@ pub enum TextSize {
 
 impl TextSize {
     /// Index into the per-size state of [`Fonts`] and the glyph caches.
-    pub const fn slot(self) -> usize {
+    pub(crate) const fn slot(self) -> usize {
         match self {
             Self::Terminal => 0,
             Self::Small => 1,
@@ -68,7 +68,7 @@ struct Face {
 }
 
 /// Font discovery, fallback, shaping and rasterization.
-pub struct Fonts {
+pub(crate) struct Fonts {
     system: FontSystem,
     swash: SwashCache,
     /// Indexed by [`TextSize::slot`].
@@ -111,7 +111,7 @@ fn font_system() -> FontSystem {
 }
 
 /// Size of small UI text (the status bar) relative to the terminal font.
-pub const SMALL_TEXT_SCALE: f32 = 0.9;
+pub(crate) const SMALL_TEXT_SCALE: f32 = 0.9;
 
 /// Font sizes are given in points. macOS treats 1pt as one logical pixel,
 /// elsewhere the usual 96 DPI convention applies.
@@ -126,7 +126,7 @@ fn points_to_pixels(points: f32, scale_factor: f64) -> f32 {
 
 /// Result of looking up a configured font family among installed fonts.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FamilyMatch {
+pub(crate) enum FamilyMatch {
     /// Found, ignoring case and spacing; carries the installed name.
     Exact(String),
     /// Same words in a different order ("Nerd Font Hack Mono").
@@ -150,7 +150,7 @@ fn words(name: &str) -> Vec<String> {
 }
 
 /// Find `requested` among installed family names.
-pub fn resolve_family<'a>(
+pub(crate) fn resolve_family<'a>(
     installed: impl IntoIterator<Item = &'a str>,
     requested: &str,
 ) -> FamilyMatch {
@@ -304,7 +304,7 @@ pub struct NoFontsError;
 
 impl Fonts {
     /// Load fonts. Returns a warning if the requested family isn't installed.
-    pub fn new(
+    pub(crate) fn new(
         family: Option<String>,
         size_points: f32,
         scale_factor: f64,
@@ -357,7 +357,7 @@ impl Fonts {
 
     /// Switch the font family (`None` = system monospace). Returns a warning
     /// if the family isn't installed; the system monospace font is used then.
-    pub fn set_family(&mut self, family: Option<String>) -> Option<String> {
+    pub(crate) fn set_family(&mut self, family: Option<String>) -> Option<String> {
         let (resolved, warning) = match family {
             None => (None, None),
             Some(requested) => match resolve_family(family_names(&self.system), &requested) {
@@ -385,7 +385,7 @@ impl Fonts {
     }
 
     /// Change font size or scale factor. Returns the new terminal cell metrics.
-    pub fn set_size(&mut self, size_points: f32, scale_factor: f64) -> CellMetrics {
+    pub(crate) fn set_size(&mut self, size_points: f32, scale_factor: f64) -> CellMetrics {
         self.px_size = points_to_pixels(size_points, scale_factor);
         self.remeasure();
         self.metrics(TextSize::Terminal)
@@ -402,7 +402,7 @@ impl Fonts {
         }
     }
 
-    pub fn metrics(&self, size: TextSize) -> CellMetrics {
+    pub(crate) fn metrics(&self, size: TextSize) -> CellMetrics {
         self.faces[size.slot()].metrics
     }
 
@@ -490,7 +490,12 @@ impl Fonts {
     }
 
     /// Shape one grapheme (with fallback) and rasterize its glyphs.
-    pub fn rasterize(&mut self, text: &str, style: FaceStyle, size: TextSize) -> Vec<RasterGlyph> {
+    pub(crate) fn rasterize(
+        &mut self,
+        text: &str,
+        style: FaceStyle,
+        size: TextSize,
+    ) -> Vec<RasterGlyph> {
         let glyphs = self.rasterize_with(text, style, size, false);
         // The fallback list may prefer the color emoji font for symbols
         // that default to text presentation; take them from a symbol font.

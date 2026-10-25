@@ -24,7 +24,7 @@ const LEFT: usize = 3;
 
 /// Render `c` into a `width`×`height` mask, or `None` if the font should
 /// draw it. `stroke` is the light line thickness.
-pub fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Mask> {
+pub(crate) fn rasterize(c: char, width: u32, height: u32, stroke: u32) -> Option<Mask> {
     let mut canvas = Mask::new(width, height);
     let light = stroke.max(1) as i32;
     let heavy = light * 2;

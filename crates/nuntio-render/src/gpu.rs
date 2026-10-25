@@ -29,7 +29,7 @@ pub struct GpuOptions {
     pub software: bool,
 }
 
-pub struct GpuContext {
+pub(crate) struct GpuContext {
     /// Kept to create the surface anew (see `restore_surface`).
     instance: wgpu::Instance,
     /// The backends the instance was created with, for `offers_gpu`.
@@ -59,7 +59,7 @@ impl GpuContext {
     /// platform supports it (the window must be created transparent too).
     /// With `software`, a CPU adapter is preferred; without one, the GPU is
     /// used anyway (see `software()`).
-    pub fn new<W>(
+    pub(crate) fn new<W>(
         window: W,
         width: u32,
         height: u32,
@@ -208,7 +208,7 @@ impl GpuContext {
     /// Give up the window's surface. A window takes only one swapchain at a
     /// time (DX12, Vulkan), so a successor can only be created after this.
     /// Frames report `Lost` from now on, until `restore_surface`.
-    pub fn release_surface(&mut self) {
+    pub(crate) fn release_surface(&mut self) {
         #[cfg(target_os = "macos")]
         let layer = self.metal_layer();
         self.surface = None;
@@ -231,7 +231,7 @@ impl GpuContext {
 
     /// A software adapter could present to the window: `adapters` offers
     /// one to a successor. Without the surface, there's no telling.
-    pub fn offers_software(&self) -> bool {
+    pub(crate) fn offers_software(&self) -> bool {
         let Some(surface) = &self.surface else {
             return true;
         };
@@ -247,7 +247,7 @@ impl GpuContext {
     /// instance: a DXGI factory keeps listing the adapters it saw when it was
     /// created, so a GPU that came back after a driver update would stay
     /// missing from `self.instance`.
-    pub fn offers_gpu<W>(&self, window: W) -> bool
+    pub(crate) fn offers_gpu<W>(&self, window: W) -> bool
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Clone + Send + Sync + 'static,
     {
@@ -273,7 +273,7 @@ impl GpuContext {
 
     /// Create the surface for `window` again after `release_surface`, with
     /// the same configuration, for when no successor could be created.
-    pub fn restore_surface<W>(&mut self, window: W) -> Result<(), RenderError>
+    pub(crate) fn restore_surface<W>(&mut self, window: W) -> Result<(), RenderError>
     where
         W: HasWindowHandle + HasDisplayHandle + Debug + Send + Sync + 'static,
     {
@@ -333,7 +333,7 @@ impl GpuContext {
         Some(surface.render_layer().lock().clone())
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub(crate) fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
         }
@@ -347,25 +347,25 @@ impl GpuContext {
         }
     }
 
-    pub fn size(&self) -> (u32, u32) {
+    pub(crate) fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }
 
     /// The adapter in use renders on the CPU.
-    pub fn software(&self) -> bool {
+    pub(crate) fn software(&self) -> bool {
         self.software
     }
 
-    pub fn transparent(&self) -> bool {
+    pub(crate) fn transparent(&self) -> bool {
         self.transparent
     }
 
     /// The compositor expects color premultiplied by alpha.
-    pub fn premultiplied(&self) -> bool {
+    pub(crate) fn premultiplied(&self) -> bool {
         self.config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied
     }
 
-    pub fn format(&self) -> wgpu::TextureFormat {
+    pub(crate) fn format(&self) -> wgpu::TextureFormat {
         self.config.format
     }
 

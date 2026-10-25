@@ -8,7 +8,7 @@ use crate::mask::Mask;
 
 /// Rasterize `style` for cells `width` pixels wide with lines `stroke`
 /// pixels thick. `None` for the styles drawn with solid quads.
-pub fn rasterize(style: UnderlineStyle, width: u32, stroke: u32) -> Option<Mask> {
+pub(crate) fn rasterize(style: UnderlineStyle, width: u32, stroke: u32) -> Option<Mask> {
     let stroke = stroke.max(1);
     let (height, data) = match style {
         UnderlineStyle::Single | UnderlineStyle::Double => return None,

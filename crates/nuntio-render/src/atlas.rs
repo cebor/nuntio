@@ -3,24 +3,24 @@ use etagere::{AtlasAllocator, size2};
 use crate::gpu::oom_checked;
 
 /// Atlas side length that every wgpu backend supports.
-pub const MIN_ATLAS_SIZE: u32 = 2048;
+pub(crate) const MIN_ATLAS_SIZE: u32 = 2048;
 
 /// Gap between sprites so sampling never bleeds into neighbours.
 const PADDING: i32 = 1;
 
 /// A region in an atlas texture, in texels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AtlasRegion {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
+pub(crate) struct AtlasRegion {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 /// One texture plus a rectangle packer. Starts small and doubles up to
 /// `max_size` when full; growing or clearing drops all regions, and the
 /// owner of the cache (glyphs, images) fills them again on demand.
-pub struct Atlas {
+pub(crate) struct Atlas {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     allocator: AtlasAllocator,
@@ -33,7 +33,7 @@ pub struct Atlas {
 
 impl Atlas {
     /// A square atlas `size` texels wide that can grow to `max_size`.
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         label: &'static str,
@@ -60,7 +60,7 @@ impl Atlas {
     /// so the caller has to drop its cached regions. `false` if already at
     /// the maximum or if the GPU has no memory for a larger texture; the
     /// atlas stays as it was then.
-    pub fn grow(&mut self, device: &wgpu::Device) -> bool {
+    pub(crate) fn grow(&mut self, device: &wgpu::Device) -> bool {
         if self.size >= self.max_size {
             return false;
         }
@@ -76,7 +76,7 @@ impl Atlas {
     /// to the maximum), larger or smaller than before. The caller has to
     /// drop its cached regions and rebuild what binds the texture view.
     /// `false` if the GPU has no memory for it; the atlas stays as it was.
-    pub fn reset(&mut self, device: &wgpu::Device, size: u32) -> bool {
+    pub(crate) fn reset(&mut self, device: &wgpu::Device, size: u32) -> bool {
         let size = size.min(self.max_size);
         if !self.replace(device, size) {
             return false;
@@ -97,21 +97,21 @@ impl Atlas {
     }
 
     /// Side length in texels, to normalize texture coordinates.
-    pub fn size(&self) -> u32 {
+    pub(crate) fn size(&self) -> u32 {
         self.size
     }
 
     /// Largest side length the atlas can grow to.
-    pub fn max_size(&self) -> u32 {
+    pub(crate) fn max_size(&self) -> u32 {
         self.max_size
     }
 
-    pub fn view(&self) -> &wgpu::TextureView {
+    pub(crate) fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
     /// Pack and upload an image. `None` means the atlas is full.
-    pub fn insert(
+    pub(crate) fn insert(
         &mut self,
         queue: &wgpu::Queue,
         width: u32,
@@ -154,7 +154,7 @@ impl Atlas {
         Some(region)
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.allocator.clear();
     }
 }
