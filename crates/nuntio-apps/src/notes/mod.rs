@@ -107,20 +107,6 @@ fn open(args: &Args, config: Option<&Path>) -> Result<App, Failed> {
     }
 }
 
-/// Write `width` as `notes.sidebar_width` into the config at `path`,
-/// keeping the rest of the file. A missing file is created.
-fn save_sidebar_width(path: &Path, width: u16) -> Result<(), String> {
-    let source = nuntio_config::read_config_source(path)
-        .map_err(|err| err.to_string())?
-        .unwrap_or_default();
-    let mut doc = nuntio_config::ConfigDoc::parse(&source)?;
-    doc.set("notes.sidebar_width", i64::from(width));
-    let text = doc.to_string();
-    // Never write a config nuntio would reject.
-    nuntio_config::parse(&text)?;
-    nuntio_config::write_atomically(path, &text).map_err(|err| err.to_string())
-}
-
 pub fn run(parser: lexopt::Parser) -> Result<()> {
     let Some(args) = parse_args(parser)? else {
         return Ok(());
@@ -204,7 +190,8 @@ fn run_notes(
         };
         if let Some(width) = app.take_sidebar_width()
             && let Some(path) = config
-            && let Err(err) = save_sidebar_width(path, width)
+            && let Err(err) =
+                nuntio_config::set_in_file(path, "notes.sidebar_width", i64::from(width))
         {
             app.message = Some((Tone::Warn, format!("Cannot save the list width: {err}")));
             redraw = true;

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub use color::{Color, ColorError};
-pub use edit::{ConfigDoc, read_config_source, write_atomically};
+pub use edit::{ConfigDoc, read_config_source, set_in_file, write_atomically};
 pub use keys::{
     ACTIONS, KeyCombo, KeyComboError, KeyName, KeybindingProblem, Mods, NamedKey, action,
 };

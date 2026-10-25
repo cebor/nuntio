@@ -363,6 +363,21 @@ pub fn write_atomically(path: &Path, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Set the value at `key` (see [`ConfigDoc::set`]) in the config at `path`,
+/// keeping the rest of the file. A missing file is created. Never writes a
+/// config nuntio would reject: if the file would no longer
+/// [`parse`](crate::parse) after the change, nothing is written.
+pub fn set_in_file(path: &Path, key: &str, value: impl Into<Value>) -> Result<(), String> {
+    let source = read_config_source(path)
+        .map_err(|err| err.to_string())?
+        .unwrap_or_default();
+    let mut doc = ConfigDoc::parse(&source)?;
+    doc.set(key, value);
+    let text = doc.to_string();
+    crate::parse(&text)?;
+    write_atomically(path, &text).map_err(|err| err.to_string())
+}
+
 /// Most symlinks followed to find where a config is written.
 const MAX_LINK_HOPS: usize = 8;
 
@@ -454,6 +469,16 @@ mod tests {
             out,
             "# my config\nscrollback = 100 # lines\n\n[font]\n# the font\nsize = 14.5 # pt\n"
         );
+    }
+
+    #[test]
+    fn set_in_file_keeps_the_file_and_never_writes_a_rejected_config() {
+        let dir = TempDir::new("edit-set-in-file");
+        let path = dir.join("config.toml");
+        set_in_file(&path, "scrollback", 5).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "scrollback = 5\n");
+        assert!(set_in_file(&path, "scrollback", "many").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "scrollback = 5\n");
     }
 
     #[test]
