@@ -2,10 +2,10 @@ use etagere::{AtlasAllocator, size2};
 
 use crate::gpu::oom_checked;
 
-/// Glyph atlas side length that every wgpu backend supports.
+/// Atlas side length that every wgpu backend supports.
 pub const MIN_ATLAS_SIZE: u32 = 2048;
 
-/// Gap between glyphs so sampling never bleeds into neighbours.
+/// Gap between sprites so sampling never bleeds into neighbours.
 const PADDING: i32 = 1;
 
 /// A region in an atlas texture, in texels.
@@ -18,8 +18,8 @@ pub struct AtlasRegion {
 }
 
 /// One texture plus a rectangle packer. Starts small and doubles up to
-/// `max_size` when full; growing or clearing drops all glyphs, and the glyph
-/// cache re-rasterizes on demand.
+/// `max_size` when full; growing or clearing drops all regions, and the
+/// owner of the cache (glyphs, images) fills them again on demand.
 pub struct Atlas {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -57,7 +57,7 @@ impl Atlas {
     }
 
     /// Double the side length, up to the maximum. The new texture is empty,
-    /// so the caller has to drop its cached glyphs. `false` if already at
+    /// so the caller has to drop its cached regions. `false` if already at
     /// the maximum or if the GPU has no memory for a larger texture; the
     /// atlas stays as it was then.
     pub fn grow(&mut self, device: &wgpu::Device) -> bool {

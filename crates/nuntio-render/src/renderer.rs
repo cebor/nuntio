@@ -222,7 +222,7 @@ pub struct Renderer {
     fonts: Fonts,
     mask_atlas: Atlas,
     color_atlas: Atlas,
-    /// Inline images, straight RGBA.
+    /// Inline images, premultiplied RGBA.
     image_atlas: Atlas,
     /// Where each uploaded image is, by [`TermImage::uid`](nuntio_term::TermImage::uid).
     image_regions: HashMap<u64, AtlasRegion>,
