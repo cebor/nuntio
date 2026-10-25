@@ -9,10 +9,18 @@ pub fn cache_dir() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join("nuntio"))
 }
 
-/// `dir` as a path: `~`, `~/…` and `~\…` start at `home`, anything else is
-/// taken as it is. `None` if `dir` starts with `~` and there is no home.
+/// Whether `dir` starts at the home directory: exactly `~`, or `~`
+/// followed by `/` or `\`. Not `~name`: nuntio has no other users' homes.
+pub fn is_home_relative(dir: &str) -> bool {
+    dir.strip_prefix('~')
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\']))
+}
+
+/// `dir` as a path: a directory that [`is_home_relative`] starts at `home`,
+/// anything else (`~name` included) is taken as it is. `None` if `dir`
+/// starts at home and there is no home.
 pub fn expand_home(dir: &str, home: Option<&Path>) -> Option<PathBuf> {
-    match dir.strip_prefix('~') {
+    match dir.strip_prefix('~').filter(|_| is_home_relative(dir)) {
         Some(rest) => Some(home?.join(rest.trim_start_matches(['/', '\\']))),
         None => Some(PathBuf::from(dir)),
     }
@@ -47,6 +55,19 @@ mod tests {
         assert_eq!(expand_home("/abs/n", home), Some(PathBuf::from("/abs/n")));
         assert_eq!(expand_home("/abs/n", None), Some(PathBuf::from("/abs/n")));
         assert_eq!(expand_home("~/n", None), None);
+        // Another user's home is not supported: `~me` is no home path.
+        assert_eq!(expand_home("~me", home), Some(PathBuf::from("~me")));
+        assert_eq!(expand_home("~me", None), Some(PathBuf::from("~me")));
+        for (dir, relative) in [
+            ("~", true),
+            ("~/n", true),
+            ("~\\n", true),
+            ("~me", false),
+            ("n/~", false),
+            ("", false),
+        ] {
+            assert_eq!(is_home_relative(dir), relative, "{dir}");
+        }
     }
 
     #[test]

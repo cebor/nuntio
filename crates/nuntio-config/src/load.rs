@@ -3,6 +3,7 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use crate::paths::is_home_relative;
 use crate::schema::{
     DIM_INACTIVE, FONT_SIZE, MAX_PADDING, MAX_SCROLLBACK, NOTES_SIDEBAR_WIDTH, OPACITY,
     WINDOW_COLUMNS, WINDOW_LINES,
@@ -261,11 +262,8 @@ impl Config {
 
 /// Absolute (a Linux path for WSL counts, also on Windows) or at home.
 fn validate_dir(key: &str, dir: &str) -> Result<(), String> {
-    let valid = dir == "~"
-        || dir.starts_with("~/")
-        || dir.starts_with("~\\")
-        || dir.starts_with('/')
-        || std::path::Path::new(dir).is_absolute();
+    let valid =
+        is_home_relative(dir) || dir.starts_with('/') || std::path::Path::new(dir).is_absolute();
     if valid {
         Ok(())
     } else {

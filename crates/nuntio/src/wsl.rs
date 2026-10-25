@@ -122,6 +122,7 @@ pub fn linux_dir(reported: Option<ReportedDir>, title: Option<&str>) -> Option<S
     }
     let dir = strip_user_host(title?);
     let dir = dir.trim();
+    // Not `nuntio_config::is_home_relative`: a Linux path, where `~\x` is no home path.
     let is_dir = dir == "~" || dir.starts_with("~/") || dir.starts_with('/');
     is_dir.then(|| dir.to_owned())
 }
