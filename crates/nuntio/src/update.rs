@@ -29,6 +29,20 @@ const TAG: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'+');
 
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
+
+/// The repository's address without a trailing slash.
+fn repository() -> &'static str {
+    REPOSITORY.trim_end_matches('/')
+}
+
+/// An agent for GitHub's pages and API: names nuntio and its version, and
+/// reads error statuses as answers. Callers set the timeouts.
+fn agent_builder() -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
+    ureq::Agent::config_builder()
+        .user_agent(format!("nuntio/{CURRENT}"))
+        .http_status_as_error(false)
+}
+
 const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// After a failed check (offline, rate limit), try again sooner.
 const RETRY: Duration = Duration::from_secs(60 * 60);
@@ -82,7 +96,7 @@ pub struct Release {
 impl Release {
     /// The tag's release page, built here: the cache file is not trusted.
     fn page_url(&self) -> String {
-        let releases = format!("{}/releases/", REPOSITORY.trim_end_matches('/'));
+        let releases = format!("{}/releases/", repository());
         format!("{releases}tag/{}", utf8_percent_encode(&self.tag, TAG))
     }
 }
@@ -92,7 +106,7 @@ impl Release {
 fn download_url(tag: &str, name: &str) -> String {
     format!(
         "{}/releases/download/{}/{}",
-        REPOSITORY.trim_end_matches('/'),
+        repository(),
         utf8_percent_encode(tag, TAG),
         utf8_percent_encode(name, TAG)
     )
@@ -430,21 +444,14 @@ enum Fetched {
 
 /// `https://api.github.com/repos/<owner>/<repo>/releases/latest`.
 fn api_url() -> String {
-    let repo = REPOSITORY
-        .trim_start_matches("https://github.com/")
-        .trim_end_matches('/');
+    let repo = repository().trim_start_matches("https://github.com/");
     format!("https://api.github.com/repos/{repo}/releases/latest")
 }
 
 fn fetch(etag: Option<&str>) -> Result<Fetched> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent: ureq::Agent = agent_builder().timeout_global(Some(TIMEOUT)).build().into();
     let mut request = agent
         .get(api_url())
-        .header("User-Agent", format!("nuntio/{CURRENT}"))
         .header("Accept", "application/vnd.github+json");
     if let Some(etag) = etag {
         request = request.header("If-None-Match", etag);

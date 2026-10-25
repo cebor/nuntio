@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use winit::event_loop::EventLoopProxy;
 
-use super::{CURRENT, Release, download_url};
+use super::{Release, agent_builder, download_url};
 use crate::command;
 use crate::event::UserEvent;
 
@@ -681,11 +681,10 @@ impl Asset {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
+    agent_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
         .timeout_recv_response(Some(Duration::from_secs(30)))
         .timeout_recv_body(Some(DOWNLOAD_LIMIT))
-        .http_status_as_error(false)
         .build()
         .into()
 }
@@ -694,7 +693,6 @@ fn agent() -> ureq::Agent {
 fn get(url: &str, name: &str) -> Result<ureq::http::Response<ureq::Body>> {
     let response = agent()
         .get(url)
-        .header("User-Agent", format!("nuntio/{CURRENT}"))
         .call()
         .with_context(|| format!("cannot download {name}"))?;
     match response.status().as_u16() {
