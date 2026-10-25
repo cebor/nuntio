@@ -31,11 +31,10 @@ pub struct AgentsUpdate {
 /// How to reach a session's socket.
 #[derive(Debug, Clone)]
 pub enum Endpoint {
-    #[cfg_attr(windows, allow(dead_code))]
+    #[cfg(unix)]
     Unix(String),
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg(windows)]
     Pipe(String),
-    #[cfg_attr(not(windows), allow(dead_code))]
     Wsl {
         distro: String,
         user: Option<String>,
@@ -52,7 +51,9 @@ impl Endpoint {
                 user: user.clone(),
                 socket: socket.to_owned(),
             },
-            Target::Local if cfg!(windows) => Endpoint::Pipe(socket.to_owned()),
+            #[cfg(windows)]
+            Target::Local => Endpoint::Pipe(socket.to_owned()),
+            #[cfg(unix)]
             Target::Local => Endpoint::Unix(socket.to_owned()),
         }
     }
@@ -88,8 +89,7 @@ fn connect(endpoint: &Endpoint) -> io::Result<Connection> {
                 }),
             })
         }
-        #[cfg(not(unix))]
-        Endpoint::Unix(_) => Err(io::Error::other("no Unix sockets here")),
+        #[cfg(windows)]
         Endpoint::Pipe(path) => {
             let file = std::fs::OpenOptions::new()
                 .read(true)
