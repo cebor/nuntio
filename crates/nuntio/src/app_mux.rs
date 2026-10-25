@@ -15,7 +15,7 @@ use crate::input;
 use crate::menu::{MenuEntry, MenuKind, MenuSection};
 use crate::mux::agents::{AgentsUpdate, SessionKey};
 use crate::mux::entries::{self, MuxEntry, remote_session};
-use crate::mux::herdr::{Agent, AgentStatus, summary};
+use crate::mux::herdr::{self, Agent, summary};
 use crate::mux::keys::MuxAction;
 use crate::mux::launch;
 use crate::mux::project::last_component;
@@ -363,26 +363,12 @@ impl Core {
         if let Some(state) = state.as_deref_mut()
             && self.config.herdr.agent_banner
         {
-            let newly_blocked: Vec<&Agent> = agents
-                .iter()
-                .filter(|a| a.status == AgentStatus::Blocked)
-                .filter(|a| {
-                    !before
-                        .iter()
-                        .any(|b| b.pane_id == a.pane_id && b.status == AgentStatus::Blocked)
-                })
-                .collect();
+            let newly_blocked = herdr::newly_blocked(&before, &agents);
             if !newly_blocked.is_empty() {
                 let tab = self.mux_tab(state, &key.pane());
                 let tab_active = tab == Some(state.tabs.active_index());
                 if window::wants_attention(tab_active, state.focused, false) {
-                    let messages = newly_blocked
-                        .iter()
-                        .map(|a| {
-                            let dir = last_component(&a.cwd).unwrap_or_default();
-                            format!("{} in {dir} needs input", a.agent)
-                        })
-                        .collect();
+                    let messages = herdr::needs_input_messages(&newly_blocked);
                     self.notify(Banner::new(Severity::Info, Topic::Agents, messages));
                 }
             }

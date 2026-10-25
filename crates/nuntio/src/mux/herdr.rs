@@ -3,6 +3,8 @@
 
 use serde_json::Value;
 
+use super::project::last_component;
+
 /// A herdr session (`herdr session list --json`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HerdrSession {
@@ -199,6 +201,32 @@ pub fn summary(agents: &[Agent]) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
+/// The blocked agents of `after` that were not blocked in `before`: the
+/// ones that just started to need input.
+pub fn newly_blocked<'a>(before: &[Agent], after: &'a [Agent]) -> Vec<&'a Agent> {
+    after
+        .iter()
+        .filter(|a| a.status == AgentStatus::Blocked)
+        .filter(|a| {
+            !before
+                .iter()
+                .any(|b| b.pane_id == a.pane_id && b.status == AgentStatus::Blocked)
+        })
+        .collect()
+}
+
+/// The banner lines for agents that need input: `"claude in nuntio needs
+/// input"`.
+pub fn needs_input_messages(agents: &[&Agent]) -> Vec<String> {
+    agents
+        .iter()
+        .map(|a| {
+            let dir = last_component(&a.cwd).unwrap_or_default();
+            format!("{} in {dir} needs input", a.agent)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +353,41 @@ mod tests {
             cwd: "/".into(),
             status,
         }
+    }
+
+    #[test]
+    fn newly_blocked_agents_are_those_not_blocked_before() {
+        use AgentStatus::*;
+        let at = |pane: &str, status| Agent {
+            pane_id: pane.into(),
+            ..agent(status)
+        };
+        let before = [at("a", Blocked), at("b", Working), at("c", Idle)];
+        let after = [
+            at("a", Blocked),
+            at("b", Blocked),
+            at("c", Working),
+            at("d", Blocked),
+        ];
+        let panes: Vec<&str> = newly_blocked(&before, &after)
+            .iter()
+            .map(|a| a.pane_id.as_str())
+            .collect();
+        assert_eq!(panes, ["b", "d"]);
+        assert!(newly_blocked(&after, &after).is_empty());
+    }
+
+    #[test]
+    fn needs_input_names_agent_and_directory() {
+        let agent = Agent {
+            agent: "claude".into(),
+            cwd: "/home/me/code/nuntio/".into(),
+            ..agent(AgentStatus::Blocked)
+        };
+        assert_eq!(
+            needs_input_messages(&[&agent]),
+            ["claude in nuntio needs input"]
+        );
     }
 
     #[test]
