@@ -39,15 +39,13 @@ pub struct MuxSettings {
 impl MuxSettings {
     /// The settings `config` asks for; `None` when both tools are off.
     pub fn of(config: &Config) -> Option<Self> {
+        let program = |tool: Tool| {
+            let tool = tool.config(config);
+            tool.enabled.then(|| tool.program.trim().to_owned())
+        };
         let settings = Self {
-            herdr: config
-                .herdr
-                .enabled
-                .then(|| config.herdr.program.trim().to_owned()),
-            tmux: config
-                .tmux
-                .enabled
-                .then(|| config.tmux.program.trim().to_owned()),
+            herdr: program(Tool::Herdr),
+            tmux: program(Tool::Tmux),
         };
         (settings.herdr.is_some() || settings.tmux.is_some()).then_some(settings)
     }

@@ -55,6 +55,37 @@ impl Tool {
             Tool::Tmux => "tmux",
         }
     }
+
+    /// What `config` says about this tool.
+    pub fn config(self, config: &Config) -> ToolConfig<'_> {
+        match self {
+            Tool::Herdr => ToolConfig {
+                enabled: config.herdr.enabled,
+                on_startup: config.herdr.on_startup,
+                program: &config.herdr.program,
+                forward_actions: config.herdr.forward_actions,
+            },
+            Tool::Tmux => ToolConfig {
+                enabled: config.tmux.enabled,
+                on_startup: config.tmux.on_startup,
+                program: &config.tmux.program,
+                forward_actions: config.tmux.forward_actions,
+            },
+        }
+    }
+}
+
+/// The settings herdr and tmux have in common (`[herdr]`, `[tmux]`).
+#[derive(Debug, Clone, Copy)]
+pub struct ToolConfig<'a> {
+    /// The tool is on: its sessions are listed and its panes known.
+    pub enabled: bool,
+    /// The first pane at startup runs the tool.
+    pub on_startup: bool,
+    /// A program name searched for, or an absolute path.
+    pub program: &'a str,
+    /// Shortcuts go into the tool running in a pane.
+    pub forward_actions: bool,
 }
 
 /// Where a tool runs: on this system or in a WSL distribution.
@@ -82,31 +113,12 @@ pub struct MuxPane {
     pub session: Option<String>,
 }
 
-/// Whether the config turns `tool` on.
-pub fn enabled(config: &Config, tool: Tool) -> bool {
-    match tool {
-        Tool::Herdr => config.herdr.enabled,
-        Tool::Tmux => config.tmux.enabled,
-    }
-}
-
-/// Whether shortcuts go into `tool` running in a pane.
-pub fn forwards(config: &Config, tool: Tool) -> bool {
-    match tool {
-        Tool::Herdr => config.herdr.forward_actions,
-        Tool::Tmux => config.tmux.forward_actions,
-    }
-}
-
 /// The multiplexer the first pane starts in: herdr before tmux, each only
 /// while it is enabled.
 pub fn startup_tool(config: &Config) -> Option<Tool> {
     [Tool::Herdr, Tool::Tmux].into_iter().find(|&tool| {
-        enabled(config, tool)
-            && match tool {
-                Tool::Herdr => config.herdr.on_startup,
-                Tool::Tmux => config.tmux.on_startup,
-            }
+        let tool = tool.config(config);
+        tool.enabled && tool.on_startup
     })
 }
 
@@ -114,12 +126,12 @@ pub fn startup_tool(config: &Config) -> Option<Tool> {
 /// nuntio started there, or one found by the foreground process's name.
 pub fn pane_mux(pane: &Pane, config: &Config) -> Option<MuxPane> {
     if let Some(mux) = &pane.mux
-        && enabled(config, mux.tool)
+        && mux.tool.config(config).enabled
     {
         return Some(mux.clone());
     }
     let tool = Tool::from_process(&pane.term.process_name())?;
-    enabled(config, tool).then(|| MuxPane {
+    tool.config(config).enabled.then(|| MuxPane {
         tool,
         target: Target::of(pane.wsl.as_ref()),
         session: None,

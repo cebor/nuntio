@@ -21,7 +21,7 @@ use crate::mux::resolve::resolve;
 use crate::mux::service::{
     AgentRef, MuxOpen, MuxService, MuxSettings, MuxSnapshot, ProjectDir, Request,
 };
-use crate::mux::{MuxPane, Target, Tool, agent_color, forwards, pane_mux};
+use crate::mux::{MuxPane, Target, Tool, agent_color, pane_mux};
 use crate::shells::{Launch, ShellChoice};
 use crate::window::{self, WindowState};
 
@@ -116,7 +116,7 @@ impl Core {
         let Some(mux) = pane_mux(pane, &self.config) else {
             return false;
         };
-        if !forwards(&self.config, mux.tool) {
+        if !mux.tool.config(&self.config).forward_actions {
             return false;
         }
         let bindings = self.mux.snapshot.bindings(mux.tool, &mux.target);
@@ -326,10 +326,7 @@ impl Core {
     pub(super) fn startup_mux(&mut self) -> Option<(Launch, MuxPane)> {
         let tool = crate::mux::startup_tool(&self.config)?;
         let target = Target::of(self.default_launch().distro().as_ref());
-        let configured = match tool {
-            Tool::Herdr => self.config.herdr.program.as_str(),
-            Tool::Tmux => self.config.tmux.program.as_str(),
-        };
+        let configured = tool.config(&self.config).program;
         let Some(program) = resolve(&target, &[(tool, configured)]).remove(&tool) else {
             self.notify(Banner::new(
                 Severity::Warning,

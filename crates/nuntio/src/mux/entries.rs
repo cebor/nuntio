@@ -8,7 +8,7 @@ use super::agents::SessionKey;
 use super::herdr::{Agent, Machine, summary};
 use super::project::TmuxProjectSession;
 use super::service::{MuxSnapshot, ProjectEntry, TargetState};
-use super::{MuxPane, Target, Tool, enabled};
+use super::{MuxPane, Target, Tool};
 use crate::actions::Action;
 use crate::menu::{MenuEntry, MenuSection};
 
@@ -64,7 +64,7 @@ pub fn entries(
             .any(|p| p.tool == tool && &p.target == target && p.session.as_deref() == session)
     };
     for tool in [Tool::Herdr, Tool::Tmux] {
-        if !enabled(config, tool) {
+        if !tool.config(config).enabled {
             continue;
         }
         for state in &snapshot.targets {
