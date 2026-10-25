@@ -75,7 +75,7 @@ pub fn wsl_path(path: &str) -> String {
 }
 
 /// A WSL distribution and the user a shell runs as in it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Distro {
     pub name: String,
     pub user: Option<String>,
@@ -143,25 +143,23 @@ pub fn cd_arg(dir: &str, home: impl FnOnce() -> Option<String>) -> Option<String
 /// next time, as `wsl.exe` may just have been slow or the distribution
 /// not started.
 #[derive(Default)]
-pub struct Homes(HashMap<(String, Option<String>), String>);
+pub struct Homes(HashMap<Distro, String>);
 
 impl Homes {
-    pub fn get(&mut self, distro: &str, user: Option<&str>) -> Option<String> {
-        self.get_with(distro, user, query_home)
+    pub fn get(&mut self, distro: &Distro) -> Option<String> {
+        self.get_with(distro, query_home)
     }
 
     fn get_with(
         &mut self,
-        distro: &str,
-        user: Option<&str>,
-        query: impl FnOnce(&str, Option<&str>) -> Option<String>,
+        distro: &Distro,
+        query: impl FnOnce(&Distro) -> Option<String>,
     ) -> Option<String> {
-        let key = (distro.to_owned(), user.map(str::to_owned));
-        if let Some(home) = self.0.get(&key) {
+        if let Some(home) = self.0.get(distro) {
             return Some(home.clone());
         }
-        let home = query(distro, user)?;
-        self.0.insert(key, home.clone());
+        let home = query(distro)?;
+        self.0.insert(distro.clone(), home.clone());
         Some(home)
     }
 }
@@ -171,10 +169,10 @@ impl Homes {
 const HOME_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(windows)]
-fn query_home(distro: &str, user: Option<&str>) -> Option<String> {
+fn query_home(distro: &Distro) -> Option<String> {
     let mut command = Command::new("wsl.exe");
-    command.args(["-d", distro]);
-    if let Some(user) = user {
+    command.args(["-d", &distro.name]);
+    if let Some(user) = &distro.user {
         command.args(["-u", user]);
     }
     command.args(["--exec", "sh", "-c", r#"printf %s "$HOME""#]);
@@ -184,7 +182,7 @@ fn query_home(distro: &str, user: Option<&str>) -> Option<String> {
     ) {
         Ok(Some(output)) => output,
         Ok(None) => {
-            tracing::warn!(distro, "wsl.exe did not answer in time");
+            tracing::warn!(distro = distro.name, "wsl.exe did not answer in time");
             return None;
         }
         Err(err) => {
@@ -195,13 +193,13 @@ fn query_home(distro: &str, user: Option<&str>) -> Option<String> {
     let home = String::from_utf8(output.stdout).ok()?;
     let found = output.status.success() && home.starts_with('/');
     if !found {
-        tracing::warn!(distro, "found no home directory in WSL");
+        tracing::warn!(distro = distro.name, "found no home directory in WSL");
     }
     found.then_some(home)
 }
 
 #[cfg(not(windows))]
-fn query_home(_distro: &str, _user: Option<&str>) -> Option<String> {
+fn query_home(_distro: &Distro) -> Option<String> {
     None
 }
 
@@ -325,8 +323,12 @@ mod tests {
     fn failed_home_lookups_are_not_cached() {
         let mut homes = Homes::default();
         let mut asked = 0;
+        let ubuntu = Distro {
+            name: "Ubuntu".into(),
+            user: None,
+        };
         let mut ask = |answer: Option<&str>| {
-            homes.get_with("Ubuntu", None, |_, _| {
+            homes.get_with(&ubuntu, |_| {
                 asked += 1;
                 answer.map(str::to_owned)
             })
@@ -336,8 +338,12 @@ mod tests {
         assert_eq!(ask(None), Some("/home/me".into()), "cached");
         assert_eq!(asked, 2);
 
-        let other = homes.get_with("Ubuntu", Some("root"), |_, user| {
-            assert_eq!(user, Some("root"));
+        let root = Distro {
+            name: "Ubuntu".into(),
+            user: Some("root".into()),
+        };
+        let other = homes.get_with(&root, |distro| {
+            assert_eq!(distro, &root);
             Some("/root".into())
         });
         assert_eq!(other, Some("/root".into()), "another user asks again");

@@ -305,15 +305,13 @@ impl Core {
 
     /// `dir` in `distro` as `wsl.exe --cd` takes it: `~/…` becomes absolute.
     fn wsl_cd(&mut self, distro: &Distro, dir: &str) -> Option<String> {
-        crate::wsl::cd_arg(dir, || {
-            self.wsl_homes.get(&distro.name, distro.user.as_deref())
-        })
+        crate::wsl::cd_arg(dir, || self.wsl_homes.get(distro))
     }
 
     /// `dir` in `distro` as an absolute path: `~` too becomes absolute.
     pub(super) fn wsl_absolute(&mut self, distro: &Distro, dir: &str) -> Option<String> {
         if dir == "~" {
-            return self.wsl_homes.get(&distro.name, distro.user.as_deref());
+            return self.wsl_homes.get(distro);
         }
         self.wsl_cd(distro, dir)
     }

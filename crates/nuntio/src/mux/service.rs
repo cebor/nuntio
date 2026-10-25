@@ -18,6 +18,7 @@ use super::run::run;
 use super::tmux::{self, TmuxSession};
 use super::{Target, Tool};
 use crate::event::UserEvent;
+use crate::wsl::Distro;
 
 /// How often the sessions are listed while nothing asks.
 const POLL: Duration = Duration::from_secs(60);
@@ -212,9 +213,11 @@ impl Worker {
         targets.extend(
             nuntio_config::detect::wsl_distributions()
                 .into_iter()
-                .map(|d| Target::Wsl {
-                    distro: d.value,
-                    user: None,
+                .map(|d| {
+                    Target::Wsl(Distro {
+                        name: d.value,
+                        user: None,
+                    })
                 }),
         );
         Self {
@@ -504,7 +507,7 @@ fn herdr_config(target: &Target) -> Option<String> {
             };
             std::fs::read_to_string(path).ok()
         }
-        Target::Wsl { .. } => run(
+        Target::Wsl(_) => run(
             target,
             "sh",
             &["-c", r#"cat "$HOME/.config/herdr/config.toml""#],

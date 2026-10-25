@@ -23,7 +23,7 @@ use crate::mux::service::{
 };
 use crate::mux::{MuxPane, Target, Tool, agent_color, forwards, pane_mux};
 use crate::shells::{Launch, ShellChoice};
-use crate::window::{self, Pane, WindowState};
+use crate::window::{self, WindowState};
 
 /// What the app knows about the multiplexers.
 #[derive(Default)]
@@ -50,13 +50,13 @@ fn mux_launch(tool: Tool, target: &Target, argv: &[String]) -> Option<Launch> {
     let (program, args) = argv.split_first()?;
     Some(match target {
         Target::Local => Launch::Command(argv.to_vec()),
-        Target::Wsl { distro, user } => Launch::Shell(ShellChoice {
+        Target::Wsl(distro) => Launch::Shell(ShellChoice {
             name: tool.name().to_owned(),
             shell: Some(Shell {
                 program: Some(program.clone()),
                 args: args.to_vec(),
-                wsl: Some(distro.clone()),
-                wsl_user: user.clone(),
+                wsl: Some(distro.name.clone()),
+                wsl_user: distro.user.clone(),
             }),
         }),
     })
@@ -76,17 +76,6 @@ fn mux_action(action: Action) -> Option<MuxAction> {
         Action::ZoomPane => MuxAction::Zoom,
         _ => return None,
     })
-}
-
-/// Where a pane's programs run.
-fn pane_target(pane: &Pane) -> Target {
-    match &pane.wsl {
-        Some(d) => Target::Wsl {
-            distro: d.name.clone(),
-            user: d.user.clone(),
-        },
-        None => Target::Local,
-    }
 }
 
 /// The last component of a path, Linux or Windows.
@@ -167,7 +156,7 @@ impl Core {
             return;
         }
         let pane = state.content().focused_pane();
-        let target = pane_target(pane);
+        let target = Target::of(pane.wsl.as_ref());
         let distro = pane.wsl.clone();
         let dir = match self.focused_dir(state, distro.as_ref()) {
             Some(StartDir::Local(path)) => Some(path.to_string_lossy().into_owned()),
@@ -336,13 +325,7 @@ impl Core {
     /// with a banner when the program isn't found.
     pub(super) fn startup_mux(&mut self) -> Option<(Launch, MuxPane)> {
         let tool = crate::mux::startup_tool(&self.config)?;
-        let target = match self.default_launch().distro() {
-            Some(d) => Target::Wsl {
-                distro: d.name,
-                user: d.user,
-            },
-            None => Target::Local,
-        };
+        let target = Target::of(self.default_launch().distro().as_ref());
         let configured = match tool {
             Tool::Herdr => self.config.herdr.program.as_str(),
             Tool::Tmux => self.config.tmux.program.as_str(),
@@ -480,8 +463,8 @@ impl Core {
         self.mux.agent_choices.clear();
         for (key, agent) in agents {
             let mut detail = agent.status.word().to_owned();
-            if let Target::Wsl { distro, .. } = &key.target {
-                detail.push_str(&format!(" · {distro}"));
+            if let Target::Wsl(distro) = &key.target {
+                detail.push_str(&format!(" · {}", distro.name));
             }
             entries.push(MenuEntry {
                 label: format!("{} · {}", agent.agent, basename(&agent.cwd)),

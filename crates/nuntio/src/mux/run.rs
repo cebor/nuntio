@@ -11,10 +11,10 @@ use crate::command::{no_window, output_within};
 pub fn command(target: &Target, program: &str, args: &[&str]) -> Command {
     let mut command = match target {
         Target::Local => Command::new(program),
-        Target::Wsl { distro, user } => {
+        Target::Wsl(distro) => {
             let mut command = Command::new("wsl.exe");
-            command.args(["-d", distro]);
-            if let Some(user) = user {
+            command.args(["-d", &distro.name]);
+            if let Some(user) = &distro.user {
                 command.args(["-u", user]);
             }
             command.args(["--exec", program]);

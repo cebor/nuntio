@@ -30,7 +30,7 @@ pub fn resolve(target: &Target, tools: &[(Tool, &str)]) -> HashMap<Tool, String>
     for &(tool, program) in tools {
         let program = match target {
             Target::Local => program.trim(),
-            Target::Wsl { .. } => tool.name(),
+            Target::Wsl(_) => tool.name(),
         };
         if matches!(target, Target::Local) && std::path::Path::new(program).is_absolute() {
             if std::path::Path::new(program).is_file() {

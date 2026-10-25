@@ -221,6 +221,6 @@ pub fn entries(
 fn heading(tool: Tool, state: &TargetState) -> String {
     match &state.target {
         Target::Local => tool.name().to_owned(),
-        Target::Wsl { distro, .. } => format!("{} · {distro}", tool.name()),
+        Target::Wsl(distro) => format!("{} · {}", tool.name(), distro.name),
     }
 }

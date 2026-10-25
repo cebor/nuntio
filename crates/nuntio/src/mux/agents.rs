@@ -12,6 +12,7 @@ use winit::event_loop::EventLoopProxy;
 use super::Target;
 use super::herdr::{Agent, parse_agents};
 use crate::event::UserEvent;
+use crate::wsl::Distro;
 
 /// A herdr session on a target; `session: None` is the default session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -35,22 +36,14 @@ pub enum Endpoint {
     Unix(String),
     #[cfg(windows)]
     Pipe(String),
-    Wsl {
-        distro: String,
-        user: Option<String>,
-        socket: String,
-    },
+    Wsl(Distro, String),
 }
 
 impl Endpoint {
     /// The endpoint of the session whose socket is `socket` on `target`.
     pub fn of(target: &Target, socket: &str) -> Self {
         match target {
-            Target::Wsl { distro, user } => Endpoint::Wsl {
-                distro: distro.clone(),
-                user: user.clone(),
-                socket: socket.to_owned(),
-            },
+            Target::Wsl(distro) => Endpoint::Wsl(distro.clone(), socket.to_owned()),
             #[cfg(windows)]
             Target::Local => Endpoint::Pipe(socket.to_owned()),
             #[cfg(unix)]
@@ -104,24 +97,20 @@ fn connect(endpoint: &Endpoint) -> io::Result<Connection> {
                 close: Box::new(|| {}),
             })
         }
-        Endpoint::Wsl {
-            distro,
-            user,
-            socket,
-        } => wsl_bridge(distro, user.as_deref(), socket),
+        Endpoint::Wsl(distro, socket) => wsl_bridge(distro, socket),
     }
 }
 
 /// A connection through `nuntio-wsl socket`, which copies between its
 /// standard streams and the socket inside the distribution.
 #[cfg(windows)]
-fn wsl_bridge(distro: &str, user: Option<&str>, socket: &str) -> io::Result<Connection> {
+fn wsl_bridge(distro: &Distro, socket: &str) -> io::Result<Connection> {
     use std::process::Stdio;
 
     let helper = crate::wsl::helper().ok_or_else(|| io::Error::other("no nuntio-wsl helper"))?;
     let mut command = std::process::Command::new("wsl.exe");
-    command.args(["-d", distro]);
-    if let Some(user) = user {
+    command.args(["-d", &distro.name]);
+    if let Some(user) = &distro.user {
         command.args(["-u", user]);
     }
     command
@@ -160,7 +149,7 @@ fn wsl_bridge(distro: &str, user: Option<&str>, socket: &str) -> io::Result<Conn
 }
 
 #[cfg(not(windows))]
-fn wsl_bridge(_distro: &str, _user: Option<&str>, _socket: &str) -> io::Result<Connection> {
+fn wsl_bridge(_distro: &Distro, _socket: &str) -> io::Result<Connection> {
     Err(io::Error::other("WSL exists only on Windows"))
 }
 

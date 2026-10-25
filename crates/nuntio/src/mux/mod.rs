@@ -17,6 +17,7 @@ use nuntio_term::Rgb;
 use self::herdr::AgentStatus;
 use crate::style::{AGENT_BLOCKED, AGENT_DONE, AGENT_WORKING};
 use crate::window::Pane;
+use crate::wsl::Distro;
 
 /// The color that marks agents in `status`; none for idle ones.
 pub fn agent_color(status: AgentStatus) -> Option<Rgb> {
@@ -60,10 +61,15 @@ impl Tool {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Target {
     Local,
-    Wsl {
-        distro: String,
-        user: Option<String>,
-    },
+    Wsl(Distro),
+}
+
+impl Target {
+    /// Where the programs of a shell run: in its WSL distribution, if it
+    /// has one.
+    pub fn of(wsl: Option<&Distro>) -> Self {
+        wsl.map_or(Target::Local, |distro| Target::Wsl(distro.clone()))
+    }
 }
 
 /// A multiplexer session in a pane.
@@ -115,13 +121,7 @@ pub fn pane_mux(pane: &Pane, config: &Config) -> Option<MuxPane> {
     let tool = Tool::from_process(&pane.term.process_name())?;
     enabled(config, tool).then(|| MuxPane {
         tool,
-        target: match &pane.wsl {
-            Some(d) => Target::Wsl {
-                distro: d.name.clone(),
-                user: d.user.clone(),
-            },
-            None => Target::Local,
-        },
+        target: Target::of(pane.wsl.as_ref()),
         session: None,
     })
 }
