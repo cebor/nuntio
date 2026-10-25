@@ -375,7 +375,7 @@ pub struct TermHandle {
     /// `wsl.exe`; 0 if unknown. Changes when a WSL pane falls back to ConPTY.
     child_pid: Arc<AtomicU32>,
     /// `child_pid` is `login`; the shell is its child.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg(target_os = "macos")]
     via_login: bool,
     /// The shell's pid behind `login`, once known.
     #[cfg(target_os = "macos")]
@@ -470,10 +470,10 @@ impl TermHandle {
         let runs_command = matches!(options.program, Program::Command(_));
         // Without a shell, alacritty runs the default one through `login`
         // on macOS as well.
+        #[cfg(target_os = "macos")]
         let (shell, via_login) = match options.program {
-            Program::Default => (None, cfg!(target_os = "macos")),
+            Program::Default => (None, true),
             Program::Command(shell) => (Some(shell), false),
-            #[cfg(target_os = "macos")]
             Program::Login(shell) => {
                 let user = std::env::var("USER").unwrap_or_default();
                 // `login` looks for `.hushlogin` in the current directory only.
@@ -487,8 +487,11 @@ impl TermHandle {
                     }
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            Program::Login(shell) => (Some(shell), false),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let shell = match options.program {
+            Program::Default => None,
+            Program::Command(shell) | Program::Login(shell) => Some(shell),
         };
         #[cfg(windows)]
         let mut fallback = None;
@@ -553,6 +556,7 @@ impl TermHandle {
             term,
             listener,
             child_pid,
+            #[cfg(target_os = "macos")]
             via_login,
             #[cfg(target_os = "macos")]
             shell_pid: OnceLock::new(),
@@ -1019,7 +1023,7 @@ fn passwd_shell() -> Option<String> {
 /// through `login -flp`, which registers the session, with `exec -a` giving
 /// the shell a `-` in front of its name (`-l` keeps `login` from doing
 /// that, and from changing to the home directory).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(any(target_os = "macos", test))]
 fn login_command(shell: &Shell, user: &str, hush: bool) -> Option<Shell> {
     if user.is_empty() {
         return None;
@@ -1038,7 +1042,7 @@ fn login_command(shell: &Shell, user: &str, hush: bool) -> Option<Shell> {
 }
 
 /// The zsh command that starts `shell` with `-<name>` as `argv[0]`.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(any(target_os = "macos", test))]
 fn exec_as_login(shell: &Shell) -> String {
     let name = Path::new(&shell.program)
         .file_name()
@@ -1056,7 +1060,7 @@ fn exec_as_login(shell: &Shell) -> String {
 }
 
 /// `s` as one single-quoted shell word.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(any(target_os = "macos", test))]
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -1079,7 +1083,7 @@ fn tty_options(
 
 /// `WSLENV` that also passes our terminal variables into WSL, keeping
 /// entries the user already has.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(any(windows, test))]
 fn wslenv(existing: Option<&str>) -> String {
     let mut entries: Vec<&str> = existing
         .unwrap_or_default()
