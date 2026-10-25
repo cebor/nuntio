@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Point;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::search::Match;
@@ -13,6 +14,22 @@ use crate::palette::{Palette, dim};
 
 /// Combining marks kept per cell; a program can attach any number.
 pub const MAX_ZEROWIDTH: usize = 16;
+
+/// Whether a cell is the filler of a wide character: the second half
+/// (`WIDE_CHAR_SPACER`) or the blank a wide character left at a row's end
+/// (`LEADING_WIDE_CHAR_SPACER`). It holds no text of its own.
+pub(crate) fn is_spacer(flags: Flags) -> bool {
+    flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+}
+
+/// Whether `point` lies inside the grid, scrollback included. Points go
+/// stale when the scrollback shrinks or the pane narrows; indexing the grid
+/// with one would be out of bounds.
+pub(crate) fn contains<T>(term: &Term<T>, point: Point) -> bool {
+    point.line >= term.topmost_line()
+        && point.line <= term.bottommost_line()
+        && point.column <= term.last_column()
+}
 
 const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
@@ -188,9 +205,7 @@ impl Snapshot {
             if let Some((id, image_line, image_column)) = image_ref {
                 self.push_image(images, id, line as usize, column, image_line, image_column);
             }
-            let hidden = image_ref.is_some()
-                || flags.contains(Flags::HIDDEN)
-                || flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
+            let hidden = image_ref.is_some() || flags.contains(Flags::HIDDEN) || is_spacer(flags);
             let spacer = flags.contains(Flags::WIDE_CHAR_SPACER);
 
             self.cells[line as usize * columns + column] = SnapshotCell {

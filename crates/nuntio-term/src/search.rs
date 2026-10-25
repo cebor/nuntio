@@ -6,6 +6,8 @@ use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 
+use crate::snapshot::contains;
+
 /// Matches counted at most; beyond that the count shows as "999+".
 const MAX_COUNTED: usize = 999;
 
@@ -237,11 +239,7 @@ pub(crate) fn find<T: EventListener>(
     // anchor outside the grid would index out of bounds.
     // Columns too: narrowing the pane leaves an anchor right of the new
     // last column.
-    let in_grid = |p: &Point| {
-        p.line >= term.topmost_line()
-            && p.line <= term.bottommost_line()
-            && p.column <= term.last_column()
-    };
+    let in_grid = |p: &Point| contains(term, *p);
     let origin = match &search.current {
         Some(m) if up => m.start().sub(term, Boundary::None, 1),
         Some(m) => m.end().add(term, Boundary::None, 1),

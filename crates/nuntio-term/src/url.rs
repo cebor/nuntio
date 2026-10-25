@@ -8,6 +8,7 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::{Cell, Flags};
 
 use crate::image::image_cell_ref;
+use crate::snapshot::{contains, is_spacer};
 
 /// Longest wrapped line considered when looking for URLs, in rows.
 const MAX_WRAPPED_ROWS: usize = 32;
@@ -27,9 +28,7 @@ pub struct Link {
 /// The link under a grid point, if any. Points outside the grid have none.
 pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     let grid = term.grid();
-    let inside = (grid.topmost_line()..=grid.bottommost_line()).contains(&point.line)
-        && point.column <= term.last_column();
-    if !inside {
+    if !contains(term, point) {
         return None;
     }
     if grid[point].flags.contains(Flags::WIDE_CHAR_SPACER) && point.column.0 > 0 {
@@ -109,10 +108,7 @@ fn is_gutter(cell: &Cell) -> bool {
     if image_cell_ref(cell).is_some() {
         return false;
     }
-    cell.flags
-        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-        || cell.c == ' '
-        || is_separator(cell.c)
+    is_spacer(cell.flags) || cell.c == ' ' || is_separator(cell.c)
 }
 
 /// Columns of the panel around `point`: the cells between the nearest
@@ -181,9 +177,7 @@ fn hard_wraps<T>(term: &Term<T>, line: Line, cols: &RangeInclusive<usize>) -> bo
         && next_first == first
         && (first..=end).all(|c| {
             let cell = &grid[line][Column(c)];
-            cell.flags
-                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                || is_word(cell)
+            is_spacer(cell.flags) || is_word(cell)
         })
         && is_word(&grid[Line(line.0 + 1)][Column(next_first)])
 }
@@ -239,11 +233,11 @@ fn logical_line<T>(
         } else {
             last.0
         };
-        points.extend((from..=to).map(|c| Point::new(l, Column(c))).filter(|p| {
-            !grid[*p]
-                .flags
-                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-        }));
+        points.extend(
+            (from..=to)
+                .map(|c| Point::new(l, Column(c)))
+                .filter(|p| !is_spacer(grid[*p].flags)),
+        );
     }
     points
 }
