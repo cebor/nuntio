@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use nuntio_config::schema::{Kind, SETTINGS, SPRING, Section, Setting};
 use nuntio_config::toml_edit::{self, InlineTable};
 use nuntio_config::{
-    Config, ConfigDoc, KeyCombo, Keybinding, KeybindingProblem, StatusItem, ThemeSelection,
+    Config, ConfigDoc, KeyCombo, Keybinding, KeybindingProblem, Loaded, StatusItem, ThemeSelection,
     ThemeSet, action,
 };
 
@@ -401,7 +401,12 @@ impl App {
     }
 
     fn revalidate(&mut self) {
-        match nuntio_config::parse(&self.source) {
+        self.adopt(nuntio_config::parse(&self.source));
+    }
+
+    /// Take over what parsing `self.source` gave.
+    fn adopt(&mut self, parsed: Result<Loaded, String>) {
+        match parsed {
             Ok(loaded) => {
                 self.values = serialize(&loaded.config);
                 self.config = loaded.config;
@@ -516,8 +521,10 @@ impl App {
         }
         let mut doc = self.doc.clone();
         edit(&mut doc);
+        let edited = doc.to_string();
+        let mut parsed = nuntio_config::parse(&edited);
         let mut note = None;
-        if let Ok(loaded) = nuntio_config::parse(&doc.to_string()) {
+        if let Ok(loaded) = &parsed {
             match doc.settle_update_settings(&self.config, &loaded.config) {
                 Ok(settled) => note = settled,
                 Err(refusal) => {
@@ -530,8 +537,11 @@ impl App {
         if text == self.source {
             return true;
         }
-        if let Err(err) = nuntio_config::parse(&text)
-            && self.error.is_none()
+        if text != edited {
+            parsed = nuntio_config::parse(&text);
+        }
+        if self.error.is_none()
+            && let Err(err) = parsed
         {
             self.message = Some((Tone::Error, err));
             return false;
@@ -546,7 +556,7 @@ impl App {
             self.source = text;
         }
         self.doc = doc;
-        self.revalidate();
+        self.adopt(parsed);
         self.message = note.map(|note| (Tone::Normal, note.into()));
         true
     }
