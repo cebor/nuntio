@@ -85,14 +85,17 @@ fn document(text: &str) -> Option<Value> {
 
 /// `result.<key>` of a CLI output or socket response, as an array.
 fn result_list(text: &str, key: &str) -> Vec<Value> {
-    let Some(doc) = document(text) else {
-        return Vec::new();
-    };
+    document(text)
+        .map(|doc| list_in(&doc, key).to_vec())
+        .unwrap_or_default()
+}
+
+/// `result.<key>` of a parsed CLI output or socket response, as an array.
+fn list_in<'a>(doc: &'a Value, key: &str) -> &'a [Value] {
     doc.pointer(&format!("/result/{key}"))
         .or_else(|| doc.get(key))
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+        .map_or(&[], Vec::as_slice)
 }
 
 /// `herdr session list --json`.
@@ -140,7 +143,25 @@ pub fn parse_machines(json: &str) -> Vec<Machine> {
 
 /// `herdr agent list` or the socket's answer to `agent.list`.
 pub fn parse_agents(json: &str) -> Vec<Agent> {
-    result_list(json, "agents")
+    document(json)
+        .map(|doc| agents_in(&doc))
+        .unwrap_or_default()
+}
+
+/// The socket's answer to `agent.list`: the agents, or the `error` member
+/// of a refusal as text. An answer that isn't JSON has no agents.
+pub fn socket_answer(text: &str) -> Result<Vec<Agent>, String> {
+    let Some(doc) = document(text) else {
+        return Ok(Vec::new());
+    };
+    match doc.get("error") {
+        Some(error) => Err(error.to_string()),
+        None => Ok(agents_in(&doc)),
+    }
+}
+
+fn agents_in(doc: &Value) -> Vec<Agent> {
+    list_in(doc, "agents")
         .iter()
         .filter_map(|a| {
             Some(Agent {
@@ -307,6 +328,23 @@ mod tests {
 
         assert!(parse_agents(r#"{"id":"list","error":{"code":"x"}}"#).is_empty());
         assert!(parse_agents("").is_empty());
+    }
+
+    #[test]
+    fn socket_answers_are_agents_or_the_error() {
+        let line = r#"{"id":"list","result":{"agents":[{"agent":"omp","agent_status":"done","cwd":"/a","pane_id":"p","workspace_id":"w"}]}}
+"#;
+        assert_eq!(socket_answer(line).unwrap().len(), 1);
+        assert_eq!(socket_answer(""), Ok(Vec::new()));
+        let refused = socket_answer(r#"{"id":"list","error":{"code":"no_such_method"}}"#);
+        assert_eq!(refused, Err(r#"{"code":"no_such_method"}"#.to_owned()));
+
+        // Words in the text don't decide: an agent called "error" is an
+        // agent, and a refusal that mentions "agents" is a refusal.
+        let named = r#"{"id":"list","result":{"agents":[{"agent":"error","agent_status":"idle","cwd":"/work/error","pane_id":"p","workspace_id":"w"}]}}"#;
+        assert_eq!(socket_answer(named).unwrap()[0].agent, "error");
+        let talkative = r#"{"id":"list","error":{"message":"no \"agents\" here"}}"#;
+        assert!(socket_answer(talkative).is_err());
     }
 
     #[test]

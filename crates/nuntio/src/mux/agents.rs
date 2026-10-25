@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use winit::event_loop::EventLoopProxy;
 
-use super::herdr::{Agent, parse_agents};
+use super::herdr::{Agent, socket_answer};
 use super::{MuxPane, Target, Tool};
 use crate::event::UserEvent;
 use crate::wsl::Distro;
@@ -222,12 +222,12 @@ fn request(endpoint: &Endpoint, line: &str) -> io::Result<String> {
 
 const LIST: &str = "{\"id\":\"list\",\"method\":\"agent.list\",\"params\":{}}\n";
 
+/// The event of an agent whose status changed, in the subscription and as
+/// pushed.
+const STATUS_CHANGED: &str = "pane.agent_status_changed";
+
 fn list(endpoint: &Endpoint) -> io::Result<Vec<Agent>> {
-    let answer = request(endpoint, LIST)?;
-    if answer.contains("\"error\"") && !answer.contains("\"agents\"") {
-        return Err(io::Error::other(answer.trim().to_owned()));
-    }
-    Ok(parse_agents(&answer))
+    socket_answer(&request(endpoint, LIST)?).map_err(io::Error::other)
 }
 
 /// The subscription request for changes of the panes and of `agents`.
@@ -242,9 +242,9 @@ pub fn subscription(agents: &[Agent]) -> String {
     .map(|t| serde_json::json!({ "type": t }))
     .collect();
     subscriptions.extend(
-        agents.iter().map(
-            |a| serde_json::json!({ "type": "pane.agent_status_changed", "pane_id": a.pane_id }),
-        ),
+        agents
+            .iter()
+            .map(|a| serde_json::json!({ "type": STATUS_CHANGED, "pane_id": a.pane_id })),
     );
     let request = serde_json::json!({
         "id": "sub",
@@ -277,7 +277,7 @@ pub fn classify(line: &str) -> Pushed {
     if value.pointer("/result/type").and_then(|t| t.as_str()) == Some("subscription_started") {
         return Pushed::Started;
     }
-    if line.contains("agent_status_changed") {
+    if value.get("event").and_then(|e| e.as_str()) == Some(STATUS_CHANGED) {
         Pushed::Status
     } else {
         Pushed::Panes
@@ -360,6 +360,10 @@ mod tests {
         );
         assert_eq!(
             classify(r#"{"event":"pane.created","data":{"pane_id":"w1:p2"}}"#),
+            Pushed::Panes
+        );
+        assert_eq!(
+            classify(r#"{"event":"pane.created","data":{"cwd":"/x/agent_status_changed"}}"#),
             Pushed::Panes
         );
         assert_eq!(
