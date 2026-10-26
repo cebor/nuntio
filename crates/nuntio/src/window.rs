@@ -51,10 +51,13 @@ const TITLE_REFRESH: Duration = Duration::from_millis(250);
 /// A new pane is shown once its output has paused this long, so the shell's
 /// startup output (a greeting, the prompt) appears in one frame.
 const REVEAL_QUIET: Duration = Duration::from_millis(20);
-/// Output is drawn this long after its first wakeup, so a line a program
-/// writes in pieces (curl's progress bar, nearly byte by byte) appears
-/// whole instead of half-written with the cursor inside it.
-const OUTPUT_SETTLE: Duration = Duration::from_millis(4);
+/// Output is drawn once it has paused this long, so a line a program writes
+/// in pieces (curl's progress bar) appears whole instead of half-written with
+/// the cursor inside it.
+const OUTPUT_QUIET: Duration = Duration::from_millis(4);
+/// Latest time output is drawn after its first wakeup, however long the
+/// program keeps writing: about one frame at 60 Hz.
+const OUTPUT_MAX: Duration = Duration::from_millis(16);
 /// Latest time a new pane is shown, however busy or silent its shell is.
 const REVEAL_MAX: Duration = Duration::from_millis(300);
 /// Cells a pane grows or shrinks per resize shortcut, so each press is
@@ -93,6 +96,45 @@ impl Reveal {
     /// When the pane is shown.
     pub fn due(&self) -> Instant {
         self.settle.map_or(self.deadline, |s| s.min(self.deadline))
+    }
+}
+
+/// Output of the active tab that has no frame yet. The frame waits until no
+/// output arrived for `OUTPUT_QUIET`, at most until `deadline`.
+#[derive(Debug, Clone, Copy)]
+pub struct HeldOutput {
+    /// Drawn by then however long the output goes on.
+    deadline: Instant,
+    /// When to look again whether more output arrived.
+    check: Instant,
+    /// The active tab's output generation at the last look.
+    generation: u64,
+}
+
+impl HeldOutput {
+    fn new(now: Instant, generation: u64) -> Self {
+        Self {
+            deadline: now + OUTPUT_MAX,
+            check: now + OUTPUT_QUIET,
+            generation,
+        }
+    }
+
+    /// When the hold is looked at next.
+    fn due(&self) -> Instant {
+        self.check
+    }
+
+    /// Look at the hold at its check time: true if the output paused (the
+    /// generation didn't change) or the deadline passed; otherwise wait
+    /// another `OUTPUT_QUIET`, never past the deadline.
+    fn settled(&mut self, now: Instant, generation: u64) -> bool {
+        if generation == self.generation || now >= self.deadline {
+            return true;
+        }
+        self.generation = generation;
+        self.check = (now + OUTPUT_QUIET).min(self.deadline);
+        false
     }
 }
 
@@ -371,8 +413,9 @@ pub struct WindowState {
     /// A frame showed cached tab titles; redraw once they expire so they
     /// catch up with the processes.
     pub title_refresh: Option<Instant>,
-    /// When output of the active tab that is not drawn yet gets its frame.
-    pub output_redraw: Option<Instant>,
+    /// Output of the active tab waiting until it pauses; no frame is drawn
+    /// meanwhile.
+    held_output: Option<HeldOutput>,
     /// A new pane waiting for its shell's first screen; frames are held.
     pub reveal: Option<Reveal>,
     /// Cell the IME candidate window was last anchored to.
@@ -421,7 +464,7 @@ impl WindowState {
             health: RenderHealth::default(),
             attention_requested: false,
             title_refresh: None,
-            output_redraw: None,
+            held_output: None,
             reveal: None,
             ime_cell: None,
             status_drawn: None,
@@ -434,6 +477,15 @@ impl WindowState {
 
     pub fn content(&self) -> &TabContent {
         &self.tabs.active().content
+    }
+
+    /// The output generations of the active tab's panes, summed: changes
+    /// when any of them had output.
+    fn active_output_generation(&self) -> u64 {
+        self.content()
+            .panes
+            .iter()
+            .fold(0, |sum, p| sum.wrapping_add(p.term.output_generation()))
     }
 
     pub fn content_mut(&mut self) -> &mut TabContent {
@@ -492,10 +544,17 @@ impl WindowState {
         }
     }
 
-    /// Output arrived in the active tab: draw it `OUTPUT_SETTLE` after the
-    /// first wakeup not drawn yet; later wakeups keep that deadline.
+    /// Output arrived in the active tab: hold its frame until the output
+    /// pauses (`run_timers`). Later wakeups keep the hold that is running.
     pub fn output_arrived(&mut self, now: Instant) {
-        self.output_redraw.get_or_insert(now + OUTPUT_SETTLE);
+        if self.held_output.is_none() {
+            self.held_output = Some(HeldOutput::new(now, self.active_output_generation()));
+        }
+    }
+
+    /// Output is still arriving: frames wait until it pauses.
+    pub fn output_holds(&self) -> bool {
+        self.held_output.is_some()
     }
 
     /// Whether frames are still held back. Ends the hold once it is due,
@@ -1201,15 +1260,22 @@ impl WindowState {
         if self.reveal.is_some() && !self.reveal_holds(now) {
             self.window.request_redraw();
         }
-        if self.output_redraw.is_some_and(|t| now >= t) {
-            self.output_redraw = None;
-            self.window.request_redraw();
+        if self.held_output.is_some_and(|held| now >= held.due()) {
+            let generation = self.active_output_generation();
+            if self
+                .held_output
+                .as_mut()
+                .is_some_and(|held| held.settled(now, generation))
+            {
+                self.held_output = None;
+                self.window.request_redraw();
+            }
         }
         [
             self.reveal.map(|reveal| reveal.due()),
             self.blink.active.then_some(self.blink.next_toggle),
             self.title_refresh,
-            self.output_redraw,
+            self.held_output.map(|held| held.due()),
             self.mouse.autoscroll.map(|scroll| scroll.next),
             self.health.next_wakeup(),
         ]
@@ -1339,6 +1405,33 @@ mod tests {
 
         reveal.output(now + REVEAL_MAX - ms(1));
         assert_eq!(reveal.due(), now + REVEAL_MAX, "busy shell");
+    }
+
+    #[test]
+    fn held_output_waits_for_a_pause_but_not_past_its_deadline() {
+        let now = Instant::now();
+        let mut held = HeldOutput::new(now, 1);
+        assert_eq!(held.due(), now + OUTPUT_QUIET);
+        assert!(held.settled(now + OUTPUT_QUIET, 1), "output paused");
+
+        let mut held = HeldOutput::new(now, 1);
+        assert!(!held.settled(now + OUTPUT_QUIET, 2), "more output");
+        assert_eq!(held.due(), now + 2 * OUTPUT_QUIET);
+        assert!(held.settled(held.due(), 2), "then a pause");
+
+        let mut held = HeldOutput::new(now, 1);
+        let mut generation = 1;
+        let mut checks = 0;
+        loop {
+            generation += 1;
+            checks += 1;
+            let due = held.due();
+            if held.settled(due, generation) {
+                assert_eq!(due, now + OUTPUT_MAX, "endless output");
+                break;
+            }
+            assert!(checks < 4, "never drawn");
+        }
     }
 
     #[test]

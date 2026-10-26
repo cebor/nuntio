@@ -1086,7 +1086,11 @@ impl Core {
         if state.reveal_holds(Instant::now()) {
             return;
         }
-        state.output_redraw = None;
+        // Output still arriving gets its frame once it pauses (`run_timers`); a
+        // frame now could show a line half-written, with the cursor inside it.
+        if state.output_holds() {
+            return;
+        }
         let status = self.redraw(state);
         match state.health.on_frame(status) {
             HealthAction::Nothing => {}

@@ -891,7 +891,9 @@ impl TermHandle {
         )
     }
 
-    fn output_generation(&self) -> u64 {
+    /// Bumped whenever the grid may have changed (output, resize, cleared
+    /// history): two reads that differ mean the pane had output in between.
+    pub fn output_generation(&self) -> u64 {
         self.listener
             .inner
             .output_generation
