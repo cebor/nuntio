@@ -13,6 +13,7 @@ use super::{Chrome, Pane, WindowState};
 use crate::event::PaneId;
 use crate::input;
 use crate::link::{BaseDir, Target};
+use crate::link_lookup::{Answer, Request};
 use crate::mouse::{self, Button, ClickCounter, HeldButtons, MouseAction, MouseMods};
 use crate::mux::{MuxPane, Target as MuxTarget};
 use crate::pane_tree::{Axis, Divider};
@@ -35,6 +36,10 @@ const WHEEL_LINES: f64 = 3.0;
 
 /// Pointer travel before a pressed tab starts moving.
 const TAB_DRAG_THRESHOLD: f64 = 4.0;
+
+/// How long the link modifier rests, with no other key, before a
+/// multiplexer is asked for its directory: Ctrl shortcuts start no process.
+const MUX_DIR_DELAY: Duration = Duration::from_millis(150);
 
 /// Pointer state for selection, mouse reporting, the tab bar and dividers.
 #[derive(Default)]
@@ -65,14 +70,18 @@ pub struct MouseState {
     pub fullscreen_drag: Option<FullscreenDrag>,
     /// Link under the pointer while the link modifier is held.
     pub hover_link: Option<HoverLink>,
-    /// The last relative path looked up on disk, so a resting pointer isn't
-    /// looked up again every frame.
+    /// The last relative path candidate looked up on disk, or being looked
+    /// up, so a resting pointer isn't looked up again every frame.
     pub relative_lookup: Option<RelativeLookup>,
+    /// A lookup for the app to start.
+    pub relative_request: Option<Request>,
+    next_lookup: u64,
     /// The directory of the focused pane of the multiplexer in a pane,
     /// asked for once while the link modifier is held.
     pub mux_dir: Option<MuxDir>,
     /// A `mux_dir` lookup for the app to start.
     pub mux_dir_request: Option<(PaneId, MuxPane)>,
+    pub link_press: LinkPress,
     /// A selection drag is past the top or bottom of the pane and scrolls it.
     pub autoscroll: Option<Autoscroll>,
 }
@@ -87,22 +96,99 @@ pub struct HoverLink {
 
 /// A relative path candidate and what the file system said about it.
 pub struct RelativeLookup {
+    id: u64,
     pane: PaneId,
     text: String,
-    target: Option<Target>,
+    /// `None` while the lookup runs.
+    answer: Option<Option<Target>>,
 }
 
 /// The working directory of the focused pane of a multiplexer, a path where
 /// the multiplexer runs. Kept across presses of the link modifier, so that a
-/// quick Ctrl+click needn't wait for the multiplexer: each press asks again,
-/// and links follow the new answer when it comes.
+/// quick Ctrl+click needn't wait for the multiplexer: each press asks again
+/// once it points at links ([`LinkPress`]), and links follow the new answer
+/// when it comes.
 pub struct MuxDir {
     pane: PaneId,
+    mux: MuxPane,
     /// Asked during this press of the link modifier.
     asked: bool,
     /// An answer has come; `dir` is `None` if the multiplexer couldn't tell.
     answered: bool,
     dir: Option<String>,
+}
+
+/// The current press of the link modifier, as far as asking a multiplexer goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkPress {
+    /// Not held.
+    #[default]
+    Released,
+    /// Held since `since`, pointer at rest, no other key; `waits`: a relative
+    /// candidate in a multiplexer pane waits for the ask.
+    Held { since: Instant, waits: bool },
+    /// Another key was pressed while held: a shortcut. Only the pointer asks now.
+    Shortcut,
+    /// The pointer moved, a button was pressed or `MUX_DIR_DELAY` passed.
+    Pointing,
+}
+
+impl LinkPress {
+    /// The link modifier is `held` at `now`.
+    pub fn update(&mut self, held: bool, now: Instant) {
+        if !held {
+            *self = Self::Released;
+        } else if *self == Self::Released {
+            *self = Self::Held {
+                since: now,
+                waits: false,
+            };
+        }
+    }
+
+    /// A key other than a modifier was pressed.
+    pub fn key_pressed(&mut self) {
+        if matches!(self, Self::Held { .. }) {
+            *self = Self::Shortcut;
+        }
+    }
+
+    /// The pointer moved or a button was pressed.
+    pub fn pointer_used(&mut self) {
+        if *self != Self::Released {
+            *self = Self::Pointing;
+        }
+    }
+
+    /// Whether a multiplexer may be asked now; a resting press remembers
+    /// that a candidate waits, so that its timer runs.
+    fn may_ask(&mut self) -> bool {
+        match self {
+            Self::Pointing => true,
+            Self::Held { waits, .. } => {
+                *waits = true;
+                false
+            }
+            Self::Released | Self::Shortcut => false,
+        }
+    }
+
+    /// When a resting press starts pointing, if a candidate waits.
+    pub fn due(&self) -> Option<Instant> {
+        match *self {
+            Self::Held { since, waits: true } => Some(since + MUX_DIR_DELAY),
+            _ => None,
+        }
+    }
+
+    /// Start pointing if `due` has passed; returns whether it did.
+    pub fn run_timer(&mut self, now: Instant) -> bool {
+        if self.due().is_some_and(|due| now >= due) {
+            *self = Self::Pointing;
+            return true;
+        }
+        false
+    }
 }
 
 impl MouseState {
@@ -128,6 +214,29 @@ impl MouseState {
         known.dir = dir;
         self.relative_lookup = None;
         true
+    }
+
+    /// The link-lookup thread answered. Returns whether the candidate
+    /// looked up last waited for it.
+    pub fn relative_found(&mut self, answer: Answer) -> bool {
+        match &mut self.relative_lookup {
+            Some(seen) if seen.id == answer.id && seen.answer.is_none() => {
+                seen.answer = Some(answer.target);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Have `pane`'s multiplexer asked for its directory, once per press of
+    /// the link modifier and only once the press points at links.
+    fn ask_mux_dir(&mut self, pane: PaneId) {
+        if let Some(known) = self.mux_dir.as_mut().filter(|k| k.pane == pane && !k.asked)
+            && self.link_press.may_ask()
+        {
+            known.asked = true;
+            self.mux_dir_request = Some((pane, known.mux.clone()));
+        }
     }
 }
 
@@ -164,7 +273,11 @@ fn relative_base(pane: &Pane) -> Option<BaseDir> {
                 dir,
             })
         }
-        _ => pane.term.working_directory().map(BaseDir::Local),
+        _ => pane
+            .term
+            .foreground_info(true)
+            .working_directory
+            .map(BaseDir::Local),
     }
 }
 
@@ -328,6 +441,7 @@ impl WindowState {
         };
         // Nothing under an open menu reacts to the pointer.
         let held = held && self.menu.is_none();
+        self.mouse.link_press.update(held, Instant::now());
         let found = self.mouse.position.filter(|_| held).and_then(|pos| {
             let id = self.pane_at(config, pos)?;
             let point = self.cell_in(config, id, pos);
@@ -338,6 +452,7 @@ impl WindowState {
         // multiplexer may show another pane.
         if !held {
             self.mouse.relative_lookup = None;
+            self.mouse.relative_request = None;
             if let Some(known) = &mut self.mouse.mux_dir {
                 known.asked = false;
             }
@@ -359,10 +474,11 @@ impl WindowState {
         true
     }
 
-    /// Where a click on `link` in pane `id` leads, `None` if nowhere. A
-    /// relative path is looked up on disk once per pane and text; in a
-    /// pane running herdr or tmux, from the directory of its focused pane,
-    /// which the app is asked to look up first.
+    /// Where a click on `link` in pane `id` leads, `None` if nowhere or not
+    /// known yet. A relative path is looked up on disk once per pane and
+    /// text, by the app's link-lookup thread; in a pane running herdr or
+    /// tmux, from the directory of its focused pane, which the app is asked
+    /// to look up first.
     fn link_target(&mut self, config: &Config, id: PaneId, link: &Link) -> Option<Target> {
         match link.kind {
             LinkKind::Url => Some(Target::Url(link.url.clone())),
@@ -374,23 +490,27 @@ impl WindowState {
                     && seen.pane == id
                     && seen.text == link.url
                 {
-                    return seen.target.clone();
+                    // Found with the directory of an earlier press: this one asks too.
+                    let answer = seen.answer.clone().flatten();
+                    self.mouse.ask_mux_dir(id);
+                    return answer;
                 }
                 let base = match crate::mux::pane_mux(self.content().pane(id)?, config) {
                     Some(mux) => {
-                        let known = match &mut self.mouse.mux_dir {
-                            Some(known) if known.pane == id => known,
-                            other => other.insert(MuxDir {
-                                pane: id,
-                                asked: false,
-                                answered: false,
-                                dir: None,
-                            }),
-                        };
-                        if !known.asked {
-                            known.asked = true;
-                            self.mouse.mux_dir_request = Some((id, mux.clone()));
+                        match &mut self.mouse.mux_dir {
+                            Some(known) if known.pane == id => known.mux = mux.clone(),
+                            other => {
+                                *other = Some(MuxDir {
+                                    pane: id,
+                                    mux: mux.clone(),
+                                    asked: false,
+                                    answered: false,
+                                    dir: None,
+                                });
+                            }
                         }
+                        self.mouse.ask_mux_dir(id);
+                        let known = self.mouse.mux_dir.as_ref()?;
                         // Not cached until the first answer: it looks again then.
                         if !known.answered {
                             return None;
@@ -399,13 +519,29 @@ impl WindowState {
                     }
                     None => relative_base(self.content().pane(id)?),
                 };
-                let target = base.and_then(|base| crate::link::relative_target(&link.url, &base));
+                let Some(base) = base else {
+                    self.mouse.relative_lookup = Some(RelativeLookup {
+                        id: 0,
+                        pane: id,
+                        text: link.url.clone(),
+                        answer: Some(None),
+                    });
+                    return None;
+                };
+                let lookup = self.mouse.next_lookup;
+                self.mouse.next_lookup += 1;
                 self.mouse.relative_lookup = Some(RelativeLookup {
+                    id: lookup,
                     pane: id,
                     text: link.url.clone(),
-                    target: target.clone(),
+                    answer: None,
                 });
-                target
+                self.mouse.relative_request = Some(Request {
+                    id: lookup,
+                    text: link.url.clone(),
+                    base,
+                });
+                None
             }
         }
     }
@@ -654,6 +790,37 @@ fn autoscroll_speed(y: f32, top: f32, bottom: f32, cell_height: f32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multiplexers_are_asked_only_when_pointing_at_links() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        let mut press = LinkPress::default();
+        press.update(true, t0);
+        assert!(!press.may_ask());
+        assert_eq!(press.due(), Some(t0 + MUX_DIR_DELAY));
+        assert!(!press.run_timer(t0 + MUX_DIR_DELAY - ms(1)));
+
+        // Ctrl+C and the like: only the pointer asks.
+        press.key_pressed();
+        assert_eq!(press.due(), None);
+        assert!(!press.run_timer(t0 + ms(1000)));
+        assert!(!press.may_ask());
+        press.pointer_used();
+        assert!(press.may_ask());
+
+        // Resting on a candidate asks once the delay passed.
+        press.update(false, t0);
+        press.update(true, t0);
+        assert!(!press.may_ask());
+        assert!(press.run_timer(t0 + MUX_DIR_DELAY));
+        assert!(press.may_ask());
+
+        // Without the modifier the pointer asks nothing.
+        press.update(false, t0);
+        press.pointer_used();
+        assert!(!press.may_ask());
+    }
 
     #[test]
     fn scrolling_adds_up_fractions_of_a_line() {

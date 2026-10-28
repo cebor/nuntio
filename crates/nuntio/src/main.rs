@@ -10,6 +10,7 @@ mod ime;
 mod input;
 mod kitty_keys;
 mod link;
+mod link_lookup;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod menu;

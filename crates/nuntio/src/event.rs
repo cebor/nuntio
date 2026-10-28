@@ -68,6 +68,8 @@ pub enum UserEvent {
     /// The directory of the focused pane of the multiplexer running in a
     /// pane, asked for a relative link there; `None` if it can't tell.
     MuxDir(PaneId, Option<String>),
+    /// The link-lookup thread answered: `Core::link_looked_up` collects it.
+    LinkLookedUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

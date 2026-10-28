@@ -393,6 +393,8 @@ struct Core {
     synthetic_input: bool,
     /// herdr and tmux: the service watching them and what it found.
     mux: app_mux::MuxState,
+    /// Looks relative link candidates up on disk; started on first use.
+    link_lookups: Option<crate::link_lookup::Lookups>,
     #[cfg(feature = "debug-server")]
     debug: debug_server::DebugState,
 }
@@ -493,6 +495,7 @@ impl Core {
             menu_bar: None,
             synthetic_input: false,
             mux: Default::default(),
+            link_lookups: None,
             #[cfg(feature = "debug-server")]
             debug: Default::default(),
         };
@@ -1520,6 +1523,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::MuxDir(pane, dir) => core.mux_dir_found(state, pane, dir),
+            UserEvent::LinkLookedUp => core.link_looked_up(state),
             // The rest needs the window.
             UserEvent::Term(pane, event) => {
                 if let Some(state) = state {

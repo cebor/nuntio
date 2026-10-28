@@ -83,7 +83,7 @@ flowchart TD
 |Crate|Owns|Must not know about|
 |---|---|---|
 |[`nuntio`](crates/nuntio)|The winit loop, `App`/`Core`/`WindowState`, tabs, `PaneTree`, input encoding, actions, overlays (tab bar, status bar, find bar, banner, menus), background services, the debug server. No lib target: `app_input.rs`, `app_panes.rs`, `app_mux.rs`, `app_update.rs` and `debug_server.rs` are child modules of `app.rs` via `#[path]`, so they reach private `Core` state; likewise `update_install.rs` is the child module `update::install` of `update.rs`.|—|
-|[`nuntio-term`](crates/nuntio-term)|One PTY and IO thread per pane, ownership of the `Term`, image scanning, decoding and storage, `Snapshot`, palette, search, links: URLs, absolute paths and relative path candidates (`url::link_at` also joins links a program broke across rows, judging each panel between box-drawing separators, U+2500..259F, on its own; `nuntio::link` resolves paths per system and WSL distribution, and `window_pointer.rs` looks a relative candidate up on disk once per hovered word, from the pane's working directory; in a herdr or tmux pane from its focused pane's, which `Core::refresh_hover_link` asks the tool for on a worker thread, `MuxPane::focused_dir`), cwd and foreground process.|winit, wgpu|
+|[`nuntio-term`](crates/nuntio-term)|One PTY and IO thread per pane, ownership of the `Term`, image scanning, decoding and storage, `Snapshot`, palette, search, links: URLs, absolute paths and relative path candidates (`url::link_at` also joins links a program broke across rows, judging each panel between box-drawing separators, U+2500..259F, on its own; `nuntio::link` resolves paths per system and WSL distribution, and `window_pointer.rs` has a relative candidate looked up on disk once per hovered word by the `link-lookup` thread, from the pane's working directory; in a herdr or tmux pane from its focused pane's, which `Core::refresh_hover_link` asks the tool for on a worker thread (`MuxPane::focused_dir`) once the link modifier rests 150 ms without another key or the pointer moves), cwd and foreground process.|winit, wgpu|
 |[`nuntio-render`](crates/nuntio-render)|wgpu, fonts, glyph and image atlases. Input is only a `Frame` and `nuntio_term::Snapshot`.|config, tabs, winit beyond raw window handles|
 |[`nuntio-config`](crates/nuntio-config)|Config types, `schema.rs`, loading and validation, `edit.rs`, themes, `keys.rs`, the file watcher, shell and WSL detection (`detect.rs`).|any other nuntio crate|
 |[`nuntio-config-tui`](crates/nuntio-config-tui)|The ratatui settings editor: its logic in `state.rs` (behind the `Store` trait) and `state_keys.rs` (key handling), the state of its choice list and the key mapping of its text input in `widgets.rs`, the splitting of program arguments in `args.rs`; `ui.rs` draws.|the running nuntio|
@@ -113,6 +113,8 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |`update-install`|`update::install::start`|downloads, checks and installs a release package update, reports `UserEvent::UpdateInstalled`|after one install|
 |`clipboard-read`|`Core::request_paste`|reads the clipboard off the main thread|after one read|
 |`link-open`|`Core::open_link`|runs `link::check` / `link::open_path` and opens the URL or path|after one link|
+|`link-lookup`|`link_lookup::Lookups::start` (first relative link)|looks relative link candidates up on disk, one at a time; the main thread waits up to 50 ms|`Lookups` dropped|
+|`mux-directory`|`Core::look_up_mux_dir`|asks herdr or tmux for its focused pane's directory (`MuxPane::focused_dir`)|after one answer|
 |`multiplexers`|`mux/service.rs` `MuxService::start`|finds herdr/tmux (also in WSL), lists sessions, machines, key bindings and the project every 60 s and when the shell menu opens; owns the agent monitors|`MuxService` dropped|
 |`herdr agents`|`mux/agents.rs` `Monitor::start`|one per running herdr session: `agent.list` and `events.subscribe` on its socket|`Monitor` dropped or the session ends|
 |`font preload`|`nuntio_render::preload_fonts`|builds the `FontSystem` while the window and GPU start|joined by `Fonts::new`|
@@ -134,6 +136,8 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |`Mux(Box<MuxSnapshot>)`|multiplexers|`mux_snapshot`: kept for the shell menu and forwarding|
 |`Agents(AgentsUpdate)`|herdr agents|`agents_update`: status bar item, tab markers, banner|
 |`MuxOpen(MuxOpen)`|multiplexers|`open_mux`: switch to the session's tab or open one|
+|`MuxDir(PaneId, Option<String>)`|mux-directory|`mux_dir_found`|
+|`LinkLookedUp`|link-lookup|`link_looked_up`|
 
 `TermEvent` handling on the main thread:
 

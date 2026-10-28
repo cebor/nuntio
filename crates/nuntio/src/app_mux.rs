@@ -377,27 +377,9 @@ impl Core {
         self.show_agents(state);
     }
 
-    /// `WindowState::refresh_hover_link`, then ask the multiplexer for the
-    /// directory a relative link in its pane starts from, if one is needed.
-    /// Returns whether the link changed.
-    pub(super) fn refresh_hover_link(&mut self, state: &mut WindowState) -> bool {
-        let changed = state.refresh_hover_link(&self.config);
-        if let Some((pane, mux)) = state.mouse.mux_dir_request.take() {
-            self.look_up_mux_dir(pane, mux);
-        }
-        changed
-    }
-
-    /// `refresh_hover_link`, and redraw if the link changed.
-    pub(super) fn update_hover_link(&mut self, state: &mut WindowState) {
-        if self.refresh_hover_link(state) {
-            state.window.request_redraw();
-        }
-    }
-
     /// Ask `mux`, running in `pane`, for its focused pane's directory on a
     /// worker thread: it runs the tool's client, in WSL through `wsl.exe`.
-    fn look_up_mux_dir(&self, pane: PaneId, mux: MuxPane) {
+    pub(super) fn look_up_mux_dir(&self, pane: PaneId, mux: MuxPane) {
         let program = self
             .mux
             .snapshot

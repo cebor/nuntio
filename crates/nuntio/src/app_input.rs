@@ -18,8 +18,9 @@ use super::app_panes::CloseTarget;
 use super::{Confirmation, Core};
 use crate::actions::Action;
 use crate::banner::{Banner, Severity, Topic};
-use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted};
+use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted, UserEvent};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
+use crate::link_lookup::{Answer, Lookups, Request};
 use crate::menu::{MenuKind, Step};
 use crate::mouse::{Button, MouseAction};
 use crate::pane_tree::Axis;
@@ -418,6 +419,9 @@ impl Core {
     // ----- Keyboard ----------------------------------------------------------
 
     pub(crate) fn keyboard_input(&mut self, state: &mut WindowState, event: &KeyPress) {
+        if event.kind == KeyEventKind::Press && !input::is_modifier(&event.logical) {
+            state.mouse.link_press.key_pressed();
+        }
         let kind = event.kind;
         // The release of a key nuntio used is nuntio's too.
         let used = state.used_keys.remove(&event.physical);
@@ -557,6 +561,90 @@ impl Core {
 
     // ----- Mouse -------------------------------------------------------------
 
+    /// `WindowState::refresh_hover_link`, then start the lookups it asks for:
+    /// a relative candidate on disk (an answer that comes in time applies at
+    /// once) and a multiplexer's directory. Returns whether the link changed.
+    pub(super) fn refresh_hover_link(&mut self, state: &mut WindowState) -> bool {
+        let mut changed = state.refresh_hover_link(&self.config);
+        if let Some(request) = state.mouse.relative_request.take()
+            && self.look_up_relative(state, request)
+        {
+            changed |= state.refresh_hover_link(&self.config);
+        }
+        if let Some((pane, mux)) = state.mouse.mux_dir_request.take() {
+            self.look_up_mux_dir(pane, mux);
+        }
+        changed
+    }
+
+    /// `refresh_hover_link`, and redraw if the link changed.
+    pub(super) fn update_hover_link(&mut self, state: &mut WindowState) {
+        if self.refresh_hover_link(state) {
+            state.window.request_redraw();
+        }
+    }
+
+    /// Hand `request` to the link-lookup thread, started on first use;
+    /// returns whether an answer the hovered candidate waits for came in time.
+    fn look_up_relative(&mut self, state: &mut WindowState, request: Request) -> bool {
+        if self.link_lookups.is_none() {
+            let proxy = self.proxy.clone();
+            match Lookups::start(move || {
+                let _ = proxy.send_event(UserEvent::LinkLookedUp);
+            }) {
+                Ok(lookups) => self.link_lookups = Some(lookups),
+                Err(err) => {
+                    tracing::warn!("can't start the link lookup thread: {err}");
+                    return false;
+                }
+            }
+        }
+        let answers = self.link_lookups.as_mut().and_then(|l| l.ask(request));
+        self.apply_link_answers(state, answers)
+    }
+
+    /// The link-lookup thread answered.
+    pub(super) fn link_looked_up(&mut self, state: Option<&mut WindowState>) {
+        let Some(lookups) = &mut self.link_lookups else {
+            return;
+        };
+        let answers = lookups.collect();
+        match state {
+            Some(state) => {
+                if self.apply_link_answers(state, answers) {
+                    self.update_hover_link(state);
+                }
+            }
+            None => {
+                if answers.is_none() {
+                    self.link_lookup_gone();
+                }
+            }
+        }
+    }
+
+    /// Give `answers` to the hover state; returns whether the hovered
+    /// candidate waited for one. `None`: the thread is gone.
+    fn apply_link_answers(
+        &mut self,
+        state: &mut WindowState,
+        answers: Option<Vec<Answer>>,
+    ) -> bool {
+        let Some(answers) = answers else {
+            self.link_lookup_gone();
+            return false;
+        };
+        answers
+            .into_iter()
+            .fold(false, |hit, a| state.mouse.relative_found(a) | hit)
+    }
+
+    /// The link-lookup thread ended; the next request starts a new one.
+    fn link_lookup_gone(&mut self) {
+        tracing::warn!("the link lookup thread is gone");
+        self.link_lookups = None;
+    }
+
     pub(super) fn mouse_input(
         &mut self,
         state: &mut WindowState,
@@ -566,6 +654,7 @@ impl Core {
         // Open the link that is under the pointer now, not the one that
         // was there when it last moved.
         if pressed {
+            state.mouse.link_press.pointer_used();
             self.update_hover_link(state);
         }
         let button = match button {
@@ -848,6 +937,7 @@ impl Core {
     }
 
     pub(super) fn cursor_moved(&mut self, state: &mut WindowState, pos: PhysicalPosition<f64>) {
+        let moved = state.mouse.position != Some(pos);
         state.mouse.position = Some(pos);
         if state.menu.is_some() {
             self.cursor_over_menu(state, pos);
@@ -858,6 +948,9 @@ impl Core {
                 self.grab_window(state, Grab::Move);
             }
             return;
+        }
+        if moved {
+            state.mouse.link_press.pointer_used();
         }
         self.update_hover_link(state);
         if let Some(divider) = state.mouse.divider_drag.clone() {
