@@ -101,7 +101,7 @@ impl Core {
     /// Open the page of the newer release.
     pub(super) fn open_update(&mut self) {
         if let Some(url) = self.update.available.as_ref().map(|u| u.url.clone()) {
-            self.open_url(&url);
+            self.open_link(crate::link::Target::Url(url));
         }
     }
 

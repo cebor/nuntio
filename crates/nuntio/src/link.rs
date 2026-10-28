@@ -1,14 +1,16 @@
-//! Links under the pointer: the hint that shows where one leads, and the
-//! check before opening it. OSC 8 links can show any text, so the text
-//! doesn't tell where a click goes; and a `file://` link to a program
-//! would run it on macOS and Windows.
+//! Links under the pointer: where one leads, the hint that shows it, and
+//! the check before opening it. OSC 8 links can show any text, so the text
+//! doesn't tell where a click goes; and a `file://` link or a path to a
+//! program would run it on macOS and Windows.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use nuntio_render::{Rect, UiRect, UiText};
 use unicode_width::UnicodeWidthStr;
 
 use crate::style::{Corner, Palette, UiMetrics, corner_box, truncate, truncate_start};
+use crate::wsl::Distro;
 
 /// Distance from the pane's bottom corner, in logical pixels.
 const MARGIN: f64 = 6.0;
@@ -120,13 +122,18 @@ pub fn check(url: &str) -> Result<(), String> {
     let Some(path) = file_path(url, &local_host(), drives)? else {
         return Ok(());
     };
+    check_path(&path, drives)
+}
+
+/// Why the file `path` must not be opened, if it mustn't.
+fn check_path(path: &Path, drives: Drives) -> Result<(), String> {
     // By name first: a missing file with a program extension is refused too.
-    if has_program_extension(&path) {
+    if has_program_extension(path) {
         return Err(PROGRAM.into());
     }
     // What the path really names: `Evil.app/Contents/..` or a symlink can
     // hide a program.
-    let path = match std::fs::canonicalize(&path) {
+    let path = match std::fs::canonicalize(path) {
         Ok(path) => path,
         // A missing file can't run; the opener reports it.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -147,6 +154,110 @@ pub fn check(url: &str) -> Result<(), String> {
 pub fn open(url: &str) -> Result<(), String> {
     check(url).map_err(|reason| format!("not opening {url}: {reason}"))?;
     open::that_detached(url).map_err(|err| format!("failed to open {url}: {err}"))
+}
+
+/// Open the file or directory `path` with the system's opener after
+/// `check_path`; it must exist. The error is the text for the user. May
+/// block on the file system: don't call it from the UI thread.
+pub fn open_path(path: &Path) -> Result<(), String> {
+    let shown = path.display();
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return Err(format!("not opening {shown}: it does not exist")),
+        Err(err) => return Err(format!("not opening {shown}: it can't be checked ({err})")),
+    }
+    check_path(path, Drives::current())
+        .map_err(|reason| format!("not opening {shown}: {reason}"))?;
+    open::that_detached(path).map_err(|err| format!("failed to open {shown}: {err}"))
+}
+
+/// Where a click on a link leads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    Url(String),
+    Path(PathBuf),
+    /// `~/rest` in a WSL distribution: its home is looked up when opened.
+    WslHome {
+        distro: Distro,
+        rest: String,
+    },
+}
+
+impl Target {
+    /// The text of the hint that shows where it leads.
+    pub fn hint(&self) -> Cow<'_, str> {
+        match self {
+            Self::Url(url) => Cow::Borrowed(url),
+            Self::Path(path) => path.to_string_lossy(),
+            Self::WslHome { rest, .. } => Cow::Owned(format!("~/{rest}")),
+        }
+    }
+}
+
+/// Where the path link `text` leads from a pane whose shell runs in `wsl`,
+/// `None` if nowhere here.
+pub fn path_target(text: &str, wsl: Option<&Distro>) -> Option<Target> {
+    let home = dirs::home_dir();
+    resolve_path(
+        text,
+        wsl,
+        Drives::current(),
+        home.as_deref().and_then(Path::to_str),
+    )
+}
+
+/// [`path_target`] with the system's `drives` and `home` directory. Builds
+/// strings rather than joining paths, so that Windows paths come out the
+/// same on every platform. A pane's WSL distribution only matters on
+/// Windows.
+fn resolve_path(
+    text: &str,
+    wsl: Option<&Distro>,
+    drives: Drives,
+    home: Option<&str>,
+) -> Option<Target> {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+    {
+        let path = match drives {
+            Drives::Windows => text.to_owned(),
+            Drives::Wsl => crate::wsl::drive_path(char::from(bytes[0]), &text[2..]),
+            Drives::Unsupported => return None,
+        };
+        return Some(Target::Path(path.into()));
+    }
+    let wsl = wsl.filter(|_| drives == Drives::Windows);
+    if let Some(rest) = text.strip_prefix("~/") {
+        let path = match (drives, wsl) {
+            (_, Some(distro)) => {
+                return Some(Target::WslHome {
+                    distro: distro.clone(),
+                    rest: rest.to_owned(),
+                });
+            }
+            (Drives::Windows, None) => format!(
+                "{}\\{}",
+                home?.trim_end_matches('\\'),
+                rest.replace('/', "\\")
+            ),
+            _ => format!("{}/{rest}", home?.trim_end_matches('/')),
+        };
+        return Some(Target::Path(path.into()));
+    }
+    if !text.starts_with('/') {
+        return None;
+    }
+    match (drives, wsl) {
+        (_, Some(distro)) => Some(Target::Path(
+            crate::wsl::windows_path_in(text, &distro.name).into(),
+        )),
+        // cmd and PowerShell take `/s` switches, and `/x` names no drive.
+        (Drives::Windows, None) => None,
+        _ => Some(Target::Path(text.into())),
+    }
 }
 
 fn local_host() -> String {
@@ -613,5 +724,44 @@ mod tests {
             hint_text("https://accounts.google.com.evil.io/x", 10),
             "…m.evil.io"
         );
+    }
+
+    #[test]
+    fn paths_resolve_per_system() {
+        let ubuntu = Distro {
+            name: "Ubuntu".into(),
+            user: None,
+        };
+        let path = |p: &str| Some(Target::Path(PathBuf::from(p)));
+        let resolve = |text, wsl, drives, home| resolve_path(text, wsl, drives, home);
+
+        let unix = |text| resolve(text, None, Drives::Unsupported, Some("/home/me"));
+        assert_eq!(unix("/etc/hosts"), path("/etc/hosts"));
+        assert_eq!(unix("~/x/y"), path("/home/me/x/y"));
+        assert_eq!(resolve("~/x/y", None, Drives::Unsupported, None), None);
+        assert_eq!(unix(r"C:\x"), None);
+
+        let wsl = |text| resolve(text, None, Drives::Wsl, Some("/home/me"));
+        assert_eq!(wsl(r"C:\Users\me\a.txt"), path("/mnt/c/Users/me/a.txt"));
+        assert_eq!(wsl("D:/x"), path("/mnt/d/x"));
+
+        let in_ubuntu = |text| resolve(text, Some(&ubuntu), Drives::Windows, Some(r"C:\Users\me"));
+        assert_eq!(
+            in_ubuntu("/home/me/a.txt"),
+            path(r"\\wsl$\Ubuntu\home\me\a.txt")
+        );
+        assert_eq!(in_ubuntu("/mnt/c/x/y"), path(r"C:\x\y"));
+        assert_eq!(
+            in_ubuntu("~/a/b"),
+            Some(Target::WslHome {
+                distro: ubuntu.clone(),
+                rest: "a/b".into()
+            })
+        );
+        assert_eq!(in_ubuntu(r"C:\x"), path(r"C:\x"));
+
+        let windows = |text| resolve(text, None, Drives::Windows, Some(r"C:\Users\me"));
+        assert_eq!(windows("/s"), None);
+        assert_eq!(windows("~/a/b"), path(r"C:\Users\me\a\b"));
     }
 }

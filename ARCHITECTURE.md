@@ -83,7 +83,7 @@ flowchart TD
 |Crate|Owns|Must not know about|
 |---|---|---|
 |[`nuntio`](crates/nuntio)|The winit loop, `App`/`Core`/`WindowState`, tabs, `PaneTree`, input encoding, actions, overlays (tab bar, status bar, find bar, banner, menus), background services, the debug server. No lib target: `app_input.rs`, `app_panes.rs`, `app_mux.rs`, `app_update.rs` and `debug_server.rs` are child modules of `app.rs` via `#[path]`, so they reach private `Core` state; likewise `update_install.rs` is the child module `update::install` of `update.rs`.|—|
-|[`nuntio-term`](crates/nuntio-term)|One PTY and IO thread per pane, ownership of the `Term`, image scanning, decoding and storage, `Snapshot`, palette, search, URLs (`url::link_at` also joins links a program broke across rows, judging each panel between box-drawing separators, U+2500..259F, on its own), cwd and foreground process.|winit, wgpu|
+|[`nuntio-term`](crates/nuntio-term)|One PTY and IO thread per pane, ownership of the `Term`, image scanning, decoding and storage, `Snapshot`, palette, search, links: URLs and absolute paths (`url::link_at` also joins links a program broke across rows, judging each panel between box-drawing separators, U+2500..259F, on its own; `nuntio::link` resolves paths per system and WSL distribution), cwd and foreground process.|winit, wgpu|
 |[`nuntio-render`](crates/nuntio-render)|wgpu, fonts, glyph and image atlases. Input is only a `Frame` and `nuntio_term::Snapshot`.|config, tabs, winit beyond raw window handles|
 |[`nuntio-config`](crates/nuntio-config)|Config types, `schema.rs`, loading and validation, `edit.rs`, themes, `keys.rs`, the file watcher, shell and WSL detection (`detect.rs`).|any other nuntio crate|
 |[`nuntio-config-tui`](crates/nuntio-config-tui)|The ratatui settings editor: its logic in `state.rs` (behind the `Store` trait) and `state_keys.rs` (key handling), the state of its choice list and the key mapping of its text input in `widgets.rs`, the splitting of program arguments in `args.rs`; `ui.rs` draws.|the running nuntio|
@@ -112,7 +112,7 @@ Only the main thread touches the window, the `Renderer` (which holds `Rc` and is
 |`update-check-now`|`update::check_now`|one manual check|after one check|
 |`update-install`|`update::install::start`|downloads, checks and installs a release package update, reports `UserEvent::UpdateInstalled`|after one install|
 |`clipboard-read`|`Core::request_paste`|reads the clipboard off the main thread|after one read|
-|`link-open`|`Core::open_url`|runs `link::check` and opens the link|after one link|
+|`link-open`|`Core::open_link`|runs `link::check` / `link::open_path` and opens the URL or path|after one link|
 |`multiplexers`|`mux/service.rs` `MuxService::start`|finds herdr/tmux (also in WSL), lists sessions, machines, key bindings and the project every 60 s and when the shell menu opens; owns the agent monitors|`MuxService` dropped|
 |`herdr agents`|`mux/agents.rs` `Monitor::start`|one per running herdr session: `agent.list` and `events.subscribe` on its socket|`Monitor` dropped or the session ends|
 |`font preload`|`nuntio_render::preload_fonts`|builds the `FontSystem` while the window and GPU start|joined by `Fonts::new`|
@@ -295,7 +295,7 @@ Close:
 3. The per-pane `ImageStore` dedupes by `ImageKey` and evicts by `IMAGE_MEMORY_BUDGET` / `IMAGE_MEMORY_LIMIT`.
 4. `image::place` ([`image.rs`](crates/nuntio-term/src/image.rs)) writes placeholder cells: char `PLACEHOLDER` (U+10EEEE), fg = the 24-bit image id, and two zero-width marks for row and column. Images therefore scroll, reflow, clear and get overwritten like text. If `ESC 7 CSI n A` comes right before the image (omp draws images upward from their last row), rows that would lie above line 0 are left out (`rows_above_screen`) instead of shifting the whole image down.
 5. `Snapshot.images` (runs of `ImagePiece`) feeds the renderer's image atlas.
-6. `CSI 16 t` is answered with the cell size. Copy (`strip_image_text`) and URL detection skip placeholder cells.
+6. `CSI 16 t` is answered with the cell size. Copy (`strip_image_text`) and link detection skip placeholder cells.
 
 Kitty graphics ([`kitty.rs`](crates/nuntio-term/src/kitty.rs)), which herdr sends to its outer terminal:
 

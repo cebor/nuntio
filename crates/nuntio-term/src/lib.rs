@@ -31,4 +31,4 @@ pub use search::{MatchPosition, Search, SearchError};
 pub use snapshot::{
     CellStyle, CursorStyle, MAX_ZEROWIDTH, Snapshot, SnapshotCell, SnapshotCursor, UnderlineStyle,
 };
-pub use url::Link;
+pub use url::{Link, LinkKind};

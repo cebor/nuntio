@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use nuntio_config::Config;
-use nuntio_term::{GridPoint, Link, TermMode};
+use nuntio_term::{GridPoint, Link, LinkKind, TermMode};
 use winit::dpi::PhysicalPosition;
 use winit::event::MouseScrollDelta;
 use winit::window::ResizeDirection;
@@ -12,6 +12,7 @@ use winit::window::ResizeDirection;
 use super::{Chrome, WindowState};
 use crate::event::PaneId;
 use crate::input;
+use crate::link::Target;
 use crate::mouse::{self, Button, ClickCounter, HeldButtons, MouseAction, MouseMods};
 use crate::pane_tree::{Axis, Divider};
 use crate::tab_bar::{BarHit, TabBar};
@@ -62,9 +63,17 @@ pub struct MouseState {
     /// to move.
     pub fullscreen_drag: Option<FullscreenDrag>,
     /// Link under the pointer while the link modifier is held.
-    pub hover_link: Option<(PaneId, Link)>,
+    pub hover_link: Option<HoverLink>,
     /// A selection drag is past the top or bottom of the pane and scrolls it.
     pub autoscroll: Option<Autoscroll>,
+}
+
+/// The link under the pointer and where a click on it leads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoverLink {
+    pub pane: PaneId,
+    pub link: Link,
+    pub target: Target,
 }
 
 impl MouseState {
@@ -243,11 +252,21 @@ impl WindowState {
         };
         // Nothing under an open menu reacts to the pointer.
         let held = held && self.menu.is_none();
+        // A path that leads nowhere here is no link.
         let link = self.mouse.position.filter(|_| held).and_then(|pos| {
             let id = self.pane_at(config, pos)?;
             let point = self.cell_in(config, id, pos);
-            let link = self.content().pane(id)?.term.link_at(point)?;
-            Some((id, link))
+            let pane = self.content().pane(id)?;
+            let link = pane.term.link_at(point)?;
+            let target = match link.kind {
+                LinkKind::Url => Target::Url(link.url.clone()),
+                LinkKind::Path => crate::link::path_target(&link.url, pane.wsl.as_ref())?,
+            };
+            Some(HoverLink {
+                pane: id,
+                link,
+                target,
+            })
         });
         if link == self.mouse.hover_link {
             return false;

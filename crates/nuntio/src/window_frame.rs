@@ -135,10 +135,10 @@ impl WindowState {
                 Some(search) if focused => pane.term.search_snapshot_into(search, &mut snapshot),
                 _ => pane.term.snapshot_into(&mut snapshot),
             }
-            if let Some((link_pane, link)) = &self.mouse.hover_link
-                && *link_pane == id
+            if let Some(hover) = &self.mouse.hover_link
+                && hover.pane == id
             {
-                underline(&mut snapshot, link);
+                underline(&mut snapshot, &hover.link);
             }
             if focused {
                 self.prepare_focused(config, &mut snapshot, rect);
@@ -198,8 +198,8 @@ impl WindowState {
 
         // Where the link under the pointer leads: OSC 8 links may show
         // other text.
-        if let Some((id, link)) = &self.mouse.hover_link
-            && let Some(mut rect) = layout.rect(*id)
+        if let Some(hover) = &self.mouse.hover_link
+            && let Some(mut rect) = layout.rect(hover.pane)
             && let Some(pos) = self.mouse.position
         {
             // Stay above the banner, which covers the bottom of the window.
@@ -208,7 +208,13 @@ impl WindowState {
                 rect.height = rect.height.min(top - rect.y).max(0.0);
             }
             let pointer = (pos.x as f32, pos.y as f32);
-            overlay.add(link::draw_hint(&link.url, rect, pointer, metrics, palette));
+            overlay.add(link::draw_hint(
+                &hover.target.hint(),
+                rect,
+                pointer,
+                metrics,
+                palette,
+            ));
         }
 
         if let Some(banner) = banner {
@@ -337,7 +343,7 @@ fn underline(snapshot: &mut Snapshot, link: &Link) {
 
 #[cfg(test)]
 mod tests {
-    use nuntio_term::{CellStyle, Rgb, SnapshotCell};
+    use nuntio_term::{CellStyle, LinkKind, Rgb, SnapshotCell};
 
     use super::*;
 
@@ -359,6 +365,7 @@ mod tests {
         };
         let link = Link {
             url: "https://x".into(),
+            kind: LinkKind::Url,
             start: (2, 0),
             end: (1, 1),
         };
@@ -382,6 +389,7 @@ mod tests {
         };
         let above = Link {
             url: "https://x".into(),
+            kind: LinkKind::Url,
             start: (3, -2),
             end: (0, 1),
         };

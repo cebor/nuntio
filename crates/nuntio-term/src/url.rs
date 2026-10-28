@@ -1,4 +1,5 @@
-//! Finding URLs in terminal text: OSC 8 hyperlinks and plain URLs.
+//! Finding links in terminal text: OSC 8 hyperlinks, plain URLs and
+//! absolute paths.
 
 use std::ops::{Range, RangeInclusive};
 
@@ -20,9 +21,20 @@ const MAX_WRAPPED_ROWS: usize = 32;
 /// padding and frame at those joints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
+    /// The URL, or for [`LinkKind::Path`] the path as the text shows it.
     pub url: String,
+    pub kind: LinkKind,
     pub start: (usize, i32),
     pub end: (usize, i32),
+}
+
+/// What a link's `url` holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    /// A URL (OSC 8 or plain text with a known scheme).
+    Url,
+    /// An absolute path as the text shows it: `/x`, `~/x`, `C:\x`, `C:/x`.
+    Path,
 }
 
 /// The link under a grid point, if any. Points outside the grid have none.
@@ -56,6 +68,7 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
             .map_or(points.len(), |i| index + i);
         return Some(Link {
             url: uri.to_owned(),
+            kind: LinkKind::Url,
             start: to_viewport(points[start]),
             end: to_viewport(points[end - 1]),
         });
@@ -81,11 +94,12 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     }
     first.push(chars.len());
     let cell_of = |char_index: usize| first.partition_point(|&f| f <= char_index) - 1;
-    let range = find_urls(&chars)
+    let (range, kind) = find_links(&chars)
         .into_iter()
-        .find(|r| r.start < first[index + 1] && r.end > first[index])?;
+        .find(|(r, _)| r.start < first[index + 1] && r.end > first[index])?;
     Some(Link {
         url: chars[range.clone()].iter().collect(),
+        kind,
         start: to_viewport(points[cell_of(range.start)]),
         end: to_viewport(points[cell_of(range.end - 1)]),
     })
@@ -264,31 +278,81 @@ fn is_delimiter(c: char) -> bool {
         || is_separator(c)
 }
 
-/// Ranges (in chars) of the URLs in `text`.
-pub(crate) fn find_urls(text: &[char]) -> Vec<Range<usize>> {
-    let mut urls = Vec::new();
+/// Ranges (in chars) of the URLs and absolute paths in `text`.
+pub(crate) fn find_links(text: &[char]) -> Vec<(Range<usize>, LinkKind)> {
+    let mut links = Vec::new();
     let mut i = 0;
     while i < text.len() {
         let scheme = SCHEMES.iter().find(|s| starts_with(&text[i..], s));
         let at_boundary = i == 0 || !text[i - 1].is_alphanumeric();
-        let Some(scheme) = scheme.filter(|_| at_boundary) else {
-            i += 1;
-            continue;
-        };
-        let body_start = i + scheme.len();
-        let mut end = body_start;
-        while end < text.len() && !is_delimiter(text[end]) {
-            end += 1;
-        }
-        end = trim_trailing(text, i, end);
-        if end > body_start {
-            urls.push(i..end);
-            i = end;
+        if let Some(scheme) = scheme.filter(|_| at_boundary) {
+            let body_start = i + scheme.len();
+            let mut end = body_start;
+            while end < text.len() && !is_delimiter(text[end]) {
+                end += 1;
+            }
+            end = trim_trailing(text, i, end);
+            if end > body_start {
+                links.push((i..end, LinkKind::Url));
+                i = end;
+            } else {
+                i = body_start;
+            }
+        } else if let Some(range) = find_path(text, i) {
+            i = range.end;
+            links.push((range, LinkKind::Path));
         } else {
-            i = body_start;
+            i += 1;
         }
     }
-    urls
+    links
+}
+
+/// Whether a path may start right after `c`. Not after `<`, so that
+/// `</div>` is no path.
+fn path_may_follow(c: char) -> bool {
+    c.is_whitespace()
+        || is_separator(c)
+        || matches!(
+            c,
+            '"' | '\'' | '`' | '(' | '[' | '{' | '=' | ',' | ';' | ':' | '>' | '|'
+        )
+}
+
+/// Characters of a path; `windows` paths also take `\`. A `:` ends every
+/// path, so a line suffix (`/x/a.rs:42:7`) is not part of it and the
+/// entries of `PATH=/usr/bin:/bin` are paths of their own.
+fn is_path_char(c: char, windows: bool) -> bool {
+    c != ':' && (!is_delimiter(c) || (windows && c == '\\'))
+}
+
+/// The absolute path starting at `start` in `text`, if any: `/x`, `~/x`,
+/// `C:\x` or `C:/x` at a boundary ([`path_may_follow`]), ending before
+/// the first character that is no [`is_path_char`] and without trailing
+/// punctuation.
+fn find_path(text: &[char], start: usize) -> Option<Range<usize>> {
+    if start > 0 && !path_may_follow(text[start - 1]) {
+        return None;
+    }
+    let (prefix, windows) = match text[start..] {
+        ['/', ..] => (1, false),
+        ['~', '/', ..] => (2, false),
+        [letter, ':', '\\' | '/', ..] if letter.is_ascii_alphabetic() => (3, true),
+        _ => return None,
+    };
+    let first = *text.get(start + prefix)?;
+    if !is_path_char(first, windows) || matches!(first, '/' | '\\') {
+        return None;
+    }
+    let mut end = start + prefix;
+    while end < text.len() && is_path_char(text[end], windows) {
+        end += 1;
+    }
+    let end = trim_trailing(text, start, end);
+    text[start + prefix..end]
+        .iter()
+        .any(|c| c.is_alphanumeric())
+        .then_some(start..end)
 }
 
 fn starts_with(text: &[char], prefix: &str) -> bool {
@@ -320,12 +384,59 @@ fn trim_trailing(text: &[char], start: usize, mut end: usize) -> usize {
 mod tests {
     use super::*;
 
-    fn urls(text: &str) -> Vec<String> {
+    fn links(text: &str, kind: LinkKind) -> Vec<String> {
         let chars: Vec<char> = text.chars().collect();
-        find_urls(&chars)
+        find_links(&chars)
             .into_iter()
-            .map(|r| chars[r].iter().collect())
+            .filter(|(_, k)| *k == kind)
+            .map(|(r, _)| chars[r].iter().collect())
             .collect()
+    }
+
+    fn urls(text: &str) -> Vec<String> {
+        links(text, LinkKind::Url)
+    }
+
+    fn paths(text: &str) -> Vec<String> {
+        links(text, LinkKind::Path)
+    }
+
+    #[test]
+    fn absolute_paths() {
+        assert_eq!(
+            paths("see /etc/hosts and ~/notes.md"),
+            ["/etc/hosts", "~/notes.md"]
+        );
+        assert_eq!(
+            paths(r"C:\Users\me\a.txt, D:/x"),
+            [r"C:\Users\me\a.txt", "D:/x"]
+        );
+        assert_eq!(paths("src/main.rs:4 /x/main.rs:42:7"), ["/x/main.rs"]);
+        assert_eq!(paths("PATH=/usr/bin:/bin"), ["/usr/bin", "/bin"]);
+        assert_eq!(paths("(/tmp/x)."), ["/tmp/x"]);
+        assert_eq!(paths("│/tmp/x▕"), ["/tmp/x"]);
+    }
+
+    #[test]
+    fn not_absolute_paths() {
+        assert!(paths("a/b ./x ../y km/h 1/2 // c //host/x / ~ ~/ /... ").is_empty());
+        assert!(paths(r"C:\ xC:\y").is_empty());
+        assert!(paths("</div>").is_empty());
+    }
+
+    #[test]
+    fn paths_inside_urls_are_not_paths() {
+        let text = "file:///tmp/a https://x.org/a/b";
+        assert!(paths(text).is_empty());
+        assert_eq!(urls(text), ["file:///tmp/a", "https://x.org/a/b"]);
+    }
+
+    #[test]
+    fn path_on_the_grid() {
+        let link = click(&term(b"open /tmp/a.txt now"), 8, 0).unwrap();
+        assert_eq!(link.url, "/tmp/a.txt");
+        assert_eq!(link.kind, LinkKind::Path);
+        assert_eq!((link.start, link.end), ((5, 0), (14, 0)));
     }
 
     #[test]

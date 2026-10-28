@@ -617,9 +617,9 @@ impl Core {
         {
             return;
         }
-        if left && let Some((_, link)) = &state.mouse.hover_link {
-            let url = link.url.clone();
-            self.open_url(&url);
+        if left && let Some(hover) = &state.mouse.hover_link {
+            let target = hover.target.clone();
+            self.open_link(target);
             return;
         }
         if left && let Some(divider) = state.divider_at(&self.config, pos) {
@@ -725,7 +725,7 @@ impl Core {
             }
         }
         if let Some(url) = url {
-            self.open_url(&url);
+            self.open_link(crate::link::Target::Url(url));
         }
         if let Some(action) = action {
             self.run_action(state, action);

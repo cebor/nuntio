@@ -101,6 +101,13 @@ pub fn windows_path(dir: &str) -> Option<String> {
     ))
 }
 
+/// Where Windows sees the absolute path `path` of `distro`: `/mnt/c/x` is
+/// `C:\x`, anything else is on the distribution's share (`\\wsl$\Ubuntu\home\x`).
+/// `\\wsl$` rather than `\\wsl.localhost`: older Windows 10 only has `\\wsl$`.
+pub fn windows_path_in(path: &str, distro: &str) -> String {
+    windows_path(path).unwrap_or_else(|| format!(r"\\wsl$\{distro}{}", path.replace('/', "\\")))
+}
+
 /// A Windows directory as a shell in `distro` sees it (see `wsl_path`);
 /// `None` inside another distribution or on a network share.
 pub fn linux_path_in(path: &str, distro: &str) -> Option<String> {
@@ -253,6 +260,19 @@ mod tests {
         assert_eq!(windows_path("~/code"), None);
         assert_eq!(windows_path("/"), None);
         assert_eq!(windows_path("/mnt/wsl/x"), None);
+    }
+
+    #[test]
+    fn linux_paths_are_seen_from_windows() {
+        assert_eq!(
+            windows_path_in("/home/me/a.txt", "Ubuntu"),
+            r"\\wsl$\Ubuntu\home\me\a.txt"
+        );
+        assert_eq!(windows_path_in("/mnt/c/x/y", "Ubuntu"), r"C:\x\y");
+        assert_eq!(
+            windows_path_in("/mnt/wsl/x", "Ubuntu"),
+            r"\\wsl$\Ubuntu\mnt\wsl\x"
+        );
     }
 
     #[test]

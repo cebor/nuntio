@@ -22,6 +22,7 @@ use crate::actions::Bindings;
 use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, MenuCommand, PaneId, PasteSource, Pasted, UserEvent};
 use crate::input::KeyPress;
+use crate::link::{self, Target};
 use crate::render_health::{GpuProbe, HealthAction};
 use crate::status_bar::Stats;
 use crate::sysmon::{SystemMonitor, is_sampled};
@@ -583,20 +584,34 @@ impl Core {
         self.replace_banner(Banner::new(Severity::Warning, topic, vec![message]));
     }
 
-    /// Open `url` in the browser, or say why not.
-    fn open_url(&mut self, url: &str) {
+    /// Open `target`, or say why not.
+    fn open_link(&mut self, target: Target) {
+        let shown = target.hint().into_owned();
         // Checking the target touches the file system, which can hang.
-        let owned = url.to_owned();
+        let job: Box<dyn FnOnce() -> Result<(), String> + Send> = match target {
+            Target::Url(url) => Box::new(move || link::open(&url)),
+            Target::Path(path) => Box::new(move || link::open_path(&path)),
+            Target::WslHome { distro, rest } => {
+                // Cached after the first lookup, as for new panes in `~`.
+                let Some(abs) = self.wsl_absolute(&distro, &format!("~/{rest}")) else {
+                    let problem = format!("not opening {shown}: found no home directory in WSL");
+                    self.notify(Banner::new(Severity::Warning, Topic::Link, vec![problem]));
+                    return;
+                };
+                let path = PathBuf::from(crate::wsl::windows_path_in(&abs, &distro.name));
+                Box::new(move || link::open_path(&path))
+            }
+        };
         let proxy = self.proxy.clone();
         let spawned = std::thread::Builder::new()
             .name("link-open".into())
             .spawn(move || {
-                if let Err(problem) = crate::link::open(&owned) {
+                if let Err(problem) = job() {
                     let _ = proxy.send_event(UserEvent::LinkFailed(problem));
                 }
             });
         if let Err(err) = spawned {
-            let problem = format!("failed to open {url}: {err}");
+            let problem = format!("failed to open {shown}: {err}");
             self.notify(Banner::new(Severity::Warning, Topic::Link, vec![problem]));
         }
     }
