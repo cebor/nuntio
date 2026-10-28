@@ -34,7 +34,8 @@ pub struct Link {
 pub enum LinkKind {
     /// A URL (OSC 8 or plain text with a known scheme).
     Url,
-    /// An absolute path as the text shows it: `/x`, `~/x`, `C:\x`, `C:/x`.
+    /// An absolute path as the text shows it: `/x`, `~/x`, `C:\x`, `C:/x`;
+    /// also the content of quotes that starts like one (`'/tmp/a b.txt'`).
     Path,
     /// A word, or the content of quotes, that may name a file relative to the
     /// pane's working directory: it is a link only if that file exists.
@@ -101,7 +102,20 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     let (range, kind) = find_links(&chars)
         .into_iter()
         .find(|(r, _)| r.start < first[index + 1] && r.end > first[index])
-        .or_else(|| relative_at(&chars, first[index]).map(|r| (r, LinkKind::Relative)))?;
+        .or_else(|| {
+            relative_at(&chars, first[index]).map(|r| {
+                // Quoted content that starts like an absolute path (`'/tmp/a b.txt'`).
+                let absolute = find_path(&chars, r.start).is_some();
+                (
+                    r,
+                    if absolute {
+                        LinkKind::Path
+                    } else {
+                        LinkKind::Relative
+                    },
+                )
+            })
+        })?;
     Some(Link {
         url: chars[range.clone()].iter().collect(),
         kind,
@@ -368,7 +382,9 @@ pub(crate) fn relative_at(text: &[char], at: usize) -> Option<Range<usize>> {
 }
 
 /// The content of `'…'` or `"…"` around `at`, as GNU ls quotes names with
-/// spaces or quotes. Shell escapes such as `'it'\''s'` are not decoded.
+/// spaces or quotes. A quote counts only at a word boundary: no letter or
+/// digit right before the opening one or right after the closing one. Shell
+/// escapes such as `'it'\''s'` are not decoded.
 fn quoted_at(text: &[char], at: usize) -> Option<Range<usize>> {
     ['\'', '"'].into_iter().find_map(|q| {
         if text[at] == q {
@@ -376,8 +392,9 @@ fn quoted_at(text: &[char], at: usize) -> Option<Range<usize>> {
         }
         let open = text[..at].iter().rposition(|&c| c == q)?;
         let close = at + text[at..].iter().position(|&c| c == q)?;
-        // An even number of quotes before `open` makes it an opening one.
-        if text[..open].iter().filter(|&&c| c == q).count() % 2 != 0 {
+        // Quotes at word boundaries only: the apostrophes of `can't` and `it's` quote nothing.
+        let is_text = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric());
+        if is_text(open.checked_sub(1).map(|i| &text[i])) || is_text(text.get(close + 1)) {
             return None;
         }
         let content = &text[open + 1..close];
@@ -641,6 +658,11 @@ mod tests {
         assert_eq!(relative("'a' and 'b'", 5), some("and"));
         // Content starting with a space is not quoted.
         assert_eq!(relative("' a'", 2), some("a"));
+        assert_eq!(
+            relative("\"it's.txt\"  'my file.txt'", 13),
+            some("my file.txt")
+        );
+        assert_eq!(relative("can't find a.txt, it's", 11), some("a.txt"));
     }
 
     #[test]
@@ -659,6 +681,10 @@ mod tests {
         // An absolute path still wins.
         let term = term(b"open /tmp/a.txt now");
         assert_eq!(click(&term, 8, 0).unwrap().kind, LinkKind::Path);
+        // So does quoted content that starts like one.
+        let link = click(&self::term(b"'/tmp/a b.txt'"), 8, 0).unwrap();
+        assert_eq!(link.url, "/tmp/a b.txt");
+        assert_eq!(link.kind, LinkKind::Path);
     }
 
     #[test]

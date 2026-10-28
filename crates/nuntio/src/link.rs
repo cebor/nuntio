@@ -4,7 +4,7 @@
 //! program would run it on macOS and Windows.
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use nuntio_render::{Rect, UiRect, UiText};
 use unicode_width::UnicodeWidthStr;
@@ -273,21 +273,35 @@ pub enum BaseDir {
 /// Where the relative path `text` leads from `base`, if a file or directory
 /// is there. Looks at the file system: the caller keeps the answer.
 pub fn relative_target(text: &str, base: &BaseDir) -> Option<Target> {
-    let path = relative_path(text, base);
+    let path = relative_path(text, base)?;
     path.exists().then_some(Target::Path(path))
 }
 
-/// `text` from `base`, without leading `./`.
-fn relative_path(mut text: &str, base: &BaseDir) -> PathBuf {
+/// `text` from `base`, without leading `./`. `None` unless `text` is
+/// relative: a root, drive or share would replace `base`, and merely looking
+/// at a network share sends the user's credentials to its host. On Windows a
+/// `Local` base must be local too ([`nuntio_term::is_local_windows_path`]).
+fn relative_path(mut text: &str, base: &BaseDir) -> Option<PathBuf> {
     while let Some(rest) = text.strip_prefix("./") {
         text = rest;
     }
+    let relative = Path::new(text).components().all(|c| {
+        matches!(
+            c,
+            Component::Normal(_) | Component::CurDir | Component::ParentDir
+        )
+    });
+    if !relative {
+        return None;
+    }
     match base {
-        BaseDir::Local(dir) => dir.join(text),
-        BaseDir::Wsl { distro, dir } => PathBuf::from(crate::wsl::windows_path_in(
+        BaseDir::Local(dir) => (!cfg!(windows)
+            || nuntio_term::is_local_windows_path(&dir.to_string_lossy()))
+        .then(|| dir.join(text)),
+        BaseDir::Wsl { distro, dir } => Some(PathBuf::from(crate::wsl::windows_path_in(
             &format!("{}/{text}", dir.trim_end_matches('/')),
             distro,
-        )),
+        ))),
     }
 }
 
@@ -542,26 +556,45 @@ mod tests {
 
     #[test]
     fn relative_paths_start_from_the_base() {
-        let local = BaseDir::Local("/home/me".into());
+        let home = if cfg!(windows) {
+            r"C:\home\me"
+        } else {
+            "/home/me"
+        };
+        let local = BaseDir::Local(home.into());
         assert_eq!(
             relative_path("./src/a.rs", &local),
-            PathBuf::from("/home/me/src/a.rs")
+            Some(Path::new(home).join("src/a.rs"))
         );
+        assert_eq!(
+            relative_path("../x", &local),
+            Some(Path::new(home).join("../x"))
+        );
+        assert_eq!(relative_path("/bin/true", &local), None);
+        #[cfg(windows)]
+        {
+            assert_eq!(relative_path(r"\\evil\share\x", &local), None);
+            assert_eq!(relative_path(r"C:\x", &local), None);
+            assert_eq!(
+                relative_path("a.txt", &BaseDir::Local(r"\\evil\share".into())),
+                None
+            );
+        }
         let wsl = |dir: &str| BaseDir::Wsl {
             distro: "Ubuntu".into(),
             dir: dir.into(),
         };
         assert_eq!(
             relative_path("a b.txt", &wsl("/home/me")),
-            PathBuf::from(r"\\wsl$\Ubuntu\home\me\a b.txt")
+            Some(PathBuf::from(r"\\wsl$\Ubuntu\home\me\a b.txt"))
         );
         assert_eq!(
             relative_path("y/z.txt", &wsl("/mnt/c/x")),
-            PathBuf::from(r"C:\x\y\z.txt")
+            Some(PathBuf::from(r"C:\x\y\z.txt"))
         );
         assert_eq!(
             relative_path("etc", &wsl("/")),
-            PathBuf::from(r"\\wsl$\Ubuntu\etc")
+            Some(PathBuf::from(r"\\wsl$\Ubuntu\etc"))
         );
     }
 

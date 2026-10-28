@@ -1155,7 +1155,7 @@ fn pick_directory(
     cwd.filter(|path| ok(path)).or_else(|| {
         let path = match reported? {
             ReportedDir::Posix(path) if cfg!(unix) => path,
-            ReportedDir::Windows(path) if cfg!(windows) && is_local(&path) => path,
+            ReportedDir::Windows(path) if cfg!(windows) && is_local_windows_path(&path) => path,
             _ => return None,
         };
         Some(PathBuf::from(path)).filter(|path| ok(path))
@@ -1166,7 +1166,8 @@ fn pick_directory(
 /// program's output can report one, and merely looking at a network share
 /// (`\\host\share`) sends the user's credentials to that host. Only drive
 /// paths (`C:\`, `c:/`) and shares of WSL distributions count as local.
-fn is_local(path: &str) -> bool {
+/// Used before nuntio looks at a Windows directory it didn't pick itself.
+pub fn is_local_windows_path(path: &str) -> bool {
     let bytes = path.as_bytes();
     if bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':') {
         return matches!(bytes.get(2), Some(b'\\' | b'/'));
@@ -1315,19 +1316,21 @@ mod tests {
 
     #[test]
     fn only_local_windows_directories_are_used() {
-        assert!(is_local(r"C:\Users\me"));
-        assert!(is_local(r"\\wsl.localhost\Ubuntu\home\me"));
-        assert!(is_local("//wsl.localhost/Ubuntu/home/me"));
-        assert!(is_local(r"\\WSL$\Debian"));
-        assert!(!is_local(r"\\evil\share"));
-        assert!(!is_local("//evil/share"));
-        assert!(!is_local(r"\\?\UNC\evil\share"));
-        assert!(!is_local(r"\\wsl.localhost.evil.com\x"));
-        assert!(is_local("C:/Users"));
-        assert!(!is_local(r"\??\UNC\evil\share"));
-        assert!(!is_local(r"\??\GLOBALROOT\Device\Mup\evil\share"));
-        assert!(!is_local(r"\evil"));
-        assert!(!is_local("C:foo"));
+        assert!(is_local_windows_path(r"C:\Users\me"));
+        assert!(is_local_windows_path(r"\\wsl.localhost\Ubuntu\home\me"));
+        assert!(is_local_windows_path("//wsl.localhost/Ubuntu/home/me"));
+        assert!(is_local_windows_path(r"\\WSL$\Debian"));
+        assert!(!is_local_windows_path(r"\\evil\share"));
+        assert!(!is_local_windows_path("//evil/share"));
+        assert!(!is_local_windows_path(r"\\?\UNC\evil\share"));
+        assert!(!is_local_windows_path(r"\\wsl.localhost.evil.com\x"));
+        assert!(is_local_windows_path("C:/Users"));
+        assert!(!is_local_windows_path(r"\??\UNC\evil\share"));
+        assert!(!is_local_windows_path(
+            r"\??\GLOBALROOT\Device\Mup\evil\share"
+        ));
+        assert!(!is_local_windows_path(r"\evil"));
+        assert!(!is_local_windows_path("C:foo"));
     }
 
     #[test]

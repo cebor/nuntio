@@ -25,7 +25,7 @@ pub use osc_cwd::{ReportedDir, wsl_share};
 pub use palette::{Palette, rgb};
 pub use pane::{
     ForegroundInfo, GridPoint, Program, SelectionKind, Shell, SpawnError, SpawnOptions, TermEvent,
-    TermHandle, TermOptions, TermSize, Transport, default_shell_name,
+    TermHandle, TermOptions, TermSize, Transport, default_shell_name, is_local_windows_path,
 };
 pub use search::{MatchPosition, Search, SearchError};
 pub use snapshot::{
