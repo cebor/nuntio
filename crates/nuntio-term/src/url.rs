@@ -99,23 +99,19 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     }
     first.push(chars.len());
     let cell_of = |char_index: usize| first.partition_point(|&f| f <= char_index) - 1;
-    let (range, kind) = find_links(&chars)
-        .into_iter()
-        .find(|(r, _)| r.start < first[index + 1] && r.end > first[index])
+    let at = first[index];
+    // Quoted content that starts like an absolute path (`'/tmp/a b.txt'`) is
+    // one path, also where the path search would stop at the space.
+    let quoted_path = quoted_at(&chars, at)
+        .filter(|r| find_path(&chars, r.start).is_some())
+        .map(|r| (r, LinkKind::Path));
+    let (range, kind) = quoted_path
         .or_else(|| {
-            relative_at(&chars, first[index]).map(|r| {
-                // Quoted content that starts like an absolute path (`'/tmp/a b.txt'`).
-                let absolute = find_path(&chars, r.start).is_some();
-                (
-                    r,
-                    if absolute {
-                        LinkKind::Path
-                    } else {
-                        LinkKind::Relative
-                    },
-                )
-            })
-        })?;
+            find_links(&chars)
+                .into_iter()
+                .find(|(r, _)| r.start < first[index + 1] && r.end > at)
+        })
+        .or_else(|| relative_at(&chars, at).map(|r| (r, LinkKind::Relative)))?;
     Some(Link {
         url: chars[range.clone()].iter().collect(),
         kind,
@@ -681,10 +677,13 @@ mod tests {
         // An absolute path still wins.
         let term = term(b"open /tmp/a.txt now");
         assert_eq!(click(&term, 8, 0).unwrap().kind, LinkKind::Path);
-        // So does quoted content that starts like one.
-        let link = click(&self::term(b"'/tmp/a b.txt'"), 8, 0).unwrap();
-        assert_eq!(link.url, "/tmp/a b.txt");
-        assert_eq!(link.kind, LinkKind::Path);
+        // So does quoted content that starts like one, on either side of a space.
+        let term = self::term(b"'/this/is/my/cool path'");
+        for column in [3, 14, 20] {
+            let link = click(&term, column, 0).unwrap();
+            assert_eq!(link.url, "/this/is/my/cool path", "column {column}");
+            assert_eq!(link.kind, LinkKind::Path);
+        }
     }
 
     #[test]
