@@ -252,6 +252,15 @@ fn reports_a_command_that_execs_after_taking_the_terminal() {
 }
 
 #[test]
+fn reports_the_working_directory() {
+    let mut helper = Helper::start(&["--", "sh", "-i"]);
+    helper.resize(80, 24);
+    let seen = helper.wait_for(b"\x1b]nuntio-wsl;cwd;", 0);
+    helper.data(b"cd /\n");
+    helper.wait_for(b"\x1b]nuntio-wsl;cwd;/\x07", seen);
+}
+
+#[test]
 fn the_socket_bridge_copies_both_ways() {
     use std::os::unix::net::UnixListener;
 

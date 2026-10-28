@@ -23,7 +23,7 @@ use polling::os::iocp::{CompletionPacket, PollerIocpExt};
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use crate::backend::BackendEvent;
-use crate::pane::RemoteForeground;
+use crate::pane::{Remote, RemoteForeground};
 use crate::sync::{lock, unpoisoned};
 
 const READ_SIZE: usize = 0x1_0000;
@@ -153,13 +153,13 @@ impl Shared {
 
 impl WslPipe {
     /// Start `program` (`wsl.exe` running nuntio-wsl) with the window `size`. The helper's
-    /// reports of the foreground process go to `foreground`.
+    /// reports go to `remote`.
     pub(crate) fn spawn(
         program: &str,
         args: &[String],
         env: &HashMap<String, String>,
         size: WindowSize,
-        foreground: Arc<Mutex<Option<RemoteForeground>>>,
+        remote: Arc<Mutex<Remote>>,
     ) -> io::Result<Self> {
         // No `current_dir`: `wsl.exe --cd` picks the directory.
         let mut child = Command::new(program)
@@ -221,10 +221,12 @@ impl WslPipe {
                 filter.feed(
                     &buf[..n],
                     |bytes| out.push(bytes),
-                    |marker| {
-                        if let Marker::Foreground { name, shell } = marker {
-                            *lock(&foreground) = Some(RemoteForeground { name, shell });
+                    |marker| match marker {
+                        Marker::Foreground { name, shell } => {
+                            lock(&remote).foreground = Some(RemoteForeground { name, shell });
                         }
+                        Marker::Directory(dir) => lock(&remote).directory = dir,
+                        Marker::Ready => {}
                     },
                 );
                 if !ready && filter.is_ready() {
@@ -234,7 +236,7 @@ impl WslPipe {
             }
             filter.finish(|bytes| out.push(bytes));
             // The helper is gone: a report about its shell would be stale.
-            *lock(&foreground) = None;
+            *lock(&remote) = Remote::default();
             out.reader_done();
         });
 

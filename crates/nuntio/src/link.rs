@@ -260,6 +260,37 @@ fn resolve_path(
     }
 }
 
+/// The directory relative paths in a pane start from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseDir {
+    /// A directory of this system.
+    Local(PathBuf),
+    /// An absolute Linux directory `dir` in the WSL distribution `distro`
+    /// (its name), seen from Windows.
+    Wsl { distro: String, dir: String },
+}
+
+/// Where the relative path `text` leads from `base`, if a file or directory
+/// is there. Looks at the file system: the caller keeps the answer.
+pub fn relative_target(text: &str, base: &BaseDir) -> Option<Target> {
+    let path = relative_path(text, base);
+    path.exists().then_some(Target::Path(path))
+}
+
+/// `text` from `base`, without leading `./`.
+fn relative_path(mut text: &str, base: &BaseDir) -> PathBuf {
+    while let Some(rest) = text.strip_prefix("./") {
+        text = rest;
+    }
+    match base {
+        BaseDir::Local(dir) => dir.join(text),
+        BaseDir::Wsl { distro, dir } => PathBuf::from(crate::wsl::windows_path_in(
+            &format!("{}/{text}", dir.trim_end_matches('/')),
+            distro,
+        )),
+    }
+}
+
 fn local_host() -> String {
     gethostname::gethostname().to_string_lossy().into_owned()
 }
@@ -507,6 +538,43 @@ mod tests {
         assert_eq!(program_extension("setup.exe . ."), Some("exe"));
         assert_eq!(program_extension("setup.exe::$DATA"), Some("exe"));
         assert_eq!(program_extension("notes"), None);
+    }
+
+    #[test]
+    fn relative_paths_start_from_the_base() {
+        let local = BaseDir::Local("/home/me".into());
+        assert_eq!(
+            relative_path("./src/a.rs", &local),
+            PathBuf::from("/home/me/src/a.rs")
+        );
+        let wsl = |dir: &str| BaseDir::Wsl {
+            distro: "Ubuntu".into(),
+            dir: dir.into(),
+        };
+        assert_eq!(
+            relative_path("a b.txt", &wsl("/home/me")),
+            PathBuf::from(r"\\wsl$\Ubuntu\home\me\a b.txt")
+        );
+        assert_eq!(
+            relative_path("y/z.txt", &wsl("/mnt/c/x")),
+            PathBuf::from(r"C:\x\y\z.txt")
+        );
+        assert_eq!(
+            relative_path("etc", &wsl("/")),
+            PathBuf::from(r"\\wsl$\Ubuntu\etc")
+        );
+    }
+
+    #[test]
+    fn relative_paths_lead_only_to_existing_files() {
+        let dir = TempDir::new("link-relative");
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+        let base = BaseDir::Local(dir.to_path_buf());
+        assert_eq!(
+            relative_target("notes.txt", &base),
+            Some(Target::Path(dir.join("notes.txt")))
+        );
+        assert_eq!(relative_target("missing.txt", &base), None);
     }
 
     #[test]

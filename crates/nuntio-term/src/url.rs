@@ -1,5 +1,5 @@
-//! Finding links in terminal text: OSC 8 hyperlinks, plain URLs and
-//! absolute paths.
+//! Finding links in terminal text: OSC 8 hyperlinks, plain URLs, absolute
+//! paths and relative path candidates.
 
 use std::ops::{Range, RangeInclusive};
 
@@ -21,7 +21,8 @@ const MAX_WRAPPED_ROWS: usize = 32;
 /// padding and frame at those joints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
-    /// The URL, or for [`LinkKind::Path`] the path as the text shows it.
+    /// The URL, or for [`LinkKind::Path`] and [`LinkKind::Relative`] the
+    /// path as the text shows it.
     pub url: String,
     pub kind: LinkKind,
     pub start: (usize, i32),
@@ -35,6 +36,9 @@ pub enum LinkKind {
     Url,
     /// An absolute path as the text shows it: `/x`, `~/x`, `C:\x`, `C:/x`.
     Path,
+    /// A word, or the content of quotes, that may name a file relative to the
+    /// pane's working directory: it is a link only if that file exists.
+    Relative,
 }
 
 /// The link under a grid point, if any. Points outside the grid have none.
@@ -96,7 +100,8 @@ pub(crate) fn link_at<T>(term: &Term<T>, mut point: Point) -> Option<Link> {
     let cell_of = |char_index: usize| first.partition_point(|&f| f <= char_index) - 1;
     let (range, kind) = find_links(&chars)
         .into_iter()
-        .find(|(r, _)| r.start < first[index + 1] && r.end > first[index])?;
+        .find(|(r, _)| r.start < first[index + 1] && r.end > first[index])
+        .or_else(|| relative_at(&chars, first[index]).map(|r| (r, LinkKind::Relative)))?;
     Some(Link {
         url: chars[range.clone()].iter().collect(),
         kind,
@@ -355,6 +360,59 @@ fn find_path(text: &[char], start: usize) -> Option<Range<usize>> {
         .then_some(start..end)
 }
 
+/// The relative path candidate at char `at` of `text`: the content of quotes
+/// around it, else the word under it. Only the file system can tell
+/// whether it names a file.
+pub(crate) fn relative_at(text: &[char], at: usize) -> Option<Range<usize>> {
+    quoted_at(text, at).or_else(|| word_at(text, at))
+}
+
+/// The content of `'…'` or `"…"` around `at`, as GNU ls quotes names with
+/// spaces or quotes. Shell escapes such as `'it'\''s'` are not decoded.
+fn quoted_at(text: &[char], at: usize) -> Option<Range<usize>> {
+    ['\'', '"'].into_iter().find_map(|q| {
+        if text[at] == q {
+            return None;
+        }
+        let open = text[..at].iter().rposition(|&c| c == q)?;
+        let close = at + text[at..].iter().position(|&c| c == q)?;
+        // An even number of quotes before `open` makes it an opening one.
+        if text[..open].iter().filter(|&&c| c == q).count() % 2 != 0 {
+            return None;
+        }
+        let content = &text[open + 1..close];
+        let (first, last) = (content.first()?, content.last()?);
+        let usable = !first.is_whitespace()
+            && !last.is_whitespace()
+            && !content.iter().any(|&c| c.is_control() || is_separator(c))
+            && content.iter().any(|c| c.is_alphanumeric());
+        usable.then_some(open + 1..close)
+    })
+}
+
+/// The word under `at`: path characters (`\` too on Windows), stopping on
+/// the left at `(`, `[`, `=`, `,` and `;`, without trailing punctuation; it
+/// holds a letter or digit and doesn't start with `-` (an option).
+fn word_at(text: &[char], at: usize) -> Option<Range<usize>> {
+    let is_word =
+        |c: char| is_path_char(c, cfg!(windows)) && !matches!(c, '(' | '[' | '=' | ',' | ';');
+    if !is_word(text[at]) {
+        return None;
+    }
+    let start = text[..at]
+        .iter()
+        .rposition(|&c| !is_word(c))
+        .map_or(0, |i| i + 1);
+    let end = at
+        + text[at..]
+            .iter()
+            .position(|&c| !is_word(c))
+            .unwrap_or(text.len() - at);
+    let end = trim_trailing(text, start, end);
+    (at < end && text[start] != '-' && text[start..end].iter().any(|c| c.is_alphanumeric()))
+        .then_some(start..end)
+}
+
 fn starts_with(text: &[char], prefix: &str) -> bool {
     let mut chars = text.iter();
     prefix
@@ -524,7 +582,10 @@ mod tests {
             assert_eq!(link.url, url);
             assert_eq!((link.start, link.end), ((1, 0), (12, 1)));
         }
-        assert_eq!(click(&term, 15, 1), None);
+        assert_eq!(
+            click(&term, 15, 1).map(|l| (l.url, l.kind)),
+            Some(("ok".to_owned(), LinkKind::Relative))
+        );
     }
 
     #[test]
@@ -553,7 +614,51 @@ mod tests {
             assert_eq!(link.url, url);
             assert_eq!((link.start, link.end), ((11, 0), (13, 1)));
         }
-        assert_eq!(click(&term, 16, 1), None);
+        assert_eq!(
+            click(&term, 16, 1).map(|l| (l.url, l.kind)),
+            Some(("ok".to_owned(), LinkKind::Relative))
+        );
+    }
+
+    fn relative(text: &str, at: usize) -> Option<String> {
+        let chars: Vec<char> = text.chars().collect();
+        relative_at(&chars, at).map(|r| chars[r].iter().collect())
+    }
+
+    #[test]
+    fn relative_candidates() {
+        let some = |s: &str| Some(s.to_owned());
+        assert_eq!(
+            relative("Cargo.toml  crates  README.md", 13),
+            some("crates")
+        );
+        assert_eq!(relative("src/main.rs:42:7", 5), some("src/main.rs"));
+        assert_eq!(relative("src/main.rs:42:7", 12), some("42"));
+        assert_eq!(relative("(src/x.rs).", 2), some("src/x.rs"));
+        assert_eq!(relative("--out=dist/a.js", 8), some("dist/a.js"));
+        assert_eq!(relative("'my file.txt'  b.txt", 4), some("my file.txt"));
+        assert_eq!(relative("\"it's here.txt\"", 8), some("it's here.txt"));
+        assert_eq!(relative("'a' and 'b'", 5), some("and"));
+        // Content starting with a space is not quoted.
+        assert_eq!(relative("' a'", 2), some("a"));
+    }
+
+    #[test]
+    fn no_relative_candidate() {
+        assert_eq!(relative("-rw-r--r-- 1 me", 3), None);
+        assert_eq!(relative("a  b", 1), None);
+        assert_eq!(relative("'my file.txt'", 0), None);
+    }
+
+    #[test]
+    fn relative_word_on_the_grid() {
+        let link = click(&term(b"Cargo.toml  src"), 13, 0).unwrap();
+        assert_eq!(link.url, "src");
+        assert_eq!(link.kind, LinkKind::Relative);
+        assert_eq!((link.start, link.end), ((12, 0), (14, 0)));
+        // An absolute path still wins.
+        let term = term(b"open /tmp/a.txt now");
+        assert_eq!(click(&term, 8, 0).unwrap().kind, LinkKind::Path);
     }
 
     #[test]

@@ -4,8 +4,8 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use nuntio_term::{
-    GridPoint, Program, ReportedDir, SelectionKind, SpawnOptions, TermEvent, TermHandle, TermMode,
-    TermOptions, TermSize,
+    GridPoint, LinkKind, Program, ReportedDir, SelectionKind, SpawnOptions, TermEvent, TermHandle,
+    TermMode, TermOptions, TermSize,
 };
 
 mod common;
@@ -403,12 +403,18 @@ fn links_in_text_and_osc8() {
     let link = handle.link_at(at(10, 0)).unwrap();
     assert_eq!(link.url, "https://example.com/x");
     assert_eq!((link.start, link.end), ((4, 0), (24, 0)));
-    assert_eq!(handle.link_at(at(27, 0)), None);
+    assert_eq!(
+        handle.link_at(at(27, 0)).map(|l| (l.url, l.kind)),
+        Some(("ok".to_owned(), LinkKind::Relative))
+    );
 
     let link = handle.link_at(at(2, 1)).unwrap();
     assert_eq!(link.url, "https://nuntio.dev");
     assert_eq!((link.start, link.end), ((0, 1), (4, 1)));
-    assert_eq!(handle.link_at(at(7, 1)), None);
+    assert_eq!(
+        handle.link_at(at(7, 1)).map(|l| (l.url, l.kind)),
+        Some(("here".to_owned(), LinkKind::Relative))
+    );
 }
 
 #[test]
@@ -435,7 +441,10 @@ fn links_across_hard_wrapped_rows() {
         assert_eq!(link.url, url);
         assert_eq!((link.start, link.end), ((1, 0), (12, 1)));
     }
-    assert_eq!(handle.link_at(at(15, 1)), None);
+    assert_eq!(
+        handle.link_at(at(15, 1)).map(|l| (l.url, l.kind)),
+        Some(("ok".to_owned(), LinkKind::Relative))
+    );
 }
 
 #[test]
@@ -547,7 +556,10 @@ fn osc8_links_with_unknown_schemes_are_ignored() {
     wait_for_exit(&rx);
 
     assert_eq!(line_text(&handle, 0), "click");
-    assert_eq!(handle.link_at(at(2, 0)), None);
+    assert_eq!(
+        handle.link_at(at(2, 0)).map(|l| (l.url, l.kind)),
+        Some(("click".to_owned(), LinkKind::Relative))
+    );
 }
 
 #[test]

@@ -9,10 +9,10 @@ use winit::dpi::PhysicalPosition;
 use winit::event::MouseScrollDelta;
 use winit::window::ResizeDirection;
 
-use super::{Chrome, WindowState};
+use super::{Chrome, Pane, WindowState};
 use crate::event::PaneId;
 use crate::input;
-use crate::link::Target;
+use crate::link::{BaseDir, Target};
 use crate::mouse::{self, Button, ClickCounter, HeldButtons, MouseAction, MouseMods};
 use crate::pane_tree::{Axis, Divider};
 use crate::tab_bar::{BarHit, TabBar};
@@ -64,6 +64,9 @@ pub struct MouseState {
     pub fullscreen_drag: Option<FullscreenDrag>,
     /// Link under the pointer while the link modifier is held.
     pub hover_link: Option<HoverLink>,
+    /// The last relative path looked up on disk, so a resting pointer isn't
+    /// looked up again every frame.
+    pub relative_lookup: Option<RelativeLookup>,
     /// A selection drag is past the top or bottom of the pane and scrolls it.
     pub autoscroll: Option<Autoscroll>,
 }
@@ -74,6 +77,13 @@ pub struct HoverLink {
     pub pane: PaneId,
     pub link: Link,
     pub target: Target,
+}
+
+/// A relative path candidate and what the file system said about it.
+pub struct RelativeLookup {
+    pane: PaneId,
+    text: String,
+    target: Option<Target>,
 }
 
 impl MouseState {
@@ -102,6 +112,29 @@ fn whole_steps(remainder: &mut f64, pixels: f64, step: f64) -> i32 {
     let steps = (*remainder / step).trunc();
     *remainder -= steps * step;
     steps as i32
+}
+
+/// The directory relative paths in `pane` start from: the foreground
+/// process's. In a WSL pane on Windows, what nuntio-wsl reported, else an
+/// absolute directory from OSC 7 or the title; `~/…` would need `wsl.exe`
+/// and gives none.
+fn relative_base(pane: &Pane) -> Option<BaseDir> {
+    match &pane.wsl {
+        Some(distro) if cfg!(windows) => {
+            let dir = pane
+                .term
+                .remote_directory()
+                .or_else(|| {
+                    crate::wsl::linux_dir(pane.term.reported_directory(), pane.title.as_deref())
+                })
+                .filter(|dir| dir.starts_with('/'))?;
+            Some(BaseDir::Wsl {
+                distro: distro.name.clone(),
+                dir,
+            })
+        }
+        _ => pane.term.working_directory().map(BaseDir::Local),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -252,16 +285,19 @@ impl WindowState {
         };
         // Nothing under an open menu reacts to the pointer.
         let held = held && self.menu.is_none();
-        // A path that leads nowhere here is no link.
-        let link = self.mouse.position.filter(|_| held).and_then(|pos| {
+        let found = self.mouse.position.filter(|_| held).and_then(|pos| {
             let id = self.pane_at(config, pos)?;
             let point = self.cell_in(config, id, pos);
-            let pane = self.content().pane(id)?;
-            let link = pane.term.link_at(point)?;
-            let target = match link.kind {
-                LinkKind::Url => Target::Url(link.url.clone()),
-                LinkKind::Path => crate::link::path_target(&link.url, pane.wsl.as_ref())?,
-            };
+            let link = self.content().pane(id)?.term.link_at(point)?;
+            Some((id, link))
+        });
+        // A new press looks again: files may have appeared meanwhile.
+        if !held {
+            self.mouse.relative_lookup = None;
+        }
+        // A path that leads nowhere here is no link.
+        let link = found.and_then(|(id, link)| {
+            let target = self.link_target(id, &link)?;
             Some(HoverLink {
                 pane: id,
                 link,
@@ -273,6 +309,33 @@ impl WindowState {
         }
         self.mouse.hover_link = link;
         true
+    }
+
+    /// Where a click on `link` in pane `id` leads, `None` if nowhere. A
+    /// relative path is looked up on disk once per pane and text.
+    fn link_target(&mut self, id: PaneId, link: &Link) -> Option<Target> {
+        match link.kind {
+            LinkKind::Url => Some(Target::Url(link.url.clone())),
+            LinkKind::Path => {
+                crate::link::path_target(&link.url, self.content().pane(id)?.wsl.as_ref())
+            }
+            LinkKind::Relative => {
+                if let Some(seen) = &self.mouse.relative_lookup
+                    && seen.pane == id
+                    && seen.text == link.url
+                {
+                    return seen.target.clone();
+                }
+                let base = relative_base(self.content().pane(id)?);
+                let target = base.and_then(|base| crate::link::relative_target(&link.url, &base));
+                self.mouse.relative_lookup = Some(RelativeLookup {
+                    pane: id,
+                    text: link.url.clone(),
+                    target: target.clone(),
+                });
+                target
+            }
+        }
     }
 
     /// `refresh_hover_link`, and redraw if the link changed.

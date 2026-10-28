@@ -150,8 +150,9 @@ fn parse(data: &[u8], on_frame: &mut impl FnMut(Frame<'_>)) -> Result<usize, Fra
 const MARKER_PREFIX: &[u8] = b"\x1b]nuntio-wsl;";
 /// Ends a report.
 const BEL: u8 = 0x07;
-/// The longest body of a report; a longer one is not ours and passes through unchanged.
-const MAX_BODY: usize = 256;
+/// The longest body of a report: `cwd;` and a path of PATH_MAX bytes. A longer one is not ours
+/// and passes through unchanged.
+const MAX_BODY: usize = "cwd;".len() + 4096;
 /// The longest process name of a foreground report.
 const MAX_NAME: usize = 64;
 
@@ -167,6 +168,9 @@ pub enum Marker {
         /// Whether it is the shell itself.
         shell: bool,
     },
+    /// The working directory of the foreground process group changed: a Linux path, `None` if
+    /// the helper can't tell (unreadable, not UTF-8, a control character, too long).
+    Directory(Option<String>),
 }
 
 /// The report [`Marker::Foreground`] as bytes for the helper's stdout. Escape and bell
@@ -189,9 +193,24 @@ pub fn foreground_marker(name: &str, shell: bool) -> Vec<u8> {
     out
 }
 
+/// The report [`Marker::Directory`] as bytes for the helper's stdout. A `path` that is not
+/// UTF-8, holds a control character or doesn't fit a report is sent as unknown: `cwd;` with
+/// nothing after it.
+pub fn directory_marker(path: &[u8]) -> Vec<u8> {
+    let usable = "cwd;".len() + path.len() <= MAX_BODY
+        && std::str::from_utf8(path).is_ok_and(|p| !p.chars().any(char::is_control));
+    let mut out = MARKER_PREFIX.to_vec();
+    out.extend_from_slice(b"cwd;");
+    if usable {
+        out.extend_from_slice(path);
+    }
+    out.push(BEL);
+    out
+}
+
 /// Removes the helper's reports from its output: every OSC that starts with
 /// `ESC ] nuntio-wsl ;` and ends with BEL. Everything else passes unchanged, including such an
-/// OSC with a body longer than 256 bytes.
+/// OSC with a body longer than `MAX_BODY`.
 #[derive(Debug, Default)]
 pub struct MarkerFilter {
     ready: bool,
@@ -304,6 +323,9 @@ impl MarkerFilter {
         if body == "ready" {
             self.ready = true;
             return Some(Marker::Ready);
+        }
+        if let Some(dir) = body.strip_prefix("cwd;") {
+            return Some(Marker::Directory((!dir.is_empty()).then(|| dir.to_owned())));
         }
         let rest = body.strip_prefix("fg;")?;
         let (shell, name) = rest.split_once(';')?;
@@ -585,5 +607,26 @@ mod tests {
         assert_eq!(body.len(), "fg;1;".len() + MAX_NAME);
         let (_, markers, _) = filter(&[&marker]);
         assert_eq!(markers, [fg(&"é".repeat(32), true)]);
+    }
+
+    #[test]
+    fn directory_marker_round_trips() {
+        let marker = directory_marker(b"/home/me/a b");
+        assert_eq!(marker, b"\x1b]nuntio-wsl;cwd;/home/me/a b\x07");
+        let (out, markers, _) = filter(&[&marker]);
+        assert!(out.is_empty());
+        assert_eq!(markers, [Marker::Directory(Some("/home/me/a b".into()))]);
+
+        let (_, markers, _) = filter(&[&directory_marker(&[b'/'; 4096])]);
+        assert_eq!(markers, [Marker::Directory(Some("/".repeat(4096)))]);
+    }
+
+    #[test]
+    fn directory_marker_sends_unusable_paths_as_unknown() {
+        for path in [&b"/x\x07y"[..], &[b'/', 0xff], &[b'a'; 4097]] {
+            let (out, markers, _) = filter(&[&directory_marker(path)]);
+            assert!(out.is_empty());
+            assert_eq!(markers, [Marker::Directory(None)]);
+        }
     }
 }

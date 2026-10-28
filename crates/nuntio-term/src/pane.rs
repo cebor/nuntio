@@ -367,6 +367,14 @@ pub(crate) struct RemoteForeground {
     pub shell: bool,
 }
 
+/// What nuntio-wsl last reported about a WSL pane.
+#[derive(Default)]
+pub(crate) struct Remote {
+    pub foreground: Option<RemoteForeground>,
+    /// The foreground process's working directory, a Linux path.
+    pub directory: Option<String>,
+}
+
 /// One terminal: grid state, the shell's PTY and its IO thread.
 pub struct TermHandle {
     term: Arc<FairMutex<Term<Listener>>>,
@@ -386,8 +394,8 @@ pub struct TermHandle {
     reported_dir: Arc<Mutex<Option<ReportedDir>>>,
     /// The pane's inline images; locked after the term.
     images: Arc<Mutex<ImageStore>>,
-    /// The foreground process of a WSL pane as the helper reported it last.
-    remote_foreground: Arc<Mutex<Option<RemoteForeground>>>,
+    /// What nuntio-wsl reported last about a WSL pane.
+    remote: Arc<Mutex<Remote>>,
 }
 
 impl TermHandle {
@@ -496,7 +504,7 @@ impl TermHandle {
         #[cfg(windows)]
         let mut fallback = None;
         // What the WSL helper reports; stays empty for every other transport.
-        let remote_foreground = Arc::new(Mutex::new(None));
+        let remote = Arc::new(Mutex::new(Remote::default()));
         let pty = match options.transport {
             Transport::Pty => {
                 let pty_options = tty_options(shell, options.working_directory, env);
@@ -519,7 +527,7 @@ impl TermHandle {
                     &helper.args,
                     &helper_env,
                     size.window_size(),
-                    remote_foreground.clone(),
+                    remote.clone(),
                 )
                 .map_err(SpawnError::Pty)?;
                 let mut env = env;
@@ -563,7 +571,7 @@ impl TermHandle {
             runs_command,
             reported_dir,
             images,
-            remote_foreground,
+            remote,
         })
     }
 
@@ -715,7 +723,8 @@ impl TermHandle {
         let (name, cwd) = found.map_or((None, None), |f| (f.name, f.cwd));
         // A WSL pane's foreground process lives in the other system: the helper reports it.
         let name = name.or_else(|| {
-            lock(&self.remote_foreground)
+            lock(&self.remote)
+                .foreground
                 .as_ref()
                 .map(|f| f.name.clone())
                 .filter(|name| !name.is_empty())
@@ -739,7 +748,7 @@ impl TermHandle {
         }
         self.shell_pid()
             .and_then(process::foreground_is_shell)
-            .or_else(|| lock(&self.remote_foreground).as_ref().map(|f| f.shell))
+            .or_else(|| lock(&self.remote).foreground.as_ref().map(|f| f.shell))
     }
 
     /// Working directory of the foreground process, if it can be
@@ -754,6 +763,12 @@ impl TermHandle {
     /// The directory the shell last reported with OSC 7 or OSC 9;9.
     pub fn reported_directory(&self) -> Option<ReportedDir> {
         lock(&self.reported_dir).clone()
+    }
+
+    /// The working directory of a WSL pane's foreground process as nuntio-wsl
+    /// reported it last: a Linux path. `None` for other panes.
+    pub fn remote_directory(&self) -> Option<String> {
+        lock(&self.remote).directory.clone()
     }
 
     /// Change the terminal options. Less scrollback drops the oldest
@@ -900,7 +915,8 @@ impl TermHandle {
             .load(Ordering::Acquire)
     }
 
-    /// The link (OSC 8 hyperlink or URL) at a viewport position.
+    /// The link (OSC 8 hyperlink, URL, absolute path or relative path
+    /// candidate) at a viewport position.
     pub fn link_at(&self, point: GridPoint) -> Option<Link> {
         let term = self.term.lock();
         let (point, _) = point.to_grid(term.grid().display_offset());

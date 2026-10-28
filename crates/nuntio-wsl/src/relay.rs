@@ -12,7 +12,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::proto::{Decoder, Frame, READY, Size, foreground_marker};
+use crate::proto::{Decoder, Frame, READY, Size, directory_marker, foreground_marker};
 
 const CHUNK: usize = 64 * 1024;
 /// The largest buffer `login_shell` offers `getpwuid_r` for the passwd entry.
@@ -373,6 +373,33 @@ fn report_foreground(
     write_all(1, &marker)
 }
 
+/// Tells nuntio the working directory of the PTY's foreground process group (of the shell if
+/// the group's leader is gone) if it differs from the last report. Nothing is written when
+/// the terminal can't say.
+fn report_directory(
+    master: RawFd,
+    shell: libc::pid_t,
+    reported: &mut Option<Vec<u8>>,
+) -> io::Result<()> {
+    // SAFETY: `master` is an open descriptor.
+    let pgid = unsafe { libc::tcgetpgrp(master) };
+    if pgid <= 0 {
+        return Ok(());
+    }
+    let cwd = |pid: libc::pid_t| std::fs::read_link(format!("/proc/{pid}/cwd"));
+    // An unreadable directory gives no bytes: reported as unknown.
+    let dir = cwd(pgid)
+        .or_else(|_| cwd(shell))
+        .map(|p| p.into_os_string().into_vec())
+        .unwrap_or_default();
+    if reported.as_ref() == Some(&dir) {
+        return Ok(());
+    }
+    let marker = directory_marker(&dir);
+    *reported = Some(dir);
+    write_all(1, &marker)
+}
+
 /// Forwards between stdin/stdout and the master until the session ends. Returns the exit code.
 fn event_loop(
     master: &OwnedFd,
@@ -387,7 +414,11 @@ fn event_loop(
     let mut buf = vec![0u8; CHUNK];
     // The foreground process group last reported to nuntio, `None` before the first report.
     let mut reported = None;
-    if report_foreground(master_fd, pid, &mut reported).is_err() {
+    // The working directory last reported to nuntio.
+    let mut reported_dir = None;
+    if report_foreground(master_fd, pid, &mut reported).is_err()
+        || report_directory(master_fd, pid, &mut reported_dir).is_err()
+    {
         return hang_up(pid, 0);
     }
     let in_events = libc::POLLIN | libc::POLLHUP | libc::POLLERR;
@@ -439,7 +470,10 @@ fn event_loop(
             eprintln!("nuntio-wsl: poll failed: {}", io::Error::last_os_error());
             return hang_up(pid, 1);
         }
-        if ready == 0 && report_foreground(master_fd, pid, &mut reported).is_err() {
+        if ready == 0
+            && (report_foreground(master_fd, pid, &mut reported).is_err()
+                || report_directory(master_fd, pid, &mut reported_dir).is_err())
+        {
             return hang_up(pid, 0);
         }
         let [stdin_poll, master_poll, wake_poll] = fds;
@@ -487,6 +521,7 @@ fn event_loop(
                 Ok(n) => {
                     recheck = Some(Instant::now() + RECHECK_WINDOW);
                     if report_foreground(master_fd, pid, &mut reported).is_err()
+                        || report_directory(master_fd, pid, &mut reported_dir).is_err()
                         || write_all(1, &buf[..n]).is_err()
                     {
                         return hang_up(pid, 0);
@@ -505,7 +540,9 @@ fn event_loop(
 
         if wake_poll.revents & libc::POLLIN != 0 {
             // A job that ended with the shell's command may have changed the foreground.
-            if report_foreground(master_fd, pid, &mut reported).is_err() {
+            if report_foreground(master_fd, pid, &mut reported).is_err()
+                || report_directory(master_fd, pid, &mut reported_dir).is_err()
+            {
                 return hang_up(pid, 0);
             }
             drain(wake.as_raw_fd());

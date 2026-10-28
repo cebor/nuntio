@@ -43,7 +43,7 @@ nuntio starts `wsl.exe` with plain pipes. `wsl.exe` runs `nuntio-wsl` in the dis
 The pipes carry a small protocol:
 
 - **nuntio to helper (stdin)** is a sequence of frames, `[kind u8][len u32 LE][payload]`. A `DATA` frame (kind 0) carries input for the shell. A `RESIZE` frame (kind 1) carries the window size: columns, lines, cell width and cell height, each as a 16-bit little-endian number. A payload is at most 1 MiB, and the first frame must be a `RESIZE`.
-- **Helper to nuntio (stdout)** is the raw output of the PTY. The helper writes a `READY` marker, the unknown escape sequence `ESC ] nuntio-wsl;ready BEL`, once the shell runs, and nuntio strips it. Reports about the foreground program are mixed in the same way.
+- **Helper to nuntio (stdout)** is the raw output of the PTY. The helper writes a `READY` marker, the unknown escape sequence `ESC ] nuntio-wsl;ready BEL`, once the shell runs, and nuntio strips it. Reports about the foreground program and its working directory are mixed in the same way.
 - **stderr** carries the helper's own messages.
 
 nuntio avoids ConPTY for these panes because it doesn't pass the stream through unchanged: it forwards inline image sequences ahead of the cursor moves that came before them, so images end up in the wrong place. With the helper, the stream reaches nuntio's parser exactly as the program wrote it.
