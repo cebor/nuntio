@@ -185,6 +185,19 @@ pub fn parse_pane_workspaces(json: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// `herdr pane list`: the working directory of the focused pane's
+/// foreground process, else of the pane.
+pub fn parse_focused_dir(json: &str) -> Option<String> {
+    let panes = result_list(json, "panes");
+    let focused = panes
+        .iter()
+        .find(|p| p.get("focused").and_then(Value::as_bool) == Some(true))?;
+    string(focused, "foreground_cwd")
+        .filter(|dir| !dir.is_empty())
+        .or_else(|| string(focused, "cwd"))
+        .filter(|dir| !dir.is_empty())
+}
+
 /// `herdr workspace list`: id and label of each workspace.
 pub fn parse_workspaces(json: &str) -> Vec<(String, String)> {
     result_list(json, "workspaces")
@@ -373,6 +386,25 @@ mod tests {
                 ("w9".to_owned(), "two".to_owned())
             ]
         );
+    }
+
+    #[test]
+    fn focused_pane_dir() {
+        let panes = |focused: &str| {
+            format!(
+                r#"{{"id":"cli:pane:list","result":{{"panes":[{{"cwd":"/a","foreground_cwd":"/a/x","focused":false,"pane_id":"w1:p1"}},{focused}]}}}}"#
+            )
+        };
+        let dir = |focused: &str| parse_focused_dir(&panes(focused));
+        assert_eq!(
+            dir(r#"{"cwd":"/b","foreground_cwd":"/b/y","focused":true}"#).as_deref(),
+            Some("/b/y")
+        );
+        assert_eq!(
+            dir(r#"{"cwd":"/b","foreground_cwd":"","focused":true}"#).as_deref(),
+            Some("/b")
+        );
+        assert_eq!(dir(r#"{"cwd":"/b","focused":false}"#), None);
     }
 
     #[test]

@@ -11,6 +11,7 @@ use super::Core;
 use super::app_panes::StartDir;
 use crate::actions::Action;
 use crate::banner::{Banner, Severity, Topic};
+use crate::event::{PaneId, UserEvent};
 use crate::input;
 use crate::menu::{MenuEntry, MenuKind, MenuSection};
 use crate::mux::agents::{AgentsUpdate, SessionKey};
@@ -374,6 +375,58 @@ impl Core {
             }
         }
         self.show_agents(state);
+    }
+
+    /// `WindowState::refresh_hover_link`, then ask the multiplexer for the
+    /// directory a relative link in its pane starts from, if one is needed.
+    /// Returns whether the link changed.
+    pub(super) fn refresh_hover_link(&mut self, state: &mut WindowState) -> bool {
+        let changed = state.refresh_hover_link(&self.config);
+        if let Some((pane, mux)) = state.mouse.mux_dir_request.take() {
+            self.look_up_mux_dir(pane, mux);
+        }
+        changed
+    }
+
+    /// `refresh_hover_link`, and redraw if the link changed.
+    pub(super) fn update_hover_link(&mut self, state: &mut WindowState) {
+        if self.refresh_hover_link(state) {
+            state.window.request_redraw();
+        }
+    }
+
+    /// Ask `mux`, running in `pane`, for its focused pane's directory on a
+    /// worker thread: it runs the tool's client, in WSL through `wsl.exe`.
+    fn look_up_mux_dir(&self, pane: PaneId, mux: MuxPane) {
+        let program = self
+            .mux
+            .snapshot
+            .program(mux.tool, &mux.target)
+            .map(str::to_owned);
+        let proxy = self.proxy.clone();
+        let spawned = std::thread::Builder::new()
+            .name("mux-directory".into())
+            .spawn(move || {
+                let dir = program.and_then(|program| mux.focused_dir(&program));
+                let _ = proxy.send_event(UserEvent::MuxDir(pane, dir));
+            });
+        if let Err(err) = spawned {
+            tracing::warn!("can't ask the multiplexer for its directory: {err}");
+        }
+    }
+
+    /// The multiplexer in `pane` answered with its focused pane's directory.
+    pub(super) fn mux_dir_found(
+        &mut self,
+        state: Option<&mut WindowState>,
+        pane: PaneId,
+        dir: Option<String>,
+    ) {
+        if let Some(state) = state
+            && state.mouse.mux_dir_found(pane, dir)
+        {
+            self.update_hover_link(state);
+        }
     }
 
     /// Show the agents in the status bar item and the tab markers.

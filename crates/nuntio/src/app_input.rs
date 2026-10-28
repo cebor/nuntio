@@ -566,7 +566,7 @@ impl Core {
         // Open the link that is under the pointer now, not the one that
         // was there when it last moved.
         if pressed {
-            state.update_hover_link(&self.config);
+            self.update_hover_link(state);
         }
         let button = match button {
             MouseButton::Left => Button::Left,
@@ -859,7 +859,7 @@ impl Core {
             }
             return;
         }
-        state.update_hover_link(&self.config);
+        self.update_hover_link(state);
         if let Some(divider) = state.mouse.divider_drag.clone() {
             state.drag_divider(&self.config, &divider, pos);
             return;

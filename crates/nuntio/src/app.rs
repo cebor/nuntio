@@ -1096,7 +1096,7 @@ impl Core {
 
     fn redraw_requested(&mut self, state: &mut WindowState, event_loop: &ActiveEventLoop) {
         // Keep the link underline on the text under the pointer.
-        state.refresh_hover_link(&self.config);
+        self.refresh_hover_link(state);
         // The previous frame stays up while a new pane starts.
         if state.reveal_holds(Instant::now()) {
             return;
@@ -1305,7 +1305,7 @@ impl Core {
             }
             WindowEvent::ModifiersChanged(mods) => {
                 state.modifiers = mods;
-                state.update_hover_link(&self.config);
+                self.update_hover_link(state);
             }
             WindowEvent::KeyboardInput {
                 event,
@@ -1519,6 +1519,7 @@ impl ApplicationHandler<UserEvent> for App {
                     core.open_mux(state, open);
                 }
             }
+            UserEvent::MuxDir(pane, dir) => core.mux_dir_found(state, pane, dir),
             // The rest needs the window.
             UserEvent::Term(pane, event) => {
                 if let Some(state) = state {

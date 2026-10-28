@@ -14,6 +14,7 @@ use crate::event::PaneId;
 use crate::input;
 use crate::link::{BaseDir, Target};
 use crate::mouse::{self, Button, ClickCounter, HeldButtons, MouseAction, MouseMods};
+use crate::mux::{MuxPane, Target as MuxTarget};
 use crate::pane_tree::{Axis, Divider};
 use crate::tab_bar::{BarHit, TabBar};
 
@@ -67,6 +68,11 @@ pub struct MouseState {
     /// The last relative path looked up on disk, so a resting pointer isn't
     /// looked up again every frame.
     pub relative_lookup: Option<RelativeLookup>,
+    /// The directory of the focused pane of the multiplexer in a pane,
+    /// asked for once while the link modifier is held.
+    pub mux_dir: Option<MuxDir>,
+    /// A `mux_dir` lookup for the app to start.
+    pub mux_dir_request: Option<(PaneId, MuxPane)>,
     /// A selection drag is past the top or bottom of the pane and scrolls it.
     pub autoscroll: Option<Autoscroll>,
 }
@@ -86,6 +92,19 @@ pub struct RelativeLookup {
     target: Option<Target>,
 }
 
+/// The working directory of the focused pane of a multiplexer, a path where
+/// the multiplexer runs. Kept across presses of the link modifier, so that a
+/// quick Ctrl+click needn't wait for the multiplexer: each press asks again,
+/// and links follow the new answer when it comes.
+pub struct MuxDir {
+    pane: PaneId,
+    /// Asked during this press of the link modifier.
+    asked: bool,
+    /// An answer has come; `dir` is `None` if the multiplexer couldn't tell.
+    answered: bool,
+    dir: Option<String>,
+}
+
 impl MouseState {
     /// Let go of a dragged tab, divider or full screen window.
     pub fn end_drags(&mut self) {
@@ -97,6 +116,18 @@ impl MouseState {
     /// Whole lines to scroll for a wheel or trackpad movement of `pixels`.
     pub fn scroll_lines(&mut self, pixels: f64, line_height: f64) -> i32 {
         whole_steps(&mut self.scroll_pixels, pixels, line_height)
+    }
+
+    /// The directory `pane`'s multiplexer answered. Returns whether it is
+    /// the pane whose directory is kept.
+    pub fn mux_dir_found(&mut self, pane: PaneId, dir: Option<String>) -> bool {
+        let Some(known) = self.mux_dir.as_mut().filter(|m| m.pane == pane) else {
+            return false;
+        };
+        known.answered = true;
+        known.dir = dir;
+        self.relative_lookup = None;
+        true
     }
 }
 
@@ -134,6 +165,18 @@ fn relative_base(pane: &Pane) -> Option<BaseDir> {
             })
         }
         _ => pane.term.working_directory().map(BaseDir::Local),
+    }
+}
+
+/// The directory relative paths start from in a multiplexer that runs in
+/// `target` and whose focused pane is in `dir`.
+fn mux_base(target: &MuxTarget, dir: String) -> Option<BaseDir> {
+    match target {
+        MuxTarget::Local => Some(BaseDir::Local(dir.into())),
+        MuxTarget::Wsl(distro) => dir.starts_with('/').then(|| BaseDir::Wsl {
+            distro: distro.name.clone(),
+            dir,
+        }),
     }
 }
 
@@ -291,13 +334,18 @@ impl WindowState {
             let link = self.content().pane(id)?.term.link_at(point)?;
             Some((id, link))
         });
-        // A new press looks again: files may have appeared meanwhile.
+        // A new press looks again: files may have appeared meanwhile, and a
+        // multiplexer may show another pane.
         if !held {
             self.mouse.relative_lookup = None;
+            if let Some(known) = &mut self.mouse.mux_dir {
+                known.asked = false;
+            }
+            self.mouse.mux_dir_request = None;
         }
         // A path that leads nowhere here is no link.
         let link = found.and_then(|(id, link)| {
-            let target = self.link_target(id, &link)?;
+            let target = self.link_target(config, id, &link)?;
             Some(HoverLink {
                 pane: id,
                 link,
@@ -312,8 +360,10 @@ impl WindowState {
     }
 
     /// Where a click on `link` in pane `id` leads, `None` if nowhere. A
-    /// relative path is looked up on disk once per pane and text.
-    fn link_target(&mut self, id: PaneId, link: &Link) -> Option<Target> {
+    /// relative path is looked up on disk once per pane and text; in a
+    /// pane running herdr or tmux, from the directory of its focused pane,
+    /// which the app is asked to look up first.
+    fn link_target(&mut self, config: &Config, id: PaneId, link: &Link) -> Option<Target> {
         match link.kind {
             LinkKind::Url => Some(Target::Url(link.url.clone())),
             LinkKind::Path => {
@@ -326,7 +376,29 @@ impl WindowState {
                 {
                     return seen.target.clone();
                 }
-                let base = relative_base(self.content().pane(id)?);
+                let base = match crate::mux::pane_mux(self.content().pane(id)?, config) {
+                    Some(mux) => {
+                        let known = match &mut self.mouse.mux_dir {
+                            Some(known) if known.pane == id => known,
+                            other => other.insert(MuxDir {
+                                pane: id,
+                                asked: false,
+                                answered: false,
+                                dir: None,
+                            }),
+                        };
+                        if !known.asked {
+                            known.asked = true;
+                            self.mouse.mux_dir_request = Some((id, mux.clone()));
+                        }
+                        // Not cached until the first answer: it looks again then.
+                        if !known.answered {
+                            return None;
+                        }
+                        known.dir.clone().and_then(|dir| mux_base(&mux.target, dir))
+                    }
+                    None => relative_base(self.content().pane(id)?),
+                };
                 let target = base.and_then(|base| crate::link::relative_target(&link.url, &base));
                 self.mouse.relative_lookup = Some(RelativeLookup {
                     pane: id,
@@ -335,13 +407,6 @@ impl WindowState {
                 });
                 target
             }
-        }
-    }
-
-    /// `refresh_hover_link`, and redraw if the link changed.
-    pub fn update_hover_link(&mut self, config: &Config) {
-        if self.refresh_hover_link(config) {
-            self.window.request_redraw();
         }
     }
 

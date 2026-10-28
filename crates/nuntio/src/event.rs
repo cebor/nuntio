@@ -65,6 +65,9 @@ pub enum UserEvent {
     Agents(AgentsUpdate),
     /// A herdr workspace was prepared: open its client or switch to it.
     MuxOpen(MuxOpen),
+    /// The directory of the focused pane of the multiplexer running in a
+    /// pane, asked for a relative link there; `None` if it can't tell.
+    MuxDir(PaneId, Option<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

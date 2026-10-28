@@ -12,6 +12,8 @@ pub mod run;
 pub mod service;
 pub mod tmux;
 
+use std::time::Duration;
+
 use nuntio_config::Config;
 use nuntio_term::Rgb;
 
@@ -20,6 +22,9 @@ use self::herdr::AgentStatus;
 use crate::style::{AGENT_BLOCKED, AGENT_DONE, AGENT_WORKING};
 use crate::window::Pane;
 use crate::wsl::Distro;
+
+/// How long asking a multiplexer for its focused pane's directory may take.
+const DIR_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Variables that tell herdr and tmux they run inside themselves.
 const INHERITED_ENV: [&str; 9] = [
@@ -146,6 +151,33 @@ impl MuxPane {
             target: self.target.clone(),
             session: self.session.clone(),
         })
+    }
+
+    /// The working directory of the session's focused pane, a path in
+    /// `target`: of herdr's foreground process there, tmux's
+    /// `pane_current_path`. Runs `program`, the tool's client, so it blocks.
+    pub fn focused_dir(&self, program: &str) -> Option<String> {
+        let session = self.session.as_deref();
+        let argv = match self.tool {
+            Tool::Herdr => {
+                let mut argv = launch::herdr(program, session);
+                argv.extend(["pane", "list"]);
+                argv
+            }
+            Tool::Tmux => {
+                let mut argv = vec![program, "display-message", "-p"];
+                if let Some(session) = session {
+                    argv.extend(["-t", session]);
+                }
+                argv.push("#{pane_current_path}");
+                argv
+            }
+        };
+        let out = run::run(&self.target, argv[0], &argv[1..], DIR_TIMEOUT)?;
+        match self.tool {
+            Tool::Herdr => herdr::parse_focused_dir(&out),
+            Tool::Tmux => Some(out.trim().to_owned()).filter(|dir| !dir.is_empty()),
+        }
     }
 }
 
