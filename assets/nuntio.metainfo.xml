@@ -46,6 +46,7 @@
   <!-- Newest first; add an entry with every version bump (checked by
        `cargo test -p xtask`). -->
   <releases>
+    <release version="0.3.6" date="2026-10-28"/>
     <release version="0.3.5" date="2026-10-28"/>
     <release version="0.3.4" date="2026-10-26"/>
     <release version="0.3.3" date="2026-10-26"/>
