@@ -261,13 +261,7 @@ fn whole_steps(remainder: &mut f64, pixels: f64, step: f64) -> i32 {
 fn relative_base(pane: &Pane) -> Option<BaseDir> {
     match &pane.wsl {
         Some(distro) if cfg!(windows) => {
-            let dir = pane
-                .term
-                .remote_directory()
-                .or_else(|| {
-                    crate::wsl::linux_dir(pane.term.reported_directory(), pane.title.as_deref())
-                })
-                .filter(|dir| dir.starts_with('/'))?;
+            let dir = pane.wsl_dir().filter(|dir| dir.starts_with('/'))?;
             Some(BaseDir::Wsl {
                 distro: distro.name.clone(),
                 dir,

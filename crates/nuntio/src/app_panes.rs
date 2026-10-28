@@ -332,7 +332,7 @@ impl Core {
             let dir = crate::wsl::linux_path_in(&path.to_string_lossy(), &distro.name)?;
             return self.wsl_cd(distro, &dir).map(StartDir::Wsl);
         };
-        let dir = crate::wsl::linux_dir(pane.term.reported_directory(), pane.title.as_deref())?;
+        let dir = pane.wsl_dir()?;
         match target {
             Some(distro) if distro.name.eq_ignore_ascii_case(&source.name) => {
                 // `~` means another home for another user.

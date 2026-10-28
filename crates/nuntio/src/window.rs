@@ -230,6 +230,15 @@ impl Pane {
         PathSyntax::of(self.wsl.is_some(), &self.term.process_name())
     }
 
+    /// A WSL pane's directory as a Linux path (`/x`, `~`, `~/x`): what
+    /// nuntio-wsl reported, else what the shell reported (OSC 7, OSC 9;9) or
+    /// its title shows.
+    pub fn wsl_dir(&self) -> Option<String> {
+        self.term.remote_directory().or_else(|| {
+            crate::wsl::linux_dir(self.term.reported_directory(), self.title.as_deref())
+        })
+    }
+
     /// Set the application's title (OSC 0/2); `None` resets it. Records
     /// whether a program, not the shell at its prompt, set it. Returns
     /// whether anything changed.

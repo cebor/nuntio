@@ -375,7 +375,7 @@ fn report_foreground(
 
 /// Tells nuntio the working directory of the PTY's foreground process group (of the shell if
 /// the group's leader is gone) if it differs from the last report. Nothing is written when
-/// the terminal can't say.
+/// the terminal can't say. A removed directory is reported as unknown.
 fn report_directory(
     master: RawFd,
     shell: libc::pid_t,
@@ -392,6 +392,12 @@ fn report_directory(
         .or_else(|_| cwd(shell))
         .map(|p| p.into_os_string().into_vec())
         .unwrap_or_default();
+    // The kernel marks a removed directory `/x (deleted)`: nothing can start there.
+    let dir = if dir.ends_with(b" (deleted)") {
+        Vec::new()
+    } else {
+        dir
+    };
     if reported.as_ref() == Some(&dir) {
         return Ok(());
     }

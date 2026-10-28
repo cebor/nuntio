@@ -261,6 +261,15 @@ fn reports_the_working_directory() {
 }
 
 #[test]
+fn a_removed_directory_is_reported_as_unknown() {
+    let mut helper = Helper::start(&["--", "sh", "-i"]);
+    helper.resize(80, 24);
+    let seen = helper.wait_for(b"\x1b]nuntio-wsl;cwd;/", 0);
+    helper.data(b"d=$(mktemp -d) && cd \"$d\" && rmdir \"$d\"\n");
+    helper.wait_for(b"\x1b]nuntio-wsl;cwd;\x07", seen);
+}
+
+#[test]
 fn the_socket_bridge_copies_both_ways() {
     use std::os::unix::net::UnixListener;
 

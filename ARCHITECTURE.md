@@ -401,7 +401,7 @@ wsl.exe -d <distro> [-u <user>] --cd <dir> --exec /bin/sh -c 'exec "$(wslpath -u
 Wire protocol ([`crates/nuntio-wsl/src/proto.rs`](crates/nuntio-wsl/src/proto.rs)):
 
 - nuntio → helper (stdin): frames `[kind: u8][len: u32 LE][payload]`. `DATA = 0` carries input bytes; `RESIZE = 1` carries `columns, lines, cell_width, cell_height`, each u16 LE. A payload is at most `MAX_FRAME` (1 MiB). The first frame must be `RESIZE`.
-- helper → nuntio (stdout): raw PTY bytes with in-band markers `ESC ] nuntio-wsl;<body> BEL`: `ready` once at the start, then `fg;…` foreground and `cwd;…` working directory reports. `MarkerFilter` strips them; `wsl_pipe.rs` stores them in `TermHandle`'s `remote`, which `foreground` and `foreground_is_shell` fall back to and `remote_directory` returns (relative links in WSL panes start there). stderr carries helper messages.
+- helper → nuntio (stdout): raw PTY bytes with in-band markers `ESC ] nuntio-wsl;<body> BEL`: `ready` once at the start, then `fg;…` foreground and `cwd;…` working directory reports. `MarkerFilter` strips them; `wsl_pipe.rs` stores them in `TermHandle`'s `remote`, which `foreground` and `foreground_is_shell` fall back to and `remote_directory` returns (relative links in WSL panes start there) and `Pane::wsl_dir` prefers (splits and new tabs start there too). stderr carries helper messages. Program output can contain the same bytes, so a program can fake a report; the effect is limited to which Linux directory or process name nuntio assumes.
 
 Relay ([`crates/nuntio-wsl/src/relay.rs`](crates/nuntio-wsl/src/relay.rs)):
 
@@ -409,7 +409,7 @@ Relay ([`crates/nuntio-wsl/src/relay.rs`](crates/nuntio-wsl/src/relay.rs)):
 - One `poll` loop over stdin, the PTY master and a SIGCHLD self-pipe.
 - Back-pressure on input; stdin EOF hangs up the shell.
 - Exit code 127 for a missing program, 2 for data before the first size.
-- After each PTY read and SIGCHLD (and polling for a second after input or output), `tcgetpgrp` on the master: a new foreground group is reported as `ESC ] nuntio-wsl;fg;<0|1>;<comm> BEL` (1: the shell itself), and a changed working directory of that group (of the shell if its leader is gone) as `ESC ] nuntio-wsl;cwd;<path> BEL` (empty: unknown), both before the bytes of that read.
+- After each PTY read and SIGCHLD (and polling for a second after input or output), `tcgetpgrp` on the master: a new foreground group is reported as `ESC ] nuntio-wsl;fg;<0|1>;<comm> BEL` (1: the shell itself), and a changed working directory of that group (of the shell if its leader is gone) as `ESC ] nuntio-wsl;cwd;<path> BEL` (empty: unknown), both before the bytes of that read; a removed directory (`/x (deleted)`) is reported as unknown.
 
 Windows pipes can't be polled, so `WslPipe` ([`wsl_pipe.rs`](crates/nuntio-term/src/wsl_pipe.rs)) posts IOCP completion packets to the `Poller`. Output is buffered with a cap (back-pressure).
 

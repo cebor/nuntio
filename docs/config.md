@@ -391,7 +391,7 @@ New tabs start in your Linux home directory (`~`) or in `working_directory`, spl
 
 #### Working directory in WSL
 
-nuntio on Windows can't see the processes inside WSL, so the shell has to tell it its directory. nuntio reads it from:
+In panes that run through nuntio-wsl, the helper reports the directory, and splits and new tabs start there. In a pane that fell back to ConPTY, nuntio can't see the processes inside WSL, so the shell has to tell it its directory. nuntio reads it from:
 
 - OSC 7 (`file://host/path`), which fish sends on its own,
 - OSC 9;9, the Windows Terminal convention (`wslpath -w "$PWD"`),
