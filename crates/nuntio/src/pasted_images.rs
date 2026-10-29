@@ -1,8 +1,10 @@
-//! Clipboard images saved as PNG files, so a paste can hand a program
-//! their path (AI CLIs like Claude Code attach pasted image paths).
+//! Clipboard images as PNG: `encode_png` for programs that take paste
+//! events (mode 5522), and `PastedImages` saves them as files for the
+//! others, so a paste can hand a program their path (AI CLIs like Claude
+//! Code attach pasted image paths).
 
 use std::fs::{DirBuilder, File};
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -40,24 +42,7 @@ impl PastedImages {
 
     /// Save RGBA8 pixels as the next PNG; returns its path.
     pub fn save(&mut self, image: &arboard::ImageData) -> anyhow::Result<PathBuf> {
-        let size = u32::try_from(image.width)
-            .ok()
-            .zip(u32::try_from(image.height).ok())
-            .filter(|_| {
-                image
-                    .width
-                    .checked_mul(image.height)
-                    .and_then(|pixels| pixels.checked_mul(4))
-                    == Some(image.bytes.len())
-            });
-        let Some((width, height)) = size else {
-            anyhow::bail!(
-                "clipboard image has {} bytes for {}x{} pixels",
-                image.bytes.len(),
-                image.width,
-                image.height
-            );
-        };
+        let png = encode_png(image)?;
         if !self.swept {
             self.swept = true;
             sweep_stale(&std::env::temp_dir(), SystemTime::now(), process_alive);
@@ -69,13 +54,9 @@ impl PastedImages {
         }
         self.count += 1;
         let path = self.dir.join(format!("image-{}.png", self.count));
-        let file = File::create_new(&path)
+        let mut file = File::create_new(&path)
             .with_context(|| format!("failed to create {}", path.display()))?;
-        let mut writer = BufWriter::new(file);
-        PngEncoder::new(&mut writer)
-            .write_image(&image.bytes, width, height, image::ExtendedColorType::Rgba8)
-            .map_err(anyhow::Error::from)
-            .and_then(|()| writer.flush().map_err(anyhow::Error::from))
+        file.write_all(&png)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(path)
     }
@@ -90,6 +71,36 @@ impl PastedImages {
         }
         self.created = false;
     }
+}
+
+/// Encode RGBA8 pixels as PNG.
+pub fn encode_png(image: &arboard::ImageData) -> anyhow::Result<Vec<u8>> {
+    let size = u32::try_from(image.width)
+        .ok()
+        .zip(u32::try_from(image.height).ok())
+        .filter(|_| {
+            image
+                .width
+                .checked_mul(image.height)
+                .and_then(|pixels| pixels.checked_mul(4))
+                == Some(image.bytes.len())
+        });
+    let Some((width, height)) = size else {
+        anyhow::bail!(
+            "clipboard image has {} bytes for {}x{} pixels",
+            image.bytes.len(),
+            image.width,
+            image.height
+        );
+    };
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png).write_image(
+        &image.bytes,
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    )?;
+    Ok(png)
 }
 
 /// Directories of a nuntio that is gone without a clean exit stay in the

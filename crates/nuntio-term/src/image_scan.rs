@@ -1,7 +1,12 @@
 //! Splits PTY output into text for the parser, inline images (iTerm2's
 //! `ESC ] 1337 ; File=<args> : <base64> BEL|ST`), Kitty graphics commands
-//! (`ESC _ G <control> ; <base64> ST`) and cell size queries (`CSI 16 t`),
-//! also when a sequence is split across reads.
+//! (`ESC _ G <control> ; <base64> ST`), cell size queries (`CSI 16 t`),
+//! paste events (`CSI ? 5522 h`, `CSI ? 5522 l`, the query
+//! `CSI ? 5522 $ p`, and RIS, which turns them off) and clipboard requests
+//! (`ESC ] 5522 ; <body> BEL|ST`), also when a sequence is split across
+//! reads.
+
+use crate::clipboard;
 
 /// Start of an inline image.
 const OSC_FILE: &[u8] = b"\x1b]1337;File=";
@@ -9,6 +14,24 @@ const OSC_FILE: &[u8] = b"\x1b]1337;File=";
 const APC_GRAPHICS: &[u8] = b"\x1b_G";
 /// The cell size query, which alacritty leaves unanswered.
 const CSI_CELL_SIZE: &[u8] = b"\x1b[16t";
+const CSI_PASTE_EVENTS_ON: &[u8] = b"\x1b[?5522h";
+const CSI_PASTE_EVENTS_OFF: &[u8] = b"\x1b[?5522l";
+const CSI_PASTE_EVENTS_QUERY: &[u8] = b"\x1b[?5522$p";
+/// Full reset (RIS): also turns paste events off; still parsed by alacritty.
+const RIS: &[u8] = b"\x1bc";
+/// Start of a clipboard request (the kitty clipboard protocol).
+const OSC_CLIPBOARD: &[u8] = b"\x1b]5522;";
+/// Every sequence the scanner takes out of the stream or reacts to.
+const RECOGNIZED: [&[u8]; 8] = [
+    OSC_FILE,
+    APC_GRAPHICS,
+    CSI_CELL_SIZE,
+    CSI_PASTE_EVENTS_ON,
+    CSI_PASTE_EVENTS_OFF,
+    CSI_PASTE_EVENTS_QUERY,
+    RIS,
+    OSC_CLIPBOARD,
+];
 /// Longest argument list that is kept; longer sequences are dropped.
 const MAX_ARGS: usize = 4096;
 /// Largest base64 payload that is kept; larger images are dropped.
@@ -29,6 +52,12 @@ pub(crate) enum ScanEvent<'a> {
     /// A Kitty graphics command, one chunk of a transfer at most.
     Graphics(GraphicsRequest),
     CellSizeQuery,
+    /// The program turned paste events (mode 5522) on or off.
+    PasteEvents(bool),
+    /// `CSI ? 5522 $ p`: is mode 5522 on?
+    PasteEventsQuery,
+    /// The body of an OSC 5522 request, without the terminator.
+    Clipboard(Vec<u8>),
 }
 
 /// A Kitty graphics command as the program sent it.
@@ -74,6 +103,10 @@ enum State {
     ApcPayload,
     /// ESC in the graphics payload: ends the command, which is dispatched.
     ApcPayloadEsc,
+    /// A clipboard request, up to BEL or ST.
+    Clipboard,
+    /// ESC in a clipboard request: ends it, and it is dispatched.
+    ClipboardEsc,
     /// A sequence over a limit, dropped up to its end.
     Discard,
     DiscardEsc,
@@ -196,6 +229,23 @@ impl ImageScanner {
                 self.dispatch(on_event);
                 self.after_esc(b, on_event);
             }
+            State::Clipboard => match b {
+                BEL => self.dispatch_clipboard(on_event),
+                ESC => self.state = State::ClipboardEsc,
+                CAN | SUB => self.reset(),
+                _ => {
+                    self.args.push(b);
+                    if self.args.len() > clipboard::MAX_REQUEST {
+                        tracing::debug!("clipboard request over 8 KiB ignored");
+                        self.args = Vec::new();
+                        self.state = State::Discard;
+                    }
+                }
+            },
+            State::ClipboardEsc => {
+                self.dispatch_clipboard(on_event);
+                self.after_esc(b, on_event);
+            }
             State::Discard => match b {
                 BEL | CAN | SUB => self.reset(),
                 ESC => self.state = State::DiscardEsc,
@@ -216,16 +266,33 @@ impl ImageScanner {
             self.state = State::Ground;
             self.tail.clear();
             on_event(ScanEvent::CellSizeQuery);
+        } else if self.held == CSI_PASTE_EVENTS_ON || self.held == CSI_PASTE_EVENTS_OFF {
+            let on = self.held == CSI_PASTE_EVENTS_ON;
+            self.held.clear();
+            self.state = State::Ground;
+            self.tail.clear();
+            on_event(ScanEvent::PasteEvents(on));
+        } else if self.held == CSI_PASTE_EVENTS_QUERY {
+            self.held.clear();
+            self.state = State::Ground;
+            self.tail.clear();
+            on_event(ScanEvent::PasteEventsQuery);
+        } else if self.held == RIS {
+            remember(&mut self.tail, RIS);
+            on_event(ScanEvent::Text(RIS));
+            self.held.clear();
+            self.state = State::Ground;
+            on_event(ScanEvent::PasteEvents(false));
         } else if self.held == OSC_FILE {
             self.held.clear();
             self.state = State::Args;
         } else if self.held == APC_GRAPHICS {
             self.held.clear();
             self.state = State::ApcControl;
-        } else if !(OSC_FILE.starts_with(&self.held)
-            || CSI_CELL_SIZE.starts_with(&self.held)
-            || APC_GRAPHICS.starts_with(&self.held))
-        {
+        } else if self.held == OSC_CLIPBOARD {
+            self.held.clear();
+            self.state = State::Clipboard;
+        } else if !RECOGNIZED.iter().any(|s| s.starts_with(&self.held)) {
             // No match: pass the bytes on. A new ESC may start a sequence.
             if b == ESC {
                 self.held.pop();
@@ -272,6 +339,13 @@ impl ImageScanner {
         self.tail.clear();
         self.state = State::Ground;
         on_event(ScanEvent::Graphics(request));
+    }
+
+    fn dispatch_clipboard(&mut self, on_event: &mut impl FnMut(ScanEvent<'_>)) {
+        let body = std::mem::take(&mut self.args);
+        self.tail.clear();
+        self.state = State::Ground;
+        on_event(ScanEvent::Clipboard(body));
     }
 
     /// Drop the sequence and go back to ground.
@@ -321,6 +395,9 @@ mod tests {
         Image(ImageRequest),
         Graphics(GraphicsRequest),
         CellSizeQuery,
+        PasteEvents(bool),
+        PasteEventsQuery,
+        Clipboard(Vec<u8>),
     }
 
     /// The events of feeding `chunks` one after another, with adjacent
@@ -337,6 +414,9 @@ mod tests {
                 ScanEvent::Image(request) => events.push(Owned::Image(request)),
                 ScanEvent::Graphics(request) => events.push(Owned::Graphics(request)),
                 ScanEvent::CellSizeQuery => events.push(Owned::CellSizeQuery),
+                ScanEvent::PasteEvents(on) => events.push(Owned::PasteEvents(on)),
+                ScanEvent::PasteEventsQuery => events.push(Owned::PasteEventsQuery),
+                ScanEvent::Clipboard(body) => events.push(Owned::Clipboard(body)),
             });
         }
         events
@@ -540,5 +620,55 @@ mod tests {
             [text(b"a"), Owned::CellSizeQuery, text(b"b")]
         );
         assert_eq!(scan(&[b"\x1b[16;1t"]), [text(b"\x1b[16;1t")]);
+    }
+
+    /// `scan` of `input` whole and split at every byte.
+    fn assert_scans_split(input: &[u8], expected: &[Owned]) {
+        assert_eq!(scan(&[input]), expected);
+        for split in 1..input.len() {
+            let (head, tail) = input.split_at(split);
+            assert_eq!(scan(&[head, tail]), expected, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn paste_events_mode() {
+        assert_scans_split(
+            b"a\x1b[?5522hb\x1b[?5522$pc\x1b[?5522ld",
+            &[
+                text(b"a"),
+                Owned::PasteEvents(true),
+                text(b"b"),
+                Owned::PasteEventsQuery,
+                text(b"c"),
+                Owned::PasteEvents(false),
+                text(b"d"),
+            ],
+        );
+        for other in [&b"\x1b[?5521h"[..], b"\x1b[?55222h"] {
+            assert_eq!(scan(&[other]), [text(other)]);
+        }
+    }
+
+    #[test]
+    fn full_reset_turns_paste_events_off() {
+        assert_eq!(
+            scan(&[b"\x1bc"]),
+            [text(b"\x1bc"), Owned::PasteEvents(false)]
+        );
+    }
+
+    #[test]
+    fn clipboard_request_with_bel_and_st() {
+        for end in [&b"\x07"[..], b"\x1b\\"] {
+            let input = [&b"\x1b]5522;type=read;Lg=="[..], end].concat();
+            assert_scans_split(&input, &[Owned::Clipboard(b"type=read;Lg==".to_vec())]);
+        }
+    }
+
+    #[test]
+    fn oversized_clipboard_request_is_dropped() {
+        let body = vec![b'A'; 9000];
+        assert_eq!(scan(&[b"\x1b]5522;", &body, b"\x07next"]), [text(b"next")]);
     }
 }

@@ -57,6 +57,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 base64 = "0.22"
 # Kitty graphics: zlib-compressed image data (o=z).
 miniz_oxide = "0.9"
+# One-time passwords for paste events (OSC 5522); the version ahash already uses.
+getrandom = "0.3"
 cosmic-text = "0.19"
 fontdb = "0.23"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }

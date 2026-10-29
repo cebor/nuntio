@@ -235,7 +235,7 @@ pub static ACTIONS: &[Variant] = &[
     variant("copy", "Copy the selection"),
     variant(
         "paste",
-        "Paste from the clipboard (an image is saved as a PNG file and its path pasted)",
+        "Paste from the clipboard (an image goes to programs that ask for paste events, mode 5522, as PNG data; otherwise it is saved as a PNG file and its path pasted)",
     ),
     variant(
         "new_tab",

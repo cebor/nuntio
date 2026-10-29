@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use nuntio_config::KeyCombo;
 use nuntio_render::{Capture, FrameStatus};
-use nuntio_term::{Rgb, Snapshot, SnapshotCell};
+use nuntio_term::{PasteSource, Rgb, Snapshot, SnapshotCell};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -423,7 +423,7 @@ impl Core {
             }
             Request::Paste { text } => {
                 let pane = state.content().focused;
-                self.paste(state, pane, text);
+                self.paste(state, pane, text, PasteSource::Clipboard);
                 Ok(Reply::ok(json!({})))
             }
             Request::Action { name } => {

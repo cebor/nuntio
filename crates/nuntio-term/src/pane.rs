@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -15,6 +16,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::clipboard::{self, PasteData, PasteOffer, PasteSource};
 use crate::image::{ImageStore, crop_columns, strip_image_text};
 use crate::io_loop::{IoLoop, LoopSender, Msg, ReplyBudget};
 use crate::osc_cwd::{ReportedDir, wsl_share};
@@ -206,6 +208,31 @@ impl Listener {
         &self.inner.reply_budget
     }
 
+    /// Remember whether the program wants paste events (mode 5522); turning
+    /// them off drops the pending paste.
+    pub(crate) fn set_paste_events(&self, on: bool) {
+        self.inner.paste_events.store(on, Ordering::Release);
+        if !on {
+            *lock(&self.inner.paste_offer) = None;
+        }
+    }
+
+    pub(crate) fn paste_events(&self) -> bool {
+        self.inner.paste_events.load(Ordering::Acquire)
+    }
+
+    /// The answer to a clipboard request (OSC 5522), if it gets one.
+    pub(crate) fn answer_clipboard(&self, body: &[u8]) -> Option<Vec<u8>> {
+        clipboard::respond(body, &self.inner.paste_offer, Instant::now())
+    }
+
+    /// Write `bytes` to the program as input. Clipboard answers go this way
+    /// rather than as replies: they can be megabytes, the reply budget would
+    /// refuse them, and a partly dropped answer is corrupt.
+    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
+        self.send(Msg::Input(Cow::Owned(bytes)));
+    }
+
     /// Report that nuntio-wsl failed and the pane fell back to ConPTY.
     #[cfg(windows)]
     pub(crate) fn helper_failed(&self) {
@@ -241,6 +268,10 @@ struct ListenerInner {
     /// The title change not yet taken with [`TermHandle::take_title`]:
     /// `Some(None)` is a reset.
     title: Mutex<Option<Option<String>>>,
+    /// The program turned on paste events (mode 5522).
+    paste_events: AtomicBool,
+    /// The last paste, until it is read, replaced or expired.
+    paste_offer: Mutex<Option<PasteOffer>>,
 }
 
 impl ListenerInner {
@@ -427,6 +458,8 @@ impl TermHandle {
                 reply_budget: ReplyBudget::default(),
                 bell_pending: AtomicBool::new(false),
                 title: Mutex::new(None),
+                paste_events: AtomicBool::new(false),
+                paste_offer: Mutex::new(None),
             }),
         };
 
@@ -616,10 +649,47 @@ impl TermHandle {
         self.listener.send(Msg::Input(bytes));
     }
 
-    /// Paste text, wrapped in bracketed-paste markers if the app asked for them.
-    pub fn paste(&self, text: &str) {
+    /// Paste text, wrapped in bracketed-paste markers if the app asked for
+    /// them. With paste events (mode 5522) the text is offered through
+    /// OSC 5522 instead: the spec forbids bracketed paste alongside them.
+    pub fn paste(&self, text: &str, source: PasteSource) {
+        if self.offer(PasteData::Text(text.to_owned()), source) {
+            return;
+        }
         let bracketed = self.mode().contains(term::TermMode::BRACKETED_PASTE);
         self.write(encode_paste(text, bracketed));
+    }
+
+    /// The program asked for paste events (mode 5522).
+    pub fn paste_events(&self) -> bool {
+        self.listener.paste_events()
+    }
+
+    /// Offer a PNG image from the clipboard through OSC 5522. False when the
+    /// program has no paste events on (nothing is sent).
+    pub fn paste_png(&self, png: Vec<u8>) -> bool {
+        self.offer(PasteData::Png(png), PasteSource::Clipboard)
+    }
+
+    /// Announce `data` to a program with paste events on; it reads the data
+    /// with the password in the announcement.
+    fn offer(&self, data: PasteData, source: PasteSource) -> bool {
+        if !self.paste_events() {
+            return false;
+        }
+        let offer = match PasteOffer::new(data, source, Instant::now()) {
+            Ok(offer) => offer,
+            Err(err) => {
+                tracing::warn!("no password for a paste event: {err}");
+                return false;
+            }
+        };
+        let announcement = offer.announcement();
+        // Set before sending, so a fast request finds it; a new paste
+        // replaces the old password.
+        *lock(&self.listener.inner.paste_offer) = Some(offer);
+        self.write(announcement);
+        true
     }
 
     /// Scroll the viewport; positive values move up into the scrollback.

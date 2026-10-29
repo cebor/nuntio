@@ -20,6 +20,7 @@ use alacritty_terminal::vte::ansi::Processor;
 use polling::{Events, PollMode, Poller};
 
 use crate::backend::{Backend, BackendEvent};
+use crate::clipboard;
 use crate::image::{self, CellGeometry, ImageKey, ImageStore, TermImage};
 use crate::image_scan::{ImageRequest, ImageScanner, ScanEvent};
 use crate::kitty::{self, Accepted, Transfers};
@@ -496,6 +497,7 @@ impl IoLoop {
             let kitty = &mut self.kitty;
             let listener = &self.listener;
             let images = &self.images;
+            let paste_events = paste_events_supported(&self.pty);
             let mut input = PtyInput {
                 pty: &mut self.pty,
                 rx: &self.rx,
@@ -529,6 +531,29 @@ impl IoLoop {
                         let size = listener.window_size();
                         listener.reply(format!("\x1b[6;{};{}t", size.cell_height, size.cell_width));
                     });
+                }
+                ScanEvent::PasteEvents(on) => listener.set_paste_events(on && paste_events),
+                ScanEvent::PasteEventsQuery => {
+                    let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
+                    with_flushed_sync(parser, term, |_| {
+                        listener.reply(clipboard::mode_report(
+                            paste_events,
+                            listener.paste_events(),
+                        ));
+                    });
+                }
+                ScanEvent::Clipboard(body) => {
+                    if *input.shutdown_requested {
+                        return;
+                    }
+                    // Encoding a large image takes a while: let the main
+                    // thread draw meanwhile.
+                    drop(guard.take());
+                    drop(lease.take());
+                    if let Some(answer) = listener.answer_clipboard(&body) {
+                        listener.send_input(answer);
+                    }
+                    lease = Some(term.lease());
                 }
                 ScanEvent::Image(request) => {
                     if *input.shutdown_requested {
@@ -697,6 +722,7 @@ impl IoLoop {
             }
         };
         self.pty = Backend::Pty(pty);
+        self.listener.set_paste_events(false);
         // SAFETY: as for the first registration in `run`.
         if let Err(err) = unsafe { self.pty.register(poll, interest, PollMode::Level) } {
             tracing::error!(%err, "registering the ConPTY fallback failed");
@@ -708,6 +734,13 @@ impl IoLoop {
         self.listener.helper_failed();
         true
     }
+}
+
+/// Paste events need the program's output and nuntio's input unchanged:
+/// a PTY, or nuntio-wsl's pipes. ConPTY (`Backend::Pty` on Windows) parses
+/// and rewrites both.
+fn paste_events_supported(pty: &Backend) -> bool {
+    cfg!(not(windows)) || !matches!(pty, Backend::Pty(_))
 }
 
 /// The parts of the loop that keep working while an image decodes.

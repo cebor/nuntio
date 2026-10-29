@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use nuntio_config::detect;
 use nuntio_config::{OptionAsMeta, StatusItem};
-use nuntio_term::{GridPoint, SelectionKind, TermMode};
+use nuntio_term::{GridPoint, PasteSource, SelectionKind, TermMode};
 use winit::dpi::PhysicalPosition;
 use winit::event::{Modifiers, MouseButton};
 use winit::keyboard::{
@@ -18,7 +18,7 @@ use super::app_panes::CloseTarget;
 use super::{Confirmation, Core};
 use crate::actions::Action;
 use crate::banner::{Banner, Severity, Topic};
-use crate::event::{ClipboardPaste, PaneId, PasteSource, Pasted, UserEvent};
+use crate::event::{ClipboardPaste, PaneId, Pasted, UserEvent};
 use crate::input::{self, KeyEventKind, KeyInput, KeyPress};
 use crate::link_lookup::{Answer, Lookups, Request};
 use crate::menu::{MenuKind, Step};
@@ -347,18 +347,38 @@ impl Core {
                 PasteTarget::FindBar => {
                     state.search_append(text.lines().next().unwrap_or(""));
                 }
-                PasteTarget::Pane => self.paste(state, pane, text),
+                PasteTarget::Pane => self.paste(state, pane, text, source),
             },
             // Pasted like a dropped file: AI CLIs attach image paths.
             Pasted::Image(image) => {
                 if !alive || search_open {
                     return;
                 }
+                if state.pane(pane).is_some_and(|p| p.term.paste_events()) {
+                    match crate::pasted_images::encode_png(&image) {
+                        Ok(png) => {
+                            self.pending_paste = None;
+                            self.dismiss_banner(Topic::Paste);
+                            if state.pane(pane).is_some_and(|p| p.term.paste_png(png)) {
+                                return;
+                            }
+                            // The program turned paste events off meanwhile:
+                            // paste the path.
+                        }
+                        Err(err) => {
+                            tracing::warn!("failed to encode the clipboard image: {err:#}");
+                            if focused {
+                                send_ctrl_v(state);
+                            }
+                            return;
+                        }
+                    }
+                }
                 match self.pasted_images.save(&image) {
                     Ok(path) => {
                         if let Some(target) = state.pane(pane) {
                             let word = path_word(&path.to_string_lossy(), target.path_syntax());
-                            self.paste(state, pane, word);
+                            self.paste(state, pane, word, PasteSource::Clipboard);
                         }
                     }
                     Err(err) => {
@@ -377,28 +397,35 @@ impl Core {
         }
     }
 
-    /// Paste into `pane`. Where the program doesn't use
+    /// Paste into `pane`. Where the program uses neither paste events nor
     /// bracketed paste, text with line breaks would run at once: the
     /// first paste only warns, and the same paste again within
     /// `CONFIRM_REPEAT` goes through.
-    pub(super) fn paste(&mut self, state: &WindowState, pane: PaneId, text: String) {
+    pub(super) fn paste(
+        &mut self,
+        state: &WindowState,
+        pane: PaneId,
+        text: String,
+        source: PasteSource,
+    ) {
         let Some(target) = state.pane(pane) else {
             return;
         };
-        let bracketed = target.term.mode().contains(TermMode::BRACKETED_PASTE);
+        let guarded =
+            target.term.paste_events() || target.term.mode().contains(TermMode::BRACKETED_PASTE);
         self.dismiss_banner(Topic::Paste);
-        let warning = if self.config.confirm_paste && !bracketed {
+        let warning = if self.config.confirm_paste && !guarded {
             paste_warning(&text)
         } else {
             None
         };
         let Some(message) = warning else {
             self.pending_paste = None;
-            target.term.paste(&text);
+            target.term.paste(&text, source);
             return;
         };
         match Confirmation::confirm(&mut self.pending_paste, (pane, text), Instant::now()) {
-            Some((_, text)) => target.term.paste(&text),
+            Some((_, text)) => target.term.paste(&text, source),
             None => self.ask_to_repeat(Topic::Paste, message),
         }
     }
@@ -412,7 +439,7 @@ impl Core {
         }
         let pane = state.content().focused_pane();
         let word = path_word(&path.to_string_lossy(), pane.path_syntax());
-        state.term().paste(&word);
+        state.term().paste(&word, PasteSource::Clipboard);
         state.window.request_redraw();
     }
 

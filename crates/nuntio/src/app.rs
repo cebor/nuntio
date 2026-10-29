@@ -11,7 +11,7 @@ use nuntio_config::{
     Color, Config, ConfigWatcher, DEFAULT_THEME, StatusItem, Theme, ThemeSelection, ThemeSet,
 };
 use nuntio_render::{FrameStatus, GpuOptions, Renderer};
-use nuntio_term::{Palette, Rgb, TermEvent, TermOptions, TermSize};
+use nuntio_term::{Palette, PasteSource, Rgb, TermEvent, TermOptions, TermSize};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, WindowEvent};
@@ -20,7 +20,7 @@ use winit::window::{Theme as WindowTheme, Window, WindowAttributes, WindowId};
 
 use crate::actions::Bindings;
 use crate::banner::{Banner, Severity, Topic};
-use crate::event::{ClipboardPaste, MenuCommand, PaneId, PasteSource, Pasted, UserEvent};
+use crate::event::{ClipboardPaste, MenuCommand, PaneId, Pasted, UserEvent};
 use crate::input::KeyPress;
 use crate::link::{self, Target};
 use crate::render_health::{GpuProbe, HealthAction};

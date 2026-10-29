@@ -4,8 +4,8 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use nuntio_term::{
-    GridPoint, LinkKind, Program, ReportedDir, SelectionKind, SpawnOptions, TermEvent, TermHandle,
-    TermMode, TermOptions, TermSize,
+    GridPoint, LinkKind, PasteSource, Program, ReportedDir, SelectionKind, SpawnOptions, TermEvent,
+    TermHandle, TermMode, TermOptions, TermSize,
 };
 
 mod common;
@@ -547,6 +547,33 @@ fn cell_size_is_reported_in_order() {
          case \"$r\" in *'[?6c'*'[6;16;8t') printf OK;; *) printf NO;; esac",
     );
     answer_queries_until_exit(&handle, &rx);
+    assert!(screen_contains(&handle, "OK"));
+}
+
+#[test]
+fn paste_events_mode_is_reported() {
+    let (handle, rx) = spawn(
+        r#"stty raw -echo; printf '\033[?5522$p\033[?5522h\033[?5522$p\033[?5522l\033[?5522$p\033[?5522h\033c\033[?5522$p'; r=$(dd bs=1 count=44 2>/dev/null); stty sane; case "$r" in *'[?5522;2$y'*'[?5522;1$y'*'[?5522;2$y'*'[?5522;2$y') printf OK;; *) printf NO;; esac"#,
+    );
+    wait_for_exit(&rx);
+    assert!(screen_contains(&handle, "OK"));
+}
+
+/// The paste goes out as OSC 5522, not bracketed (that would break the
+/// 163-byte framing), the program reads it with the password, and the
+/// password works only once.
+#[test]
+fn paste_events_hand_text_to_the_program() {
+    let (handle, rx) = spawn(
+        r#"stty raw -echo; printf '\033[?5522h'; r=$(dd bs=1 count=163 2>/dev/null); pw=${r#*pw=}; pw=${pw%%"$(printf '\033')"*}; printf '\033]5522;type=read:pw=%s:name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\033\\' "$pw"; a=$(dd bs=1 count=115 2>/dev/null); printf '\033]5522;type=read:pw=%s:name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\033\\' "$pw"; b=$(dd bs=1 count=31 2>/dev/null); stty sane; case "$a$b" in *'status=DATA:mime=dGV4dC9wbGFpbg==;aGk='*'status=EPERM'*) printf OK;; *) printf NO;; esac"#,
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !handle.paste_events() {
+        assert!(Instant::now() < deadline, "paste events never turned on");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    handle.paste("hi", PasteSource::Clipboard);
+    wait_for_exit(&rx);
     assert!(screen_contains(&handle, "OK"));
 }
 

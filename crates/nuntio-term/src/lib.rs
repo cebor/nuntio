@@ -1,6 +1,7 @@
 //! Thin wrapper around `alacritty_terminal` and the PTY of a pane.
 
 mod backend;
+mod clipboard;
 mod image;
 mod image_scan;
 mod io_loop;
@@ -21,6 +22,7 @@ mod wsl_pipe;
 pub use crate::image::{ImagePiece, TermImage};
 pub use alacritty_terminal::term::TermMode;
 pub use alacritty_terminal::vte::ansi::Rgb;
+pub use clipboard::PasteSource;
 pub use osc_cwd::{ReportedDir, wsl_share};
 pub use palette::{Palette, rgb};
 pub use pane::{

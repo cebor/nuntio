@@ -1,4 +1,4 @@
-use nuntio_term::TermEvent;
+use nuntio_term::{PasteSource, TermEvent};
 
 use crate::actions::Action;
 use crate::mux::agents::AgentsUpdate;
@@ -9,15 +9,6 @@ use crate::update::Checked;
 /// Identifies a pane across tabs and splits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PaneId(pub u64);
-
-/// Where a paste reads from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PasteSource {
-    Clipboard,
-    /// The primary selection, which only Linux has.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    Primary,
-}
 
 /// What a paste found.
 #[derive(Debug)]

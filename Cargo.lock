@@ -2076,6 +2076,7 @@ version = "0.3.6"
 dependencies = [
  "alacritty_terminal",
  "base64 0.22.1",
+ "getrandom 0.3.4",
  "image",
  "libc",
  "miniz_oxide 0.9.1",
