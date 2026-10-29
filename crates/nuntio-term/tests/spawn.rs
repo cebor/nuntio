@@ -577,6 +577,33 @@ fn paste_events_hand_text_to_the_program() {
     assert!(screen_contains(&handle, "OK"));
 }
 
+/// Paste events belong to the process group that turned them on: a job that
+/// ends without turning them off leaves the shell ordinary pastes, and the
+/// mode reads as off there.
+#[test]
+fn paste_events_end_with_the_program_that_turned_them_on() {
+    let (handle, rx) = spawn(
+        r#"stty raw -echo; set -m; sh -c "printf '\033[?5522h'; sleep 1"; printf '\033[?5522$p'; q=$(dd bs=1 count=11 2>/dev/null); case "$q" in *';2$y') printf 'Q2 ';; *) printf 'Q? ';; esac; r=$(dd bs=1 count=2 2>/dev/null); stty sane; [ "$r" = hi ] && printf OK || printf NO"#,
+    );
+    let wait = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait("the job never turned paste events on", &|| {
+        handle.paste_events()
+    });
+    wait("paste events outlived the job", &|| !handle.paste_events());
+    wait("the shell got no mode report", &|| {
+        screen_contains(&handle, "Q")
+    });
+    handle.paste("hi", PasteSource::Clipboard);
+    wait_for_exit(&rx);
+    assert!(screen_contains(&handle, "Q2 OK"));
+}
+
 #[test]
 fn osc8_links_with_unknown_schemes_are_ignored() {
     let (handle, rx) = spawn("printf '\\033]8;;ms-msdt:/id x\\033\\\\click\\033]8;;\\033\\\\'");

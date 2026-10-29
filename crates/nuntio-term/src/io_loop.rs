@@ -20,12 +20,12 @@ use alacritty_terminal::vte::ansi::Processor;
 use polling::{Events, PollMode, Poller};
 
 use crate::backend::{Backend, BackendEvent};
-use crate::clipboard;
+use crate::clipboard::{self, PasteEvents};
 use crate::image::{self, CellGeometry, ImageKey, ImageStore, TermImage};
 use crate::image_scan::{ImageRequest, ImageScanner, ScanEvent};
 use crate::kitty::{self, Accepted, Transfers};
 use crate::osc_cwd::{CwdScanner, ReportedDir};
-use crate::pane::Listener;
+use crate::pane::{Listener, Remote, foreground_group};
 use crate::sync::lock;
 
 /// Size of the read buffer.
@@ -210,6 +210,8 @@ pub(crate) struct IoLoop {
     /// Chunks of a Kitty graphics transfer received so far.
     kitty: Transfers,
     images: Arc<Mutex<ImageStore>>,
+    /// What nuntio-wsl reports about a WSL pane, shared with the pane.
+    remote: Arc<Mutex<Remote>>,
     /// Input waiting for the PTY to become writable.
     write_list: VecDeque<Queued>,
     /// Bytes of the front of `write_list` already written.
@@ -233,6 +235,7 @@ impl IoLoop {
         listener: Listener,
         reported_dir: Arc<Mutex<Option<ReportedDir>>>,
         images: Arc<Mutex<ImageStore>>,
+        remote: Arc<Mutex<Remote>>,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let child_pid = Arc::new(AtomicU32::new(pty.pid().unwrap_or(0)));
@@ -251,6 +254,7 @@ impl IoLoop {
             scanner: ImageScanner::default(),
             kitty: Transfers::default(),
             images,
+            remote,
             write_list: VecDeque::new(),
             written: 0,
             shutdown_requested: false,
@@ -497,6 +501,8 @@ impl IoLoop {
             let kitty = &mut self.kitty;
             let listener = &self.listener;
             let images = &self.images;
+            let child_pid = &self.child_pid;
+            let remote = &self.remote;
             let paste_events = paste_events_supported(&self.pty);
             let mut input = PtyInput {
                 pty: &mut self.pty,
@@ -532,13 +538,19 @@ impl IoLoop {
                         listener.reply(format!("\x1b[6;{};{}t", size.cell_height, size.cell_width));
                     });
                 }
-                ScanEvent::PasteEvents(on) => listener.set_paste_events(on && paste_events),
+                ScanEvent::PasteEvents(on) => listener.set_paste_events(if on && paste_events {
+                    PasteEvents::On {
+                        group: foreground_group(child_pid, remote),
+                    }
+                } else {
+                    PasteEvents::Off
+                }),
                 ScanEvent::PasteEventsQuery => {
                     let term = &mut **guard.get_or_insert_with(|| term.lock_unfair());
                     with_flushed_sync(parser, term, |_| {
                         listener.reply(clipboard::mode_report(
                             paste_events,
-                            listener.paste_events(),
+                            listener.paste_events(foreground_group(child_pid, remote)),
                         ));
                     });
                 }
@@ -722,7 +734,7 @@ impl IoLoop {
             }
         };
         self.pty = Backend::Pty(pty);
-        self.listener.set_paste_events(false);
+        self.listener.set_paste_events(PasteEvents::Off);
         // SAFETY: as for the first registration in `run`.
         if let Err(err) = unsafe { self.pty.register(poll, interest, PollMode::Level) } {
             tracing::error!(%err, "registering the ConPTY fallback failed");

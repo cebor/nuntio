@@ -94,6 +94,35 @@ impl Helper {
         }
     }
 
+    /// The next foreground report after `from`: its end, the shell flag, the pgid and the name.
+    fn next_foreground(&mut self, from: usize) -> (usize, bool, u32, String) {
+        let start = self.wait_for(b"\x1b]nuntio-wsl;fg;", from);
+        let end = self.wait_for(b"\x07", start);
+        let body = String::from_utf8(self.output[start..end - 1].to_vec()).unwrap();
+        let mut fields = body.splitn(3, ';');
+        let shell = fields.next().unwrap() == "1";
+        let pgid = fields.next().unwrap().parse().unwrap();
+        (end, shell, pgid, fields.next().unwrap().to_owned())
+    }
+
+    /// Skips foreground reports until one with `shell` and `name` (any name if `None`); its end
+    /// and pgid.
+    fn wait_for_foreground(
+        &mut self,
+        shell: bool,
+        name: Option<&str>,
+        from: usize,
+    ) -> (usize, u32) {
+        let mut at = from;
+        loop {
+            let (end, is_shell, pgid, found) = self.next_foreground(at);
+            if is_shell == shell && name.is_none_or(|n| n == found) {
+                return (end, pgid);
+            }
+            at = end;
+        }
+    }
+
     /// Waits for the exit and the end of the output.
     fn finish(&mut self) -> i32 {
         let deadline = Instant::now() + TIMEOUT;
@@ -230,12 +259,14 @@ fn reports_the_foreground_process_group() {
     // An interactive shell gives each command its own process group.
     let mut helper = Helper::start(&["--", "sh", "-i"]);
     helper.resize(80, 24);
-    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", 0);
+    let (seen, shell) = helper.wait_for_foreground(true, None, 0);
     helper.data(b"sleep 30\n");
-    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;0;sleep\x07", seen);
+    let (seen, sleep) = helper.wait_for_foreground(false, Some("sleep"), seen);
+    assert_ne!(sleep, shell);
     // Back at the prompt.
     helper.data(b"\x03");
-    helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", seen);
+    let (_, back) = helper.wait_for_foreground(true, None, seen);
+    assert_eq!(back, shell);
 }
 
 #[test]
@@ -243,12 +274,14 @@ fn reports_a_command_that_execs_after_taking_the_terminal() {
     // The group leader is `sh` while it holds the terminal, then becomes `sleep`.
     let mut helper = Helper::start(&["--", "sh", "-i"]);
     helper.resize(80, 24);
-    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", 0);
+    let (seen, _) = helper.wait_for_foreground(true, None, 0);
     helper.data(b"sh -c 'sleep 0.3; exec sleep 30'\n");
-    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;0;sh\x07", seen);
-    let seen = helper.wait_for(b"\x1b]nuntio-wsl;fg;0;sleep\x07", seen);
+    let (seen, sh_group) = helper.wait_for_foreground(false, Some("sh"), seen);
+    let (seen, sleep_group) = helper.wait_for_foreground(false, Some("sleep"), seen);
+    // exec keeps the process group.
+    assert_eq!(sleep_group, sh_group);
     helper.data(b"\x03");
-    helper.wait_for(b"\x1b]nuntio-wsl;fg;1;", seen);
+    helper.wait_for_foreground(true, None, seen);
 }
 
 #[test]

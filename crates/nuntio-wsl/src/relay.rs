@@ -364,7 +364,11 @@ fn report_foreground(
         return Ok(());
     }
     let since = same.map_or(now, |r| r.since);
-    let marker = foreground_marker(String::from_utf8_lossy(&comm).trim(), pgid == shell);
+    let marker = foreground_marker(
+        String::from_utf8_lossy(&comm).trim(),
+        pgid == shell,
+        pgid.unsigned_abs(),
+    );
     *reported = Some(Reported {
         pgid,
         name: comm,

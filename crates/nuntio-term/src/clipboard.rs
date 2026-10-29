@@ -90,6 +90,30 @@ impl PasteOffer {
     }
 }
 
+/// Mode 5522 as the program set it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PasteEvents {
+    Off,
+    /// Turned on while `group` was the terminal's foreground process group (`None`: unknown).
+    On {
+        group: Option<u32>,
+    },
+}
+
+impl PasteEvents {
+    /// Whether a paste goes out as paste events while `foreground` is the terminal's foreground
+    /// process group. They belong to the group that turned them on: one that ended without
+    /// turning them off (a crash) leaves them to nobody, and a suspended one gets them back.
+    /// Unknown groups don't count against them.
+    pub(crate) fn applies_to(self, foreground: Option<u32>) -> bool {
+        match self {
+            Self::Off => false,
+            Self::On { group: Some(owner) } => foreground.is_none_or(|group| group == owner),
+            Self::On { group: None } => true,
+        }
+    }
+}
+
 /// The answer to `CSI ? 5522 $ p` (DECRQM).
 pub(crate) fn mode_report(supported: bool, on: bool) -> String {
     let ps = match (supported, on) {
@@ -395,5 +419,16 @@ mod tests {
         let text = std::str::from_utf8(&announcement).unwrap();
         assert!(text.contains(":loc=primary:pw="), "{text:?}");
         assert_eq!(announcement.len(), 76 + 12 + 57 + 30);
+    }
+
+    #[test]
+    fn paste_events_apply_only_to_their_group() {
+        assert!(!PasteEvents::Off.applies_to(Some(5)));
+        assert!(!PasteEvents::Off.applies_to(None));
+        assert!(PasteEvents::On { group: None }.applies_to(Some(5)));
+        let owned = PasteEvents::On { group: Some(5) };
+        assert!(owned.applies_to(Some(5)));
+        assert!(owned.applies_to(None));
+        assert!(!owned.applies_to(Some(6)));
     }
 }

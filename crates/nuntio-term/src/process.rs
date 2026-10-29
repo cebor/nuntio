@@ -47,6 +47,11 @@ pub(crate) fn foreground_is_shell(shell_pid: u32) -> Option<bool> {
     sys::tpgid(shell_pid).map(|pid| pid == shell_pid)
 }
 
+/// The foreground process group of `pid`'s controlling terminal.
+pub(crate) fn foreground_group(pid: u32) -> Option<u32> {
+    sys::tpgid(pid)
+}
+
 /// The shell that `login` (see `pane::login_command`) started as its
 /// child, once it exists.
 #[cfg(target_os = "macos")]

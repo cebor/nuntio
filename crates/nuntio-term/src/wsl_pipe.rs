@@ -222,8 +222,8 @@ impl WslPipe {
                     &buf[..n],
                     |bytes| out.push(bytes),
                     |marker| match marker {
-                        Marker::Foreground { name, shell } => {
-                            lock(&remote).foreground = Some(RemoteForeground { name, shell });
+                        Marker::Foreground { name, shell, pgid } => {
+                            lock(&remote).foreground = Some(RemoteForeground { name, shell, pgid });
                         }
                         Marker::Directory(dir) => lock(&remote).directory = dir,
                         Marker::Ready => {}

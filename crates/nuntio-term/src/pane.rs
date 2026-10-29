@@ -16,7 +16,7 @@ use alacritty_terminal::vte::ansi::Rgb;
 use thiserror::Error;
 
 use crate::backend::Backend;
-use crate::clipboard::{self, PasteData, PasteOffer, PasteSource};
+use crate::clipboard::{self, PasteData, PasteEvents, PasteOffer, PasteSource};
 use crate::image::{ImageStore, crop_columns, strip_image_text};
 use crate::io_loop::{IoLoop, LoopSender, Msg, ReplyBudget};
 use crate::osc_cwd::{ReportedDir, wsl_share};
@@ -208,17 +208,18 @@ impl Listener {
         &self.inner.reply_budget
     }
 
-    /// Remember whether the program wants paste events (mode 5522); turning
-    /// them off drops the pending paste.
-    pub(crate) fn set_paste_events(&self, on: bool) {
-        self.inner.paste_events.store(on, Ordering::Release);
-        if !on {
+    /// Record mode 5522 as the program set it; turning it off drops the pending paste.
+    pub(crate) fn set_paste_events(&self, events: PasteEvents) {
+        *lock(&self.inner.paste_events) = events;
+        if events == PasteEvents::Off {
             *lock(&self.inner.paste_offer) = None;
         }
     }
 
-    pub(crate) fn paste_events(&self) -> bool {
-        self.inner.paste_events.load(Ordering::Acquire)
+    /// Whether a paste goes out as paste events while `foreground` is the foreground process
+    /// group.
+    pub(crate) fn paste_events(&self, foreground: Option<u32>) -> bool {
+        lock(&self.inner.paste_events).applies_to(foreground)
     }
 
     /// The answer to a clipboard request (OSC 5522), if it gets one.
@@ -268,8 +269,8 @@ struct ListenerInner {
     /// The title change not yet taken with [`TermHandle::take_title`]:
     /// `Some(None)` is a reset.
     title: Mutex<Option<Option<String>>>,
-    /// The program turned on paste events (mode 5522).
-    paste_events: AtomicBool,
+    /// Mode 5522 and the process group that turned it on.
+    paste_events: Mutex<PasteEvents>,
     /// The last paste, until it is read, replaced or expired.
     paste_offer: Mutex<Option<PasteOffer>>,
 }
@@ -396,6 +397,8 @@ pub(crate) struct RemoteForeground {
     pub name: String,
     /// The shell itself is in the foreground.
     pub shell: bool,
+    /// Its process group.
+    pub pgid: u32,
 }
 
 /// What nuntio-wsl last reported about a WSL pane.
@@ -404,6 +407,16 @@ pub(crate) struct Remote {
     pub foreground: Option<RemoteForeground>,
     /// The foreground process's working directory, a Linux path.
     pub directory: Option<String>,
+}
+
+/// The foreground process group of a pane's terminal: from the PTY of `child_pid` (Linux, macOS),
+/// else as nuntio-wsl last reported it. `None` if unknown: ConPTY, no report yet, or the child is
+/// gone.
+pub(crate) fn foreground_group(child_pid: &AtomicU32, remote: &Mutex<Remote>) -> Option<u32> {
+    Some(child_pid.load(Ordering::Relaxed))
+        .filter(|&pid| pid != 0)
+        .and_then(process::foreground_group)
+        .or_else(|| lock(remote).foreground.as_ref().map(|f| f.pgid))
 }
 
 /// One terminal: grid state, the shell's PTY and its IO thread.
@@ -458,7 +471,7 @@ impl TermHandle {
                 reply_budget: ReplyBudget::default(),
                 bell_pending: AtomicBool::new(false),
                 title: Mutex::new(None),
-                paste_events: AtomicBool::new(false),
+                paste_events: Mutex::new(PasteEvents::Off),
                 paste_offer: Mutex::new(None),
             }),
         };
@@ -587,6 +600,7 @@ impl TermHandle {
             listener.clone(),
             reported_dir.clone(),
             images.clone(),
+            remote.clone(),
         )
         .map_err(SpawnError::EventLoop)?;
         let child_pid = io_loop.child_pid();
@@ -660,9 +674,11 @@ impl TermHandle {
         self.write(encode_paste(text, bracketed));
     }
 
-    /// The program asked for paste events (mode 5522).
+    /// Pastes go to the program as paste events (mode 5522): the foreground process group turned
+    /// them on.
     pub fn paste_events(&self) -> bool {
-        self.listener.paste_events()
+        self.listener
+            .paste_events(foreground_group(&self.child_pid, &self.remote))
     }
 
     /// Offer a PNG image from the clipboard through OSC 5522. False when the

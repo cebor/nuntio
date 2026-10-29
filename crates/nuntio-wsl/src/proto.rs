@@ -167,18 +167,23 @@ pub enum Marker {
         name: String,
         /// Whether it is the shell itself.
         shell: bool,
+        /// The process group, i.e. its leader's pid.
+        pgid: u32,
     },
     /// The working directory of the foreground process group changed: a Linux path, `None` if
     /// the helper can't tell (unreadable, not UTF-8, a control character, too long).
     Directory(Option<String>),
 }
 
-/// The report [`Marker::Foreground`] as bytes for the helper's stdout. Escape and bell
+/// The report [`Marker::Foreground`] as bytes for the helper's stdout: `fg;<0|1>;<pgid>;<name>`,
+/// with the shell flag before the pgid so that the name may contain `;`. Escape and bell
 /// characters are removed from `name`, and it is cut to 64 bytes.
-pub fn foreground_marker(name: &str, shell: bool) -> Vec<u8> {
+pub fn foreground_marker(name: &str, shell: bool, pgid: u32) -> Vec<u8> {
     let mut out = MARKER_PREFIX.to_vec();
     out.extend_from_slice(b"fg;");
     out.push(if shell { b'1' } else { b'0' });
+    out.push(b';');
+    out.extend_from_slice(pgid.to_string().as_bytes());
     out.push(b';');
     let mut len = 0;
     for c in name.chars().filter(|&c| c != '\x07' && c != '\x1b') {
@@ -328,15 +333,22 @@ impl MarkerFilter {
             return Some(Marker::Directory((!dir.is_empty()).then(|| dir.to_owned())));
         }
         let rest = body.strip_prefix("fg;")?;
-        let (shell, name) = rest.split_once(';')?;
-        let shell = match shell {
+        let mut fields = rest.splitn(3, ';');
+        let shell = match fields.next()? {
             "0" => false,
             "1" => true,
             _ => return None,
         };
+        let pgid = fields
+            .next()?
+            .parse::<u32>()
+            .ok()
+            .filter(|&pgid| pgid > 0)?;
+        let name = fields.next()?;
         Some(Marker::Foreground {
             name: name.to_owned(),
             shell,
+            pgid,
         })
     }
 }
@@ -476,10 +488,11 @@ mod tests {
         (out, markers, filter.is_ready())
     }
 
-    fn fg(name: &str, shell: bool) -> Marker {
+    fn fg(name: &str, shell: bool, pgid: u32) -> Marker {
         Marker::Foreground {
             name: name.to_owned(),
             shell,
+            pgid,
         }
     }
 
@@ -549,11 +562,11 @@ mod tests {
     #[test]
     fn marker_filter_splits_foreground_reports_at_every_position() {
         let mut wire = b"ab".to_vec();
-        wire.extend_from_slice(&foreground_marker("zsh", true));
+        wire.extend_from_slice(&foreground_marker("zsh", true, 7));
         wire.extend_from_slice(b"cd");
-        wire.extend_from_slice(&foreground_marker("tmux: client", false));
+        wire.extend_from_slice(&foreground_marker("tmux: client", false, 42));
         wire.extend_from_slice(b"ef");
-        let expected = [fg("zsh", true), fg("tmux: client", false)];
+        let expected = [fg("zsh", true, 7), fg("tmux: client", false, 42)];
 
         for at in 0..=wire.len() {
             let (out, markers, ready) = filter(&[&wire[..at], &wire[at..]]);
@@ -591,7 +604,9 @@ mod tests {
 
     #[test]
     fn marker_filter_ignores_unknown_bodies() {
-        let (out, markers, _) = filter(&[b"\x1b]nuntio-wsl;fg;2;x\x07\x1b]nuntio-wsl;what\x07z"]);
+        let (out, markers, _) = filter(&[
+            b"\x1b]nuntio-wsl;fg;2;7;x\x07\x1b]nuntio-wsl;fg;1;0;x\x07\x1b]nuntio-wsl;fg;1;x;y\x07\x1b]nuntio-wsl;what\x07z",
+        ]);
         assert_eq!(out, b"z");
         assert!(markers.is_empty());
     }
@@ -599,14 +614,14 @@ mod tests {
     #[test]
     fn foreground_marker_cleans_and_cuts_the_name() {
         assert_eq!(
-            foreground_marker("a\x07b\x1bc", false),
-            b"\x1b]nuntio-wsl;fg;0;abc\x07"
+            foreground_marker("a\x07b\x1bc", false, 7),
+            b"\x1b]nuntio-wsl;fg;0;7;abc\x07"
         );
-        let marker = foreground_marker(&"é".repeat(100), true);
+        let marker = foreground_marker(&"é".repeat(100), true, 7);
         let body = &marker[MARKER_PREFIX.len()..marker.len() - 1];
-        assert_eq!(body.len(), "fg;1;".len() + MAX_NAME);
+        assert_eq!(body.len(), "fg;1;7;".len() + MAX_NAME);
         let (_, markers, _) = filter(&[&marker]);
-        assert_eq!(markers, [fg(&"é".repeat(32), true)]);
+        assert_eq!(markers, [fg(&"é".repeat(32), true, 7)]);
     }
 
     #[test]
