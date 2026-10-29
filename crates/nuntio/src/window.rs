@@ -138,6 +138,60 @@ impl HeldOutput {
     }
 }
 
+/// Holds frames back while the active tab's output is still arriving
+/// (`HeldOutput`), except the first frame after the window was resized.
+#[derive(Debug, Default)]
+struct OutputHold {
+    output: Option<HeldOutput>,
+    /// The window changed size and no frame has shown it yet. The frame on
+    /// screen is stretched or cut off and a drag must be followed live, so
+    /// the next frame is drawn even with output held.
+    resize_unshown: bool,
+}
+
+impl OutputHold {
+    /// Output arrived: hold frames until it pauses. A running hold keeps
+    /// its deadline.
+    fn output_arrived(&mut self, now: Instant, generation: u64) {
+        if self.output.is_none() {
+            self.output = Some(HeldOutput::new(now, generation));
+        }
+    }
+
+    /// The window changed size: draw its next frame at once.
+    fn resized(&mut self) {
+        self.resize_unshown = true;
+    }
+
+    /// A frame was presented: it showed the current size.
+    fn presented(&mut self) {
+        self.resize_unshown = false;
+    }
+
+    /// Frames wait for the held output to pause.
+    fn holds(&self) -> bool {
+        self.output.is_some() && !self.resize_unshown
+    }
+
+    /// When held output is looked at next.
+    fn due(&self) -> Option<Instant> {
+        self.output.map(|held| held.due())
+    }
+
+    /// Look at held output at `now`: true once it paused or hit its
+    /// deadline; then it gets its frame. Unrelated to `resize_unshown`.
+    fn settled(&mut self, now: Instant, generation: u64) -> bool {
+        let settled = self
+            .output
+            .as_mut()
+            .is_some_and(|held| held.settled(now, generation));
+        if settled {
+            self.output = None;
+        }
+        settled
+    }
+}
+
 pub struct Pane {
     pub id: PaneId,
     pub term: TermHandle,
@@ -422,9 +476,9 @@ pub struct WindowState {
     /// A frame showed cached tab titles; redraw once they expire so they
     /// catch up with the processes.
     pub title_refresh: Option<Instant>,
-    /// Output of the active tab waiting until it pauses; no frame is drawn
-    /// meanwhile.
-    held_output: Option<HeldOutput>,
+    /// Output of the active tab waiting until it pauses, and whether a
+    /// resize still needs its frame.
+    output_hold: OutputHold,
     /// A new pane waiting for its shell's first screen; frames are held.
     pub reveal: Option<Reveal>,
     /// Cell the IME candidate window was last anchored to.
@@ -473,7 +527,7 @@ impl WindowState {
             health: RenderHealth::default(),
             attention_requested: false,
             title_refresh: None,
-            held_output: None,
+            output_hold: OutputHold::default(),
             reveal: None,
             ime_cell: None,
             status_drawn: None,
@@ -556,14 +610,25 @@ impl WindowState {
     /// Output arrived in the active tab: hold its frame until the output
     /// pauses (`run_timers`). Later wakeups keep the hold that is running.
     pub fn output_arrived(&mut self, now: Instant) {
-        if self.held_output.is_none() {
-            self.held_output = Some(HeldOutput::new(now, self.active_output_generation()));
-        }
+        let generation = self.active_output_generation();
+        self.output_hold.output_arrived(now, generation);
     }
 
-    /// Output is still arriving: frames wait until it pauses.
+    /// Output is still arriving and the window wasn't resized since the
+    /// last frame: frames wait until the output pauses.
     pub fn output_holds(&self) -> bool {
-        self.held_output.is_some()
+        self.output_hold.holds()
+    }
+
+    /// The window changed size: its next frame is drawn even while output is
+    /// held, so the content follows a drag of the window edge.
+    pub fn show_resize(&mut self) {
+        self.output_hold.resized();
+    }
+
+    /// A frame reached the screen.
+    pub fn frame_presented(&mut self) {
+        self.output_hold.presented();
     }
 
     /// Whether frames are still held back. Ends the hold once it is due,
@@ -1270,14 +1335,9 @@ impl WindowState {
         if self.reveal.is_some() && !self.reveal_holds(now) {
             self.window.request_redraw();
         }
-        if self.held_output.is_some_and(|held| now >= held.due()) {
+        if self.output_hold.due().is_some_and(|due| now >= due) {
             let generation = self.active_output_generation();
-            if self
-                .held_output
-                .as_mut()
-                .is_some_and(|held| held.settled(now, generation))
-            {
-                self.held_output = None;
+            if self.output_hold.settled(now, generation) {
                 self.window.request_redraw();
             }
         }
@@ -1289,7 +1349,7 @@ impl WindowState {
             self.reveal.map(|reveal| reveal.due()),
             self.blink.active.then_some(self.blink.next_toggle),
             self.title_refresh,
-            self.held_output.map(|held| held.due()),
+            self.output_hold.due(),
             self.mouse.autoscroll.map(|scroll| scroll.next),
             self.mouse.link_press.due(),
             self.health.next_wakeup(),
@@ -1447,6 +1507,28 @@ mod tests {
             }
             assert!(checks < 4, "never drawn");
         }
+    }
+
+    #[test]
+    fn a_resized_window_is_drawn_while_output_is_held() {
+        let now = Instant::now();
+        let mut hold = OutputHold::default();
+        hold.output_arrived(now, 1);
+        assert!(hold.holds(), "output still arriving");
+        hold.resized();
+        assert!(!hold.holds(), "the new size is drawn at once");
+        hold.output_arrived(now, 2);
+        assert!(
+            !hold.holds(),
+            "the shell's redraw for the new size doesn't hold it back"
+        );
+        hold.presented();
+        assert!(hold.holds(), "once shown, output holds frames again");
+        assert!(
+            hold.settled(now + OUTPUT_MAX, 3),
+            "held output still gets its frame"
+        );
+        assert!(!hold.holds());
     }
 
     #[test]

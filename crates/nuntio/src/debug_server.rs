@@ -442,6 +442,7 @@ impl Core {
                 {
                     state.renderer.resize(size.width, size.height);
                     state.resize_terms(&self.config);
+                    state.show_resize();
                 }
                 state.window.request_redraw();
                 Ok(Reply::ok(json!({})))

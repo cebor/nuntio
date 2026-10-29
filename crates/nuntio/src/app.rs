@@ -1106,10 +1106,14 @@ impl Core {
         }
         // Output still arriving gets its frame once it pauses (`run_timers`); a
         // frame now could show a line half-written, with the cursor inside it.
+        // A resized window is drawn anyway (`show_resize`).
         if state.output_holds() {
             return;
         }
         let status = self.redraw(state);
+        if status == FrameStatus::Presented {
+            state.frame_presented();
+        }
         match state.health.on_frame(status) {
             HealthAction::Nothing => {}
             // The next event redraws anyway.
@@ -1281,6 +1285,7 @@ impl Core {
                 state.retry_renderer();
                 state.renderer.resize(size.width, size.height);
                 state.resize_terms(&self.config);
+                state.show_resize();
                 state.window.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
