@@ -306,7 +306,7 @@ Kitty graphics ([`kitty.rs`](crates/nuntio-term/src/kitty.rs)), which herdr send
 - `ImageScanner` also cuts out APC `ESC _ G … ESC \`. `Transfers` joins `m=1` chunks; `plan` → `prepare` (decoding on the worker) → `apply` (under the term lock).
 - Transmitted images are kept per Kitty id in the `ImageStore` (`KITTY_SOURCE_LIMIT`, oldest dropped first). Each placement is rendered (source rect, offset, `c`×`r` cells) into its own `TermImage` and written as ordinary placeholder cells, `C=1` with `place_fixed` (cursor unchanged). Images replace the text in their cells; `z` only matters for deletes.
 - Placing the same image and placement id again erases the old cells first (`erase_image`); `a=d` erases by the predicates of the visible cells.
-- Not supported (answered `EINVAL`): Unicode placeholders, relative placements, animation, media other than direct (`t=d`).
+- Not supported (answered `EINVAL`): Unicode placeholders, relative placements, animation, indexed colour (`f=8`, `f=16`), media other than direct (`t=d`). Feature queries (`e`) are not recognised: `e` is ignored and the query is handled as a plain `a=q`.
 
 ## herdr and tmux
 

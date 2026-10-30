@@ -115,6 +115,7 @@
             <tr><td>OSC 1337 ; File=</td><td>Inline image: PNG, JPEG, GIF (first frame), WebP, BMP; size in cells, px, % or auto.</td></tr>
             <tr><td>APC G a=T</td><td>Kitty graphics: transmit and place RGB, RGBA or PNG, zlib, chunked; delete and query.</td></tr>
             <tr><td>CSI 16 t</td><td>Reports the cell size in pixels.</td></tr>
+            <tr><td>OSC 5522</td><td>Paste events: programs that turn on mode 5522, like omp, get a pasted image as PNG data, also over SSH.</td></tr>
           </tbody>
         </table>
       </div>
@@ -289,11 +290,12 @@ dark = <span class="s">"Tokyo Night"</span></code></pre>
             <thead><tr><th scope="col">Protocol</th><th scope="col">Support</th><th scope="col">Notes</th></tr></thead>
             <tbody>
               <tr><td>Kitty keyboard protocol</td><td class="mark">● Yes</td><td>All five flags</td></tr>
-              <tr><td>Kitty graphics protocol</td><td class="mark">◐ Partly</td><td>Direct transmission; no Unicode placeholders, relative placements or animation</td></tr>
+              <tr><td>Kitty graphics protocol</td><td class="mark">◐ Partly</td><td>Direct transmission; no Unicode placeholders, relative placements, animation, indexed colour or feature queries</td></tr>
               <tr><td>iTerm2 inline images (OSC 1337)</td><td class="mark">● Yes</td><td>PNG, JPEG, GIF, WebP, BMP</td></tr>
               <tr><td>Sixel</td><td class="mark">○ No</td><td></td></tr>
               <tr><td>Hyperlinks (OSC 8)</td><td class="mark">● Yes</td><td>Ctrl-click (⌘-click) opens</td></tr>
               <tr><td>Clipboard (OSC 52)</td><td class="mark">◐ Partly</td><td>Write only; programs can't read the clipboard</td></tr>
+              <tr><td>Paste events (mode 5522)</td><td class="mark">◐ Partly</td><td>Pasted images reach the program as PNG data; not in cmd and PowerShell panes</td></tr>
               <tr><td>Working directory (OSC 7, OSC 9;9)</td><td class="mark">● Yes</td><td>Splits start there, and new tabs with <code>tabs.inherit_directory</code></td></tr>
               <tr><td>Synchronized output (DEC 2026)</td><td class="mark">● Yes</td><td></td></tr>
               <tr><td>Focus events, bracketed paste</td><td class="mark">● Yes</td><td></td></tr>

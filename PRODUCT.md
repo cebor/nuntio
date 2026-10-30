@@ -47,11 +47,11 @@ Packages are not signed yet: macOS needs Open Anyway, and Windows SmartScreen ne
 
 ## Capabilities and Constraints
 
-- **Image paste:** clipboard image → `<tmp>/nuntio-paste-<pid>-<n>/image-N.png`, path pasted (Ctrl+Shift+V, Cmd+V on macOS); folder removed at exit.
+- **Image paste:** clipboard image → `<tmp>/nuntio-paste-<pid>-<n>/image-N.png`, path pasted (Ctrl+Shift+V, Cmd+V on macOS); folder removed at exit; programs with paste events (mode 5522), like omp, get the PNG data through OSC 5522 instead, also over SSH and in WSL.
 - **Inline images:**
   - iTerm2 OSC 1337: PNG, JPEG, GIF first frame, WebP, BMP.
   - Kitty graphics: transmit/place/delete/query, RGB/RGBA/PNG, zlib, chunked.
-  - Not supported: Sixel, Kitty unicode placeholders, relative placements, animation, file/shm transfer. Never claim these.
+  - Not supported: Sixel, Kitty unicode placeholders, relative placements, animation, indexed colour (f=8/f=16), feature queries (e key), file/shm transfer. Never claim these.
 - **Protocols:**
   - Supported: Kitty keyboard protocol (all five flags), OSC 7, OSC 9;9, OSC 8 hyperlinks, synchronized output (DEC 2026), focus events, SGR mouse, true colour, curly/dotted/dashed underlines, colour queries.
   - OSC 52 is write-only; reading is denied.

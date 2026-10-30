@@ -4,7 +4,7 @@ description = "Which escape sequences and terminal protocols nuntio supports, an
 weight = 3
 +++
 
-nuntio parses the usual xterm sequences through [alacritty_terminal](https://crates.io/crates/alacritty_terminal) and adds its own handling for images, the Kitty keyboard protocol, working directories and links. This page lists what is supported, what is partly supported and what is not. `●` means supported, `◐` partly, `○` not at all.
+nuntio parses the usual xterm sequences through [alacritty_terminal](https://crates.io/crates/alacritty_terminal) and adds its own handling for images, the Kitty keyboard protocol, paste events, working directories and links. This page lists what is supported, what is partly supported and what is not. `●` means supported, `◐` partly, `○` not at all.
 
 ## Graphics
 
@@ -19,6 +19,8 @@ Images become ordinary cells in the grid, so they scroll, clear and get overwrit
 | Kitty graphics: Unicode placeholders (`U=1`) | ○ No | Answered with `EINVAL`. |
 | Kitty graphics: relative placements (`P`, `Q`, `H`, `V`) | ○ No | Answered with `EINVAL`. |
 | Kitty graphics: animation (`a=f`, `a=a`, `a=c`) | ○ No | Answered with `EINVAL`. |
+| Kitty graphics: indexed colour (`f=8`, `f=16`) | ○ No | Images whose pixels are indices into the terminal's palette. Answered with `EINVAL`. |
+| Kitty graphics: feature queries (`a=q` with `e`) | ○ No | The `e` key is ignored: the query is answered like a plain `a=q`, without `e` in the reply, so programs fall back to other ways of detecting features. |
 | Sixel | ○ No | |
 | Cell size in pixels (`CSI 16 t`) | ● Yes | Answered with `CSI 6 ; height ; width t`, so programs can scale images to the grid. |
 
@@ -39,6 +41,7 @@ omp picks an image protocol on its own: nuntio sets `PI_FORCE_IMAGE_PROTOCOL=kit
 | Protocol | Support | Details |
 |---|---|---|
 | Clipboard write (OSC 52) | ◐ Partly | Write only, controlled by `clipboard_write` (default on). A program that asks for the clipboard contents gets no answer, so it can't read what you copied. |
+| Paste events (mode 5522, OSC 5522) | ◐ Partly | A program that turns on mode 5522 (`CSI ? 5522 h`), like omp, gets a paste as an OSC 5522 announcement with a one-time password instead of the text, and reads the data with it within 30 seconds: text as `text/plain`, a clipboard image as `image/png`. Pasted images reach it without a temporary file, so they also work over SSH and in [WSL](@/docs/wsl.md). Only the process group that turned the mode on gets paste events. Other programs keep bracketed paste, and an image is pasted as the path of a PNG file. The rest of the kitty clipboard protocol is refused: other reads and all writes are answered with `EPERM`. `CSI ? 5522 $ p` reports the mode; in cmd and PowerShell panes on Windows, and in WSL panes that fell back to ConPTY, it reports the mode as not supported. |
 | Hyperlinks (OSC 8) | ● Yes | Ctrl-click (⌘-click on macOS) opens the link; while Ctrl (⌘) is held, hovering shows where the link leads. Only the schemes `https`, `http`, `file`, `ftp`, `ssh`, `git` and `mailto` are links. Links to programs are not opened. |
 | Plain URLs | ● Yes | Found in the text without OSC 8, with the same schemes and the same click. |
 | Plain paths | ● Yes | Absolute paths in the text (`/x`, `~/x`, `C:\x`, `C:/x`) open with the system's opener on the same click; a `:line` suffix is not part of the link. In [WSL](@/docs/wsl.md) panes on Windows, Linux paths open through the distribution's share and `/mnt/c/…` as `C:\…`. Relative paths (a word, or the content of quotes as `ls` writes names with spaces) are links only if the file exists in the pane's current working directory; in a pane running herdr or tmux (with `herdr.enabled` or `tmux.enabled`), in the directory of its focused pane, which nuntio asks for once Ctrl (⌘) is held for a moment without another key, or the pointer moves while it is held. In cmd and PowerShell panes on Windows, only if the shell reports its directory (OSC 7 or OSC 9;9, see below). Missing files and programs are not opened. |
