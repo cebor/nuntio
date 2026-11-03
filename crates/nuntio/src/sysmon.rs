@@ -172,6 +172,7 @@ impl Sampler {
         }
         if primed && let Some((networks, last)) = self.networks.as_mut() {
             networks.refresh(true);
+            let networks = &*networks;
             let seconds = now
                 .saturating_duration_since(*last)
                 .as_secs_f64()
@@ -179,7 +180,9 @@ impl Sampler {
             *last = now;
             let (down, up) = networks
                 .iter()
-                .filter(|(name, _)| !is_virtual(name))
+                .filter(|(name, _)| {
+                    !is_virtual(name) && !is_filter_layer(name, networks.keys().map(String::as_str))
+                })
                 .fold((0, 0), |(down, up), (_, data)| {
                     (down + data.received(), up + data.transmitted())
                 });
@@ -217,6 +220,23 @@ fn is_virtual(name: &str) -> bool {
         || PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
+/// An NDIS filter layer that Windows lists for an adapter, named
+/// `<adapter>-<filter>-<instance>` (`Ethernet-Npcap Packet Driver (NPCAP)-0000`).
+/// It repeats the adapter's counters; sysinfo drops most of them, but not
+/// those whose GUID it can't group (Npcap). `names` are all listed interfaces.
+fn is_filter_layer<'a>(name: &str, mut names: impl Iterator<Item = &'a str>) -> bool {
+    let Some((rest, instance)) = name.rsplit_once('-') else {
+        return false;
+    };
+    instance.len() == 4
+        && instance.bytes().all(|b| b.is_ascii_digit())
+        && names.any(|adapter| {
+            rest.strip_prefix(adapter)
+                .and_then(|filter| filter.strip_prefix('-'))
+                .is_some_and(|filter| !filter.is_empty())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +250,37 @@ mod tests {
         assert!(is_virtual("Loopback Pseudo-Interface 1"));
         for name in ["eth0", "wlan0", "en0", "enp3s0", "Wi-Fi", "local"] {
             assert!(!is_virtual(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn filter_layers_of_a_listed_adapter_are_not_counted() {
+        let names = [
+            "Ethernet",
+            "Ethernet 2",
+            "Wi-Fi",
+            "Ethernet-Npcap Packet Driver (NPCAP)-0000",
+            "Wi-Fi-QoS Packet Scheduler-0000",
+            "Ethernet-Backup",
+            "Bluetooth-Npcap Packet Driver (NPCAP)-0000",
+        ];
+        let listed = || names.iter().copied();
+        for name in [
+            "Ethernet-Npcap Packet Driver (NPCAP)-0000",
+            "Wi-Fi-QoS Packet Scheduler-0000",
+        ] {
+            assert!(is_filter_layer(name, listed()), "{name}");
+        }
+        // Adapters, a renamed adapter with a dash and no instance, and a layer
+        // whose adapter isn't listed.
+        for name in [
+            "Ethernet",
+            "Ethernet 2",
+            "Wi-Fi",
+            "Ethernet-Backup",
+            "Bluetooth-Npcap Packet Driver (NPCAP)-0000",
+        ] {
+            assert!(!is_filter_layer(name, listed()), "{name}");
         }
     }
 

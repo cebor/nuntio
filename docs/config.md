@@ -274,7 +274,7 @@ Each item starts with an icon:
 
 - `cpu`: usage of all cores over the last minute, and the current value.
 - `memory`: used memory over the last minute (relative to the total), and the current amount in GiB.
-- `network`: throughput of the physical interfaces (loopback, container and VM bridges such as `docker0` are left out, so traffic isn't counted twice). Download grows up from the middle of the graph, upload down. The download rate is shown left of the graph, the upload rate right of it; rates under 0.1 K show as `0K`.
+- `network`: throughput of the physical interfaces (loopback, container and VM bridges such as `docker0` and Windows filter drivers such as Npcap are left out, so traffic isn't counted twice). Download grows up from the middle of the graph, upload down. The download rate is shown left of the graph, the upload rate right of it; rates under 0.1 K show as `0K`.
 - `battery`: charge level, with ⚡ while plugged in; the graph shows the level over about the last hour, one bar per minute. Hidden on machines without a battery.
 - `datetime`: the local date and time.
 - `actions`: a button that opens a menu of actions (all but `select_tab_1` … `select_tab_9`), grouped by category and with their shortcuts. Click an entry to run it, or use <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>Enter</kbd>; <kbd>Esc</kbd> closes the menu. It is not in the default list; add it to `items`, or bind the `open_actions_menu` action to open the menu from the keyboard.
