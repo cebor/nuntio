@@ -15,6 +15,8 @@ pub struct PaneId(pub u64);
 pub enum Pasted {
     Nothing,
     Text(String),
+    /// Files copied in a file manager: Explorer, Finder, `text/uri-list`.
+    Files(Vec<std::path::PathBuf>),
     Image(arboard::ImageData<'static>),
     /// An image nuntio can't decode; the program may read it itself.
     UnreadableImage,

@@ -874,14 +874,14 @@ impl Core {
 
     /// Read the clipboard (or the primary selection) off the event loop:
     /// a selection owner that doesn't answer blocks the reader for seconds
-    /// (X11). The result arrives as `UserEvent::Paste`. `read_image`: look
-    /// for an image when there is no text.
-    fn request_paste(&self, pane: PaneId, source: PasteSource, read_image: bool) {
+    /// (X11). The result arrives as `UserEvent::Paste`. `rich`: look for
+    /// copied files before the text and for an image when there is no text.
+    fn request_paste(&self, pane: PaneId, source: PasteSource, rich: bool) {
         let proxy = self.proxy.clone();
         let spawned = std::thread::Builder::new()
             .name("clipboard-read".into())
             .spawn(move || {
-                let content = read_clipboard(source, read_image);
+                let content = read_clipboard(source, rich);
                 let _ = proxy.send_event(UserEvent::Paste(ClipboardPaste {
                     pane,
                     source,
@@ -1398,7 +1398,7 @@ fn set_pane_title(
 
 /// Read what a paste needs, with a clipboard of its own so that the event
 /// loop's one isn't tied up. Runs on a worker thread.
-fn read_clipboard(source: PasteSource, read_image: bool) -> Pasted {
+fn read_clipboard(source: PasteSource, rich: bool) -> Pasted {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(clipboard) => clipboard,
         Err(err) => {
@@ -1406,6 +1406,14 @@ fn read_clipboard(source: PasteSource, read_image: bool) -> Pasted {
             return Pasted::Nothing;
         }
     };
+    // Before the text: Finder's text is only the file's name.
+    if rich {
+        match clipboard.get().file_list() {
+            Ok(paths) if !paths.is_empty() => return Pasted::Files(paths),
+            Ok(_) | Err(arboard::Error::ContentNotAvailable) => {}
+            Err(err) => tracing::debug!("failed to read copied files: {err}"),
+        }
+    }
     let text = match source {
         PasteSource::Clipboard => clipboard.get_text(),
         // Only Linux has a primary selection.
@@ -1426,7 +1434,7 @@ fn read_clipboard(source: PasteSource, read_image: bool) -> Pasted {
         Ok(_) => {}
         Err(err) => tracing::debug!("failed to read the clipboard: {err}"),
     }
-    if !read_image {
+    if !rich {
         return Pasted::Nothing;
     }
     match clipboard.get_image() {

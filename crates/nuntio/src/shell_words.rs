@@ -1,5 +1,5 @@
-//! Paths of files dropped on the window or pasted as images, as a shell in
-//! a pane reads them.
+//! Paths of files dropped on the window, copied or pasted as images, as a
+//! shell in a pane reads them.
 
 /// How the shell in a pane reads a file's path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +32,8 @@ impl PathSyntax {
 
 /// A file's path as a shell word, with a space after it like in
 /// Terminal.app, so several files line up as arguments. For files dropped
-/// on the window and for pasted images, which are pasted as paths too.
+/// on the window or copied, and for pasted images, which are pasted as
+/// paths too.
 pub fn path_word(path: &str, syntax: PathSyntax) -> String {
     // Windows paths can't contain `"`.
     let plain = || {

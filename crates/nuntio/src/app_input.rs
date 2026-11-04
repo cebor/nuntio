@@ -323,9 +323,9 @@ impl Core {
     /// Paste the clipboard into the focused pane. The clipboard is read on
     /// a worker thread; `clipboard_pasted` gets the result.
     fn paste_clipboard(&mut self, state: &mut WindowState) {
-        // An image can't go into the find bar.
-        let read_image = state.search.is_none();
-        self.request_paste(state.content().focused, PasteSource::Clipboard, read_image);
+        // Files and images can't go into the find bar.
+        let rich = state.search.is_none();
+        self.request_paste(state.content().focused, PasteSource::Clipboard, rich);
     }
 
     /// Put what a worker thread read from the clipboard where it was asked
@@ -349,6 +349,21 @@ impl Core {
                 }
                 PasteTarget::Pane => self.paste(state, pane, text, source),
             },
+            // Like dropped files: each path a shell word with a space after it.
+            Pasted::Files(paths) => {
+                if search_open {
+                    return;
+                }
+                let Some(target) = state.pane(pane) else {
+                    return;
+                };
+                let syntax = target.path_syntax();
+                let words: String = paths
+                    .iter()
+                    .map(|path| path_word(&path.to_string_lossy(), syntax))
+                    .collect();
+                self.paste(state, pane, words, PasteSource::Clipboard);
+            }
             // Pasted like a dropped file: AI CLIs attach image paths.
             Pasted::Image(image) => {
                 if !alive || search_open {
