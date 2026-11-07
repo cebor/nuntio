@@ -1,17 +1,28 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::RenderError;
 
+/// How long giving up a surface waits for the GPU to finish the last frame.
+const RELEASE_WAIT: Duration = Duration::from_secs(2);
+
 /// Outcome of a frame, so the caller can decide whether to redraw again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameStatus {
     Presented,
-    /// Frame skipped (timeout, reconfigured); try again right away.
+    /// Frame skipped (surface reconfigured); try again right away.
     Skipped,
+    /// The GPU hasn't finished the previous frame; draw again shortly instead
+    /// of waiting for it.
+    Busy,
+    /// No surface texture within wgpu's one-second timeout: the GPU or the
+    /// compositor is stuck. Draw again later, not right away, which would
+    /// block once more.
+    TimedOut,
     /// Nothing can be drawn now (window occluded); wait for the next event
     /// instead of retrying, which would spin the event loop.
     Paused,
@@ -215,8 +226,13 @@ impl GpuContext {
         // The last frame's back buffer is kept by the device until its
         // submission is cleaned up, and with it the swapchain (on DX12 the
         // successor's configure fails with "Access is denied").
-        if !self.lost() {
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        if !self.lost()
+            && let Err(err) = self.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(RELEASE_WAIT),
+            })
+        {
+            tracing::warn!("the GPU didn't finish the last frame within {RELEASE_WAIT:?}: {err}");
         }
         // Every surface gets a new sublayer of the view's layer, which
         // neither wgpu nor raw-window-metal removes: it would stay under the
@@ -374,10 +390,23 @@ impl GpuContext {
         self.lost.load(Ordering::Acquire)
     }
 
+    /// Work submitted earlier hasn't finished yet. Doesn't block.
+    fn busy(&self) -> bool {
+        matches!(
+            self.device.poll(wgpu::PollType::Poll),
+            Ok(wgpu::PollStatus::Poll)
+        )
+    }
+
     /// Get the next surface texture, or the reason to skip this frame.
     pub(crate) fn acquire(&mut self) -> Result<wgpu::SurfaceTexture, FrameStatus> {
         if self.lost() {
             return Err(FrameStatus::Lost);
+        }
+        // Acquiring waits (up to a second, several times on Vulkan) for the
+        // previous frame's work; with the GPU stuck that freezes the event loop.
+        if self.busy() {
+            return Err(FrameStatus::Busy);
         }
         if std::mem::take(&mut self.reconfigure) {
             let _ = self.configure();
@@ -389,6 +418,11 @@ impl GpuContext {
         if let Some(status) = status_without_texture(&result) {
             if matches!(result, wgpu::CurrentSurfaceTexture::Outdated) {
                 let _ = self.configure();
+            }
+            if matches!(result, wgpu::CurrentSurfaceTexture::Timeout) {
+                tracing::warn!(
+                    "no surface texture within wgpu's 1 s timeout: the GPU or compositor is stuck"
+                );
             }
             return Err(status);
         }
@@ -606,9 +640,8 @@ fn status_without_texture(result: &wgpu::CurrentSurfaceTexture) -> Option<FrameS
         wgpu::CurrentSurfaceTexture::Success(_) | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
             None
         }
-        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Timeout => {
-            Some(FrameStatus::Skipped)
-        }
+        wgpu::CurrentSurfaceTexture::Outdated => Some(FrameStatus::Skipped),
+        wgpu::CurrentSurfaceTexture::Timeout => Some(FrameStatus::TimedOut),
         wgpu::CurrentSurfaceTexture::Occluded => Some(FrameStatus::Paused),
         wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Validation => {
             Some(FrameStatus::Lost)
@@ -629,7 +662,7 @@ mod tests {
         );
         assert_eq!(
             status_without_texture(&Result::Timeout),
-            Some(FrameStatus::Skipped)
+            Some(FrameStatus::TimedOut)
         );
         assert_eq!(
             status_without_texture(&Result::Occluded),

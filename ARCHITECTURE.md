@@ -250,7 +250,8 @@ GPU selection honors `WGPU_BACKEND`, `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF`; 
 
 `FrameStatus` handling: `RenderHealth::on_frame` (`render_health.rs`, one per window) turns each status into a `HealthAction` that `Core::redraw_requested` carries out:
 
-- `Skipped`: retry, up to `MAX_FRAME_RETRIES`.
+- `Skipped` (surface reconfigured): retry, up to `MAX_FRAME_RETRIES`.
+- `Busy` (the GPU hasn't finished the previous frame, checked with a non-blocking `device.poll` before acquiring) and `TimedOut` (no surface texture within wgpu's 1 s): hold frames until `redraw_at` (`Defer`; 4 ms doubling to 64 ms, resp. 250 ms doubling to 2 s), so a stuck GPU can't block the event loop on every event. After `STALL_LIMIT` (3 s) without a frame, `LeaveGpu`: `leave_stalled_gpu` switches to the software renderer and starts a GPU probe (`stall_probe`: 30 s, doubling up to 10 min while it keeps stalling).
 - `Paused` (occluded): wait for the next event.
 - `Lost`: `rebuild_renderer`, up to `MAX_RENDERER_REBUILDS`, then a "GPU error" banner.
 
@@ -261,7 +262,8 @@ The loop runs with `ControlFlow::Wait`. In `about_to_wait`, `WindowState::run_ti
 - the reveal,
 - the cursor blink, only if the program asked for a blinking cursor,
 - the tab-title refresh,
-- autoscroll during a selection drag.
+- autoscroll during a selection drag,
+- a frame held for a busy or stuck GPU, and the GPU probe.
 
 The status bar redraws only when its content changes, and `sysmon` pauses while the window is occluded. Invariant: an idle window uses ~0% CPU.
 

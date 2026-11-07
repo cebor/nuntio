@@ -1317,9 +1317,9 @@ impl WindowState {
     }
 
     /// Run the timers that are due at `now` (cursor blinking, title
-    /// refresh, autoscroll, reveal, held output, link modifier) and return
-    /// when the next one is, including the GPU probe's wakeup (which the
-    /// caller runs).
+    /// refresh, autoscroll, reveal, held output, link modifier, held frames
+    /// of a busy GPU) and return when the next one is, including the GPU
+    /// probe's wakeup (which the caller runs).
     pub fn run_timers(&mut self, config: &Config, now: Instant) -> Option<Instant> {
         if self.blink.active && now >= self.blink.next_toggle {
             self.blink.visible = !self.blink.visible;
@@ -1343,6 +1343,9 @@ impl WindowState {
         }
         if self.mouse.link_press.run_timer(now) {
             // The redraw refreshes the link, which asks the multiplexer now.
+            self.window.request_redraw();
+        }
+        if self.health.redraw_due(now) {
             self.window.request_redraw();
         }
         [

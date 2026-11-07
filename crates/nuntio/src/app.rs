@@ -23,7 +23,7 @@ use crate::banner::{Banner, Severity, Topic};
 use crate::event::{ClipboardPaste, MenuCommand, PaneId, Pasted, UserEvent};
 use crate::input::KeyPress;
 use crate::link::{self, Target};
-use crate::render_health::{GpuProbe, HealthAction};
+use crate::render_health::{GpuProbe, HealthAction, STALL_LIMIT};
 use crate::status_bar::Stats;
 use crate::sysmon::{SystemMonitor, is_sampled};
 use crate::update;
@@ -50,6 +50,8 @@ const MAX_FONT_SIZE: f32 = 72.0;
 
 /// Shown when `window.gpu_acceleration` is off but the system has no software renderer.
 const NO_SOFTWARE_RENDERER: &str = "no software renderer available, nuntio keeps using the GPU";
+/// Shown when a stalled GPU (e.g. its memory filled by a game) made nuntio switch to the CPU.
+const STALLED_GPU: &str = "the GPU stopped delivering frames (is its memory full?); drawing on the CPU, the GPU is tried again later";
 
 /// Room for macOS's traffic-light buttons, in logical pixels.
 #[cfg(target_os = "macos")]
@@ -1110,12 +1112,18 @@ impl Core {
         if state.output_holds() {
             return;
         }
+        // A busy or stuck GPU gets the frame when `run_timers` asks for it;
+        // drawing now would block the event loop on it.
+        if state.health.holds(Instant::now()) {
+            return;
+        }
         let status = self.redraw(state);
         if status == FrameStatus::Presented {
             state.frame_presented();
         }
-        match state.health.on_frame(status) {
-            HealthAction::Nothing => {}
+        match state.health.on_frame(status, Instant::now()) {
+            HealthAction::Nothing | HealthAction::Defer => {}
+            HealthAction::LeaveGpu => self.leave_stalled_gpu(state, event_loop),
             // The next event redraws anyway.
             HealthAction::Retry => state.window.request_redraw(),
             HealthAction::GiveUpFrame => {
@@ -1147,8 +1155,8 @@ impl Core {
         }
     }
 
-    /// Look whether a GPU can draw the window again while a lost device left
-    /// it on the CPU, and switch back to it if so.
+    /// Look whether a GPU can draw the window again while a lost device or a
+    /// stall left it on the CPU, and switch back to it if so.
     fn probe_gpu(&mut self, state: &mut WindowState, event_loop: &ActiveEventLoop, now: Instant) {
         let Some(probe) = state.health.probe_due(now) else {
             return;
@@ -1181,6 +1189,41 @@ impl Core {
             state.health.set_probe(Some(next));
         } else {
             state.health.set_probe(None);
+        }
+    }
+
+    /// The GPU delivered no frame for `STALL_LIMIT`, e.g. because a game
+    /// filled its memory: draw on the CPU and look for the GPU again later.
+    fn leave_stalled_gpu(&mut self, state: &mut WindowState, event_loop: &ActiveEventLoop) {
+        if state.renderer.software() {
+            tracing::warn!("the software renderer delivers no frames either");
+            return;
+        }
+        if !state.renderer.offers_software() {
+            tracing::warn!(
+                "the GPU delivers no frames and there is no software renderer to switch to"
+            );
+            return;
+        }
+        tracing::warn!(
+            "no frame from the GPU for {STALL_LIMIT:?}, switching to the software renderer"
+        );
+        match self.rebuild_renderer(state, true, true) {
+            Ok(warnings) => {
+                state.health.release_hold();
+                if state.renderer.software() {
+                    let probe = state.health.stall_probe(Instant::now());
+                    tracing::info!("looking for the GPU again in {:?}", probe.interval);
+                    state.health.set_probe(Some(probe));
+                    self.notify(Banner::new(
+                        Severity::Warning,
+                        Topic::Gpu,
+                        vec![STALLED_GPU.into()],
+                    ));
+                }
+                self.notify(Banner::config(Severity::Warning, warnings));
+            }
+            Err(err) => self.fail(event_loop, err),
         }
     }
 
