@@ -37,7 +37,7 @@ plist = "1"
 dirs = "7"
 winit = "0.30"
 wgpu = "30"
-pollster = "0.4"
+pollster = "1"
 lexopt = "0.3"
 unicode-width = "0.2"
 open = "5"
@@ -69,8 +69,8 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 pulldown-cmark = { version = "0.13", default-features = false }
 unicode-segmentation = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-sysinfo = { version = "0.39", default-features = false, features = ["system", "network"] }
-starship-battery = "0.11"
+sysinfo = { version = "0.40", default-features = false, features = ["system", "network"] }
+starship-battery = "0.12"
 # Process info on macOS (proc_pidinfo).
 libc = "0.2"
 # The macOS language and region, for LANG in panes.

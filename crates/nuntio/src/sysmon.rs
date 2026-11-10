@@ -121,7 +121,13 @@ impl Sampler {
         let memory = items.contains(&StatusItem::Memory);
         let networks = items
             .contains(&StatusItem::Network)
-            .then(|| (Networks::new_with_refreshed_list(), created));
+            .then(Networks::new_with_refreshed_list)
+            .and_then(|networks| {
+                networks
+                    .inspect_err(|err| tracing::info!("network unavailable: {err}"))
+                    .ok()
+            })
+            .map(|networks| (networks, created));
         let battery = items
             .contains(&StatusItem::Battery)
             .then(starship_battery::Manager::new)
@@ -135,7 +141,11 @@ impl Sampler {
                 last: None,
                 next_read: Instant::now(),
             });
-        let mut system = (cpu || memory).then(System::new);
+        let mut system = (cpu || memory).then(System::new).and_then(|system| {
+            system
+                .inspect_err(|err| tracing::info!("cpu and memory unavailable: {err}"))
+                .ok()
+        });
         if cpu && let Some(system) = system.as_mut() {
             // CPU usage is the difference to the previous refresh.
             system.refresh_cpu_usage();
@@ -181,7 +191,9 @@ impl Sampler {
             let (down, up) = networks
                 .iter()
                 .filter(|(name, _)| {
-                    !is_virtual(name) && !is_filter_layer(name, networks.keys().map(String::as_str))
+                    let name = name.to_string_lossy();
+                    !is_virtual(&name)
+                        && !is_filter_layer(&name, networks.keys().filter_map(|name| name.to_str()))
                 })
                 .fold((0, 0), |(down, up), (_, data)| {
                     (down + data.received(), up + data.transmitted())
