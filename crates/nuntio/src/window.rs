@@ -344,7 +344,12 @@ impl Pane {
             directory: foreground.working_directory,
             shell_idle,
         };
-        tab_title::title(mode, info, dirs::home_dir().as_deref())
+        tab_title::title(
+            mode,
+            info,
+            dirs::home_dir().as_deref(),
+            &crate::link::local_host(),
+        )
     }
 
     /// Current grid size, once the pane has been laid out.

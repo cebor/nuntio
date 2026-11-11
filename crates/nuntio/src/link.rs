@@ -305,7 +305,7 @@ fn relative_path(mut text: &str, base: &BaseDir) -> Option<PathBuf> {
     }
 }
 
-fn local_host() -> String {
+pub(crate) fn local_host() -> String {
     gethostname::gethostname().to_string_lossy().into_owned()
 }
 

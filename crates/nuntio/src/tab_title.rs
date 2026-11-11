@@ -21,13 +21,19 @@ pub struct TitleInfo {
     pub shell_idle: Option<bool>,
 }
 
-pub fn title(mode: TabTitle, info: TitleInfo, home: Option<&Path>) -> String {
+/// The title of a tab in `mode`; `local_host` is this machine's host name,
+/// so that `auto` keeps the host of a title from another machine.
+pub fn title(mode: TabTitle, info: TitleInfo, home: Option<&Path>, local_host: &str) -> String {
     let directory = || {
         info.directory
             .as_deref()
             .map(|dir| nuntio_config::tilde_path(dir, home))
     };
-    let application = || info.application.as_deref().map(strip_user_host);
+    let application = || {
+        info.application
+            .as_deref()
+            .map(|t| auto_application(t, local_host))
+    };
     let title = match mode {
         TabTitle::Application => info.application.clone(),
         TabTitle::Process => None,
@@ -45,11 +51,44 @@ pub fn title(mode: TabTitle, info: TitleInfo, home: Option<&Path>) -> String {
 
 /// Drop the `user@host:` prefix that shells put in front of the directory.
 pub fn strip_user_host(title: &str) -> String {
-    match title.split_once(':') {
-        Some((prefix, rest)) if prefix.contains('@') && !prefix.contains(char::is_whitespace) => {
-            rest.trim_start().to_owned()
-        }
-        _ => title.to_owned(),
+    split_user_host(title)
+        .map_or(title, |(_, rest)| rest)
+        .to_owned()
+}
+
+/// The `user@host` prefix and the rest of a title like `felix@box: ~/code`,
+/// the rest without leading spaces. `None` without such a prefix.
+fn split_user_host(title: &str) -> Option<(&str, &str)> {
+    let (prefix, rest) = title.split_once(':')?;
+    (prefix.contains('@') && !prefix.contains(char::is_whitespace))
+        .then(|| (prefix, rest.trim_start()))
+}
+
+/// Whether `host` names this machine: empty, `localhost` or `local_host`,
+/// compared by the part before the first `.` and ignoring case
+/// (`Box.local` is `box`).
+fn is_local_host(host: &str, local_host: &str) -> bool {
+    let short = |name: &str| name.split('.').next().unwrap_or_default().to_owned();
+    let host = short(host);
+    host.is_empty()
+        || host.eq_ignore_ascii_case("localhost")
+        || host.eq_ignore_ascii_case(&short(local_host))
+}
+
+/// An application title as `auto` shows it: without the `user@host:`
+/// prefix shells put in front of the directory, but with the host kept
+/// (`server: ~/code`) when it is another machine, as in a shell over ssh.
+fn auto_application(title: &str, local_host: &str) -> String {
+    let Some((prefix, rest)) = split_user_host(title) else {
+        return title.to_owned();
+    };
+    let host = prefix.rsplit_once('@').map_or(prefix, |(_, host)| host);
+    if is_local_host(host, local_host) {
+        rest.to_owned()
+    } else if rest.is_empty() {
+        host.to_owned()
+    } else {
+        format!("{host}: {rest}")
     }
 }
 
@@ -84,15 +123,21 @@ mod tests {
     #[test]
     fn auto_shows_the_directory_at_the_prompt_and_the_program_otherwise() {
         let home = Some(Path::new("/home/felix"));
-        assert_eq!(title(TabTitle::Auto, info(Some(true)), home), tilde("src"));
-        assert_eq!(title(TabTitle::Auto, info(Some(false)), home), "htop");
+        assert_eq!(
+            title(TabTitle::Auto, info(Some(true)), home, "box"),
+            tilde("src")
+        );
+        assert_eq!(
+            title(TabTitle::Auto, info(Some(false)), home, "box"),
+            "htop"
+        );
         // Without process information, fall back to the cleaned-up OSC title.
-        assert_eq!(title(TabTitle::Auto, info(None), home), "~/code");
+        assert_eq!(title(TabTitle::Auto, info(None), home, "box"), "~/code");
         let bare = TitleInfo {
             process: "zsh".into(),
             ..TitleInfo::default()
         };
-        assert_eq!(title(TabTitle::Auto, bare, home), "zsh");
+        assert_eq!(title(TabTitle::Auto, bare, home, "box"), "zsh");
     }
 
     #[test]
@@ -107,29 +152,70 @@ mod tests {
             title(
                 TabTitle::Auto,
                 program(Some(false), Some("felix@box: ~/code")),
-                home
+                home,
+                "box"
             ),
             "~/code"
         );
         // A program without a title of its own shows its name.
         assert_eq!(
-            title(TabTitle::Auto, program(Some(false), None), home),
+            title(TabTitle::Auto, program(Some(false), None), home, "box"),
             "htop"
         );
         // At the prompt the directory wins.
         assert_eq!(
-            title(TabTitle::Auto, program(Some(true), Some("vim")), home),
+            title(
+                TabTitle::Auto,
+                program(Some(true), Some("vim")),
+                home,
+                "box"
+            ),
             tilde("src")
+        );
+    }
+
+    #[test]
+    fn auto_keeps_the_host_of_another_machine() {
+        let ssh = |application: &str, local_host: &str| {
+            let info = TitleInfo {
+                application: Some(application.into()),
+                program_title: true,
+                process: "ssh".into(),
+                directory: Some("/home/felix".into()),
+                shell_idle: Some(false),
+            };
+            title(TabTitle::Auto, info, None, local_host)
+        };
+        assert_eq!(ssh("felix@server: ~/code", "box"), "server: ~/code");
+        assert_eq!(ssh("felix@server:~/code", "box"), "server: ~/code");
+        // This machine, by its short name and ignoring case.
+        assert_eq!(ssh("felix@Box.local: ~/code", "box"), "~/code");
+        assert_eq!(ssh("felix@box: ~/code", "BOX.fritz.box"), "~/code");
+        assert_eq!(ssh("root@localhost: /tmp", "box"), "/tmp");
+        assert_eq!(ssh("felix@server:", "box"), "server");
+        let raw = TitleInfo {
+            application: Some("felix@server: ~/code".into()),
+            ..info(Some(false))
+        };
+        assert_eq!(
+            title(TabTitle::Application, raw, None, "box"),
+            "felix@server: ~/code"
         );
     }
 
     #[test]
     fn fixed_modes() {
         let home = Some(Path::new("/home/felix"));
-        assert_eq!(title(TabTitle::Path, info(Some(false)), home), tilde("src"));
-        assert_eq!(title(TabTitle::Process, info(Some(true)), home), "htop");
         assert_eq!(
-            title(TabTitle::Application, info(Some(true)), home),
+            title(TabTitle::Path, info(Some(false)), home, "box"),
+            tilde("src")
+        );
+        assert_eq!(
+            title(TabTitle::Process, info(Some(true)), home, "box"),
+            "htop"
+        );
+        assert_eq!(
+            title(TabTitle::Application, info(Some(true)), home, "box"),
             "felix@box: ~/code"
         );
     }
