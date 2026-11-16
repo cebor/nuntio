@@ -48,11 +48,14 @@ fn build_wsl_helper() -> Result<(), String> {
         "aarch64" => "aarch64-unknown-linux-musl",
         arch => return Err(format!("no nuntio-wsl build for {arch}")),
     };
-    // OUT_DIR is <target>/[<triple>/]<profile>/build/nuntio-<hash>/out.
+    // OUT_DIR is <target>/[<triple>/]<profile>/build/nuntio/<hash>/out
+    // (Cargo 1.100 and later) or .../build/nuntio-<hash>/out (before).
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
     let exe_dir = out_dir
         .ancestors()
-        .nth(3)
+        .skip(1)
+        .find(|dir| dir.ends_with("build"))
+        .and_then(Path::parent)
         .ok_or("unexpected OUT_DIR layout")?;
     // Without a fresh build, no helper: nuntio falls back to ConPTY and
     // packaging stops. A running nuntio-wsl holds the file: then it stays,
