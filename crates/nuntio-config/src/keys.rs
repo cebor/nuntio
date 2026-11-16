@@ -298,6 +298,10 @@ pub static ACTIONS: &[Variant] = &[
         "Open the notes in a split next to the focused pane",
     ),
     variant("check_for_updates", "Look for a newer nuntio release now"),
+    variant(
+        "enable_touch_id_sudo",
+        "Open a tab that lets sudo use Touch ID (macOS)",
+    ),
     variant("open_actions_menu", "Open the menu of actions"),
     variant(
         "open_shell_menu",

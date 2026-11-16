@@ -45,6 +45,8 @@ pub enum Action {
     OpenNotesSplit,
     /// Look for a newer release now.
     CheckForUpdates,
+    /// Open a tab that enables Touch ID for sudo (macOS).
+    EnableTouchIdSudo,
     /// Open the menu of all actions.
     OpenActionsMenu,
     /// Open the menu of shells for a new tab.
@@ -102,6 +104,7 @@ pub(crate) const NAMES: &[(&str, Action)] = {
         ("open_notes", OpenNotes),
         ("open_notes_split", OpenNotesSplit),
         ("check_for_updates", CheckForUpdates),
+        ("enable_touch_id_sudo", EnableTouchIdSudo),
         ("open_actions_menu", OpenActionsMenu),
         ("open_shell_menu", OpenShellMenu),
         ("open_agents_menu", OpenAgentsMenu),
@@ -175,6 +178,7 @@ impl Action {
             Self::OpenSettings => "Settings",
             Self::ReloadConfig => "Reload Config",
             Self::CheckForUpdates => "Check for Updates…",
+            Self::EnableTouchIdSudo => "Enable Touch ID for sudo…",
             Self::OpenAgentsMenu => "Agents…",
             Self::SelectTab(_)
             | Self::OpenActionsMenu
@@ -186,6 +190,12 @@ impl Action {
             | Self::RestartForUpdate
             | Self::OpenReleaseNotes => return None,
         })
+    }
+
+    /// Whether the action works on this platform; menus leave out the
+    /// others.
+    pub(crate) fn available(self) -> bool {
+        !matches!(self, Self::EnableTouchIdSudo) || cfg!(target_os = "macos")
     }
 }
 

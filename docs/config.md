@@ -560,4 +560,5 @@ Modifiers must match exactly: `Ctrl+T` does not fire for <kbd>Ctrl</kbd><kbd>Shi
 | `open_shell_menu` | Open the menu of shells to start a new tab with (see [Profiles](#profiles)) |
 | `open_agents_menu` | Open the list of herdr agents (the `agents` status bar item opens it too; see [`[herdr]`](#herdr)) |
 | `check_for_updates` | Look for a newer nuntio release now, even with `updates.check` off |
+| `enable_touch_id_sudo` | Open a tab that lets `sudo` ask for Touch ID instead of the password (macOS 14 or later; writes `/etc/pam.d/sudo_local` through `sudo`) |
 | `none` | Unbind the key combination |

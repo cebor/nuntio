@@ -145,6 +145,7 @@ pub fn install(proxy: EventLoopProxy<UserEvent>) -> Option<MenuBar> {
     b.separator(&app_menu);
     b.action(&app_menu, Action::OpenSettings);
     b.action(&app_menu, Action::ReloadConfig);
+    b.action(&app_menu, Action::EnableTouchIdSudo);
     b.separator(&app_menu);
     let services = b.menu("Services");
     let services_item = b.item("Services", None, "");

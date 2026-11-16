@@ -196,6 +196,7 @@ impl Core {
             Action::OpenNotes => self.open_notes(state, false),
             Action::OpenNotesSplit => self.open_notes(state, true),
             Action::CheckForUpdates => update::check_now(self.proxy.clone()),
+            Action::EnableTouchIdSudo => self.enable_touch_id_sudo(state),
             Action::CloseTab => {
                 let id = state.content().focused;
                 self.request_close(state, CloseTarget::Tab(id));
@@ -293,6 +294,25 @@ impl Core {
         if let Some(launch) =
             self.helper_launch(crate::pane_env::CONFIG_HELPER, &[], Topic::Settings)
         {
+            self.new_tab(state, launch, Placement::AfterActive);
+        }
+    }
+
+    /// Open `nuntio-apps touch-id-sudo` in a new tab (macOS only).
+    fn enable_touch_id_sudo(&mut self, state: &mut WindowState) {
+        if !Action::EnableTouchIdSudo.available() {
+            self.notify(Banner::new(
+                Severity::Info,
+                Topic::TouchId,
+                vec!["Touch ID for sudo is only available on macOS".to_owned()],
+            ));
+            return;
+        }
+        if let Some(launch) = self.helper_launch(
+            crate::pane_env::APPS_HELPER,
+            &["touch-id-sudo"],
+            Topic::TouchId,
+        ) {
             self.new_tab(state, launch, Placement::AfterActive);
         }
     }

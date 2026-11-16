@@ -89,6 +89,7 @@ const MENU: &[(&str, &[Action])] = &[
             Action::OpenSettings,
             Action::ReloadConfig,
             Action::CheckForUpdates,
+            Action::EnableTouchIdSudo,
         ],
     ),
 ];
@@ -288,7 +289,12 @@ impl Menu {
         let mut rows = Vec::new();
         for &(title, entries) in MENU {
             rows.push(Row::Heading(title.into()));
-            rows.extend(entries.iter().map(|&action| Row::action(action, bindings)));
+            rows.extend(
+                entries
+                    .iter()
+                    .filter(|a| a.available())
+                    .map(|&action| Row::action(action, bindings)),
+            );
         }
         Self::with_rows(MenuKind::Actions, anchor, rows)
     }
@@ -675,8 +681,18 @@ mod tests {
         for &(name, action) in NAMES {
             let count = listed.iter().filter(|&&a| a == action).count();
             let left_out = action.label().is_none();
-            assert_eq!(count, usize::from(!left_out), "{name}");
+            assert_eq!(
+                count,
+                usize::from(!left_out && action.available()),
+                "{name}"
+            );
         }
+    }
+
+    #[test]
+    fn touch_id_is_listed_only_on_macos() {
+        let listed = entries(&menu(true, 500.0)).contains(&Action::EnableTouchIdSudo);
+        assert_eq!(listed, cfg!(target_os = "macos"));
     }
 
     #[test]
@@ -734,11 +750,16 @@ mod tests {
     fn selection_skips_headings_and_wraps() {
         let view = view(1000.0, 1200.0);
         let mut menu = menu(true, 1172.0);
+        let last = if cfg!(target_os = "macos") {
+            Action::EnableTouchIdSudo
+        } else {
+            Action::CheckForUpdates
+        };
         assert_eq!(menu.selected_action(), None);
         menu.select(Step::Next, view);
         assert_eq!(menu.selected_action(), Some(Action::NewTab));
         menu.select(Step::Previous, view);
-        assert_eq!(menu.selected_action(), Some(Action::CheckForUpdates));
+        assert_eq!(menu.selected_action(), Some(last));
         menu.select(Step::Next, view);
         assert_eq!(menu.selected_action(), Some(Action::NewTab));
         for _ in 0..6 {
@@ -747,7 +768,7 @@ mod tests {
         // Past the last tab entry, over the "Panes" heading.
         assert_eq!(menu.selected_action(), Some(Action::SplitVertical));
         menu.select(Step::Last, view);
-        assert_eq!(menu.selected_action(), Some(Action::CheckForUpdates));
+        assert_eq!(menu.selected_action(), Some(last));
         menu.select(Step::First, view);
         assert_eq!(menu.selected_action(), Some(Action::NewTab));
     }
